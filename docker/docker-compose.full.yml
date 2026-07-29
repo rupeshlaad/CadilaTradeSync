@@ -1,0 +1,46 @@
+# Optional — extend docker-compose to run apps too.
+# Usage: docker compose -f docker-compose.yml -f docker/docker-compose.full.yml up -d
+version: "3.9"
+
+services:
+  api:
+    build:
+      context: ..
+      dockerfile: docker/api.Dockerfile
+    container_name: cts_api
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis:    { condition: service_healthy }
+    environment:
+      NODE_ENV: production
+      API_PORT: 4000
+      DATABASE_URL: postgresql://${POSTGRES_USER:-cts}:${POSTGRES_PASSWORD:-cts_password}@postgres:5432/${POSTGRES_DB:-cts_db}?schema=public
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      JWT_SECRET: ${JWT_SECRET:-change-me-super-secret-key}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-7d}
+      CORS_ORIGINS: http://localhost:3000,http://localhost:3001
+    ports:
+      - "4000:4000"
+
+  web:
+    build:
+      context: ..
+      dockerfile: docker/web.Dockerfile
+    container_name: cts_web
+    depends_on: [api]
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:4000
+    ports:
+      - "3000:3000"
+
+  admin:
+    build:
+      context: ..
+      dockerfile: docker/admin.Dockerfile
+    container_name: cts_admin
+    depends_on: [api]
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:4000
+    ports:
+      - "3001:3001"

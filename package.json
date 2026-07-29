@@ -1,0 +1,32 @@
+{
+  "name": "cadila-tradesync",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Cadila TradeSync (CTS) — Fintech SaaS platform monorepo",
+  "scripts": {
+    "dev": "pnpm -r --parallel --stream run dev",
+    "dev:web": "pnpm --filter @cts/web dev",
+    "dev:admin": "pnpm --filter @cts/admin dev",
+    "dev:api": "pnpm --filter @cts/api start:dev",
+    "build": "pnpm -r run build",
+    "lint": "pnpm -r run lint",
+    "typecheck": "pnpm -r run typecheck",
+    "db:generate": "pnpm --filter @cts/database prisma:generate",
+    "db:migrate": "pnpm --filter @cts/database prisma:migrate",
+    "db:studio": "pnpm --filter @cts/database prisma:studio",
+    "db:seed": "pnpm --filter @cts/database prisma:seed",
+    "docker:up": "docker compose -f docker-compose.yml up -d",
+    "docker:down": "docker compose -f docker-compose.yml down",
+    "docker:logs": "docker compose -f docker-compose.yml logs -f"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3",
+    "prettier": "^3.3.3",
+    "@types/node": "^22.9.0"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=9.0.0"
+  },
+  "packageManager": "pnpm@9.12.3"
+}
