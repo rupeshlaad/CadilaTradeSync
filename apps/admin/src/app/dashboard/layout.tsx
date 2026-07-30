@@ -9,10 +9,13 @@ import { LayoutDashboard, Users, Shield, Server, LogOut, ShieldCheck } from 'luc
 import { Role, type PublicUser } from '@cts/shared';
 
 const NAV = [
-  { href: '/dashboard', label: 'Overview', icon: LayoutDashboard },
+  { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { href: '/dashboard/master-accounts', label: 'Master Accounts', icon: Server },
+  { href: '/dashboard/strategies', label: 'Strategies', icon: Shield },
+  { href: '/dashboard/followers', label: 'Followers', icon: Users },
+  { href: '/dashboard/trade-monitor', label: 'Trade Monitor', icon: LayoutDashboard },
   { href: '/dashboard/users', label: 'Users', icon: Users },
-  { href: '/dashboard/roles', label: 'Roles', icon: Shield },
-  { href: '/dashboard/system', label: 'System', icon: Server },
+  { href: '/dashboard/settings', label: 'Settings', icon: Shield },
 ];
 
 export default function AdminDashboardLayout({ children }: { children: React.ReactNode }) {

@@ -1,2 +1,50 @@
 
 
+Zip command to take emergent code as a zip 
+
+cd /app
+zip -r ../CadilaTradeSync-Repair.zip . \
+-x "*/node_modules/*" "*/.next/*" "*/dist/*" "*/.git/*" "*.zip"
+
+
+
+cd /
+tar --exclude='/app/node_modules' \
+    --exclude='/app/apps/*/node_modules' \
+    --exclude='/app/database/prisma/node_modules' \
+    --exclude='/app/.git' \
+    --exclude='/app/apps/*/.next' \
+    --exclude='/app/apps/*/dist' \
+    -czf CadilaTradeSync-Repair.tar.gz app
+
+
+
+Admin login - http://localhost:3001/dashboard
+
+Username - rupesh.laad@gmail.com	
+Password = Admin@123
+
+
+
+To start Prisma Studo
+
+PS C:\Projects\CadilaTradeSync\database\prisma> cd C:\Projects\CadilaTradeSync\database\prisma
+PS C:\Projects\CadilaTradeSync\database\prisma>
+PS C:\Projects\CadilaTradeSync\database\prisma> pnpm prisma studio
+
+http://localhost:5555/   - for checking the DB of prisma for all users and account details .
+
+
+Zerodha API 
+
+API key - racz6dx96auygym4
+API secret - x5nnwtmp3r3yzfnpe41jpns989i6t0md
+
+
+Fyers API - 
+
+APP ID - GWNFK30KPO-200
+Secret ID - kVvBjj0Nzc
+
+
+{"success":true,"profile":{"broker":"ZERODHA","userId":"BX4616","userName":"Dimple Laad","email":"rl140579@gmail.com"},"accessToken":"WGayDfGDp6ExR6OXLu1WzB9R0WNeuUUX"}

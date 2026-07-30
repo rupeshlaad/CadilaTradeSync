@@ -1,0 +1,115 @@
+import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { PrismaService } from '../prisma/prisma.module';
+import { EncryptionService } from '../encryption/encryption.service';
+import { CreateTradingAccountDto } from './dto/create-trading-account.dto';
+import { UpdateTradingAccountDto } from './dto/update-trading-account.dto';
+import { TradingAccount } from '@prisma/client';
+
+@Injectable()
+export class TradingAccountsService {
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly enc: EncryptionService,
+  ) {}
+
+  private redact(acc: TradingAccount) {
+    const {
+      encryptedApiKey,
+      encryptedApiSecret,
+      encryptedPassword,
+      encryptedTotpSecret,
+      ...safe
+    } = acc;
+    return {
+      ...safe,
+      hasApiKey: !!encryptedApiKey,
+      hasApiSecret: !!encryptedApiSecret,
+      hasPassword: !!encryptedPassword,
+      hasTotpSecret: !!encryptedTotpSecret,
+      createdAt: safe.createdAt.toISOString(),
+      updatedAt: safe.updatedAt.toISOString(),
+      lastHeartbeat: safe.lastHeartbeat ? safe.lastHeartbeat.toISOString() : null,
+    };
+  }
+
+  async listMine(userId: string) {
+    const rows = await this.prisma.tradingAccount.findMany({
+      where: { userId, accountType: 'FOLLOWER' },
+      orderBy: { createdAt: 'desc' },
+    });
+    return rows.map((r) => this.redact(r));
+  }
+
+  async create(userId: string, dto: CreateTradingAccountDto) {
+    const created = await this.prisma.tradingAccount.create({
+      data: {
+        userId,
+        accountType: 'FOLLOWER',
+        broker: dto.broker,
+        platform: dto.platform,
+        nickname: dto.nickname,
+        clientId: dto.clientId,
+        encryptedApiKey: dto.apiKey ? this.enc.encrypt(dto.apiKey) : null,
+        encryptedApiSecret: dto.apiSecret ? this.enc.encrypt(dto.apiSecret) : null,
+        encryptedPassword: dto.password ? this.enc.encrypt(dto.password) : null,
+        encryptedTotpSecret: dto.totpSecret ? this.enc.encrypt(dto.totpSecret) : null,
+        staticIpPrimary: dto.staticIpPrimary ?? null,
+        staticIpSecondary: dto.staticIpSecondary ?? null,
+      },
+    });
+    return this.redact(created);
+  }
+
+  private async findOwned(userId: string, id: string) {
+    const acc = await this.prisma.tradingAccount.findUnique({ where: { id } });
+    if (!acc || acc.accountType !== 'FOLLOWER') throw new NotFoundException('Trading account not found');
+    if (acc.userId !== userId) throw new ForbiddenException('You do not own this trading account');
+    return acc;
+  }
+
+  async get(userId: string, id: string) {
+    const acc = await this.findOwned(userId, id);
+    return this.redact(acc);
+  }
+
+  async update(userId: string, id: string, dto: UpdateTradingAccountDto) {
+    await this.findOwned(userId, id);
+    const data: any = {};
+    if (dto.broker !== undefined) data.broker = dto.broker;
+    if (dto.platform !== undefined) data.platform = dto.platform;
+    if (dto.nickname !== undefined) data.nickname = dto.nickname;
+    if (dto.clientId !== undefined) data.clientId = dto.clientId;
+    if (dto.apiKey !== undefined) data.encryptedApiKey = dto.apiKey ? this.enc.encrypt(dto.apiKey) : null;
+    if (dto.apiSecret !== undefined) data.encryptedApiSecret = dto.apiSecret ? this.enc.encrypt(dto.apiSecret) : null;
+    if (dto.password !== undefined) data.encryptedPassword = dto.password ? this.enc.encrypt(dto.password) : null;
+    if (dto.totpSecret !== undefined) data.encryptedTotpSecret = dto.totpSecret ? this.enc.encrypt(dto.totpSecret) : null;
+    if (dto.staticIpPrimary !== undefined) data.staticIpPrimary = dto.staticIpPrimary || null;
+    if (dto.staticIpSecondary !== undefined) data.staticIpSecondary = dto.staticIpSecondary || null;
+    if (dto.enabled !== undefined) data.enabled = dto.enabled;
+    const updated = await this.prisma.tradingAccount.update({ where: { id }, data });
+    return this.redact(updated);
+  }
+
+  async remove(userId: string, id: string) {
+    await this.findOwned(userId, id);
+    await this.prisma.tradingAccount.delete({ where: { id } });
+    return { ok: true };
+  }
+
+  async setEnabled(userId: string, id: string, enabled: boolean) {
+    await this.findOwned(userId, id);
+    const updated = await this.prisma.tradingAccount.update({ where: { id }, data: { enabled } });
+    return this.redact(updated);
+  }
+
+  async listAllForAdmin() {
+    const rows = await this.prisma.tradingAccount.findMany({
+      orderBy: { createdAt: 'desc' },
+      include: { user: { select: { email: true, name: true } } },
+    });
+    return rows.map((r) => ({
+      ...this.redact(r),
+      user: r.user,
+    }));
+  }
+}

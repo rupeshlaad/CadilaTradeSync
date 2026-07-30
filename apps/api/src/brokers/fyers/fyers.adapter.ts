@@ -1,0 +1,68 @@
+import { fyersModel } from 'fyers-api-v3';
+import { BrokerAdapter, BrokerProfile } from '../broker.interface';
+
+export class FyersAdapter implements BrokerAdapter {
+  private fyers: any;
+
+  constructor() {
+    this.fyers = new fyersModel();
+
+    this.fyers.setAppId(process.env.FYERS_APP_ID!);
+    this.fyers.setRedirectUrl(process.env.FYERS_REDIRECT_URI!);
+  }
+
+  setAccessToken(accessToken: string) {
+    this.fyers.setAccessToken(accessToken);
+  }
+
+  getLoginUrl(): string {
+    return this.fyers.generateAuthCode();
+  }
+
+  async exchangeToken(token: string): Promise<any> {
+    const session = await this.fyers.generate_access_token({
+      client_id: process.env.FYERS_APP_ID!,
+      secret_key: process.env.FYERS_SECRET_ID!,
+      auth_code: token,
+    });
+
+    this.fyers.setAccessToken(session.access_token);
+
+    return session;
+  }
+
+  async getProfile(): Promise<BrokerProfile> {
+    const p = await this.fyers.get_profile();
+    
+    return {
+      broker: 'FYERS',
+      userId: p.data.fy_id,
+      userName: p.data.name,
+      email: p.data.email_id,
+    };
+  }
+
+  async getMargins() {
+    throw new Error('Not implemented');
+  }
+
+  async getHoldings() {
+    throw new Error('Not implemented');
+  }
+
+  async getPositions() {
+    throw new Error('Not implemented');
+  }
+
+  async placeOrder(order: any) {
+    return this.fyers.place_order(order);
+  }
+
+  async modifyOrder(orderId: string, order: any) {
+    throw new Error('Not implemented');
+  }
+
+  async cancelOrder(orderId: string) {
+    throw new Error('Not implemented');
+  }
+}

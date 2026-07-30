@@ -6,13 +6,30 @@ import Link from 'next/link';
 import { auth, api } from '@/lib/api';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { Button } from '@/components/ui/button';
-import { LayoutDashboard, LineChart, Settings, LogOut, User, Wallet } from 'lucide-react';
+import {
+  LayoutDashboard,
+  LineChart,
+  Settings,
+  LogOut,
+  User,
+  Wallet,
+  Landmark,
+} from 'lucide-react';
 import type { PublicUser } from '@cts/shared';
 
 const NAV = [
   { href: '/dashboard', label: 'Overview', icon: LayoutDashboard },
+
+  {
+    href: '/dashboard/trading-accounts',
+    label: 'Trading Accounts',
+    icon: Landmark,
+  },
+
   { href: '/dashboard/strategies', label: 'Strategies', icon: LineChart },
+
   { href: '/dashboard/wallet', label: 'Wallet', icon: Wallet },
+
   { href: '/dashboard/settings', label: 'Settings', icon: Settings },
 ];
 

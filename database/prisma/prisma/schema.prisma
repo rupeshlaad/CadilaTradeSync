@@ -1,4 +1,4 @@
-// Cadila TradeSync — Prisma schema (foundation only)
+// Candila TradeSync — Prisma schema
 
 generator client {
   provider = "prisma-client-js"
@@ -9,10 +9,55 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// ---------- Enums ----------
+
 enum Role {
   ADMIN
   USER
 }
+
+enum Broker {
+  ZERODHA
+  FYERS
+  ANGEL_ONE
+  UPSTOX
+  DHAN
+  ICICI_DIRECT
+  SHOONYA
+}
+
+enum ConnectionStatus {
+  DISCONNECTED
+  CONNECTING
+  CONNECTED
+  ERROR
+}
+
+enum Visibility {
+  PRIVATE
+  PUBLIC
+}
+
+enum StrategyStatus {
+  DRAFT
+  ACTIVE
+  PAUSED
+  ARCHIVED
+}
+
+enum SubscriptionStatus {
+  TRIAL
+  ACTIVE
+  EXPIRED
+  CANCELLED
+}
+
+enum AccountType {
+  MASTER
+  FOLLOWER
+}
+
+// ---------- Models ----------
 
 model User {
   id        String   @id @default(uuid())
@@ -24,6 +69,126 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  tradingAccounts TradingAccount[]
+  followerLinks   Follower[]       @relation("FollowerUser")
+  subscriptions   Subscription[]
+
   @@index([email])
   @@map("users")
+}
+
+model TradingAccount {
+  id                  String           @id @default(uuid())
+  userId              String
+  user                User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  broker              Broker
+  platform            String
+  nickname            String
+  clientId            String
+  encryptedApiKey     String?
+  encryptedApiSecret  String?
+  encryptedPassword   String?
+  encryptedTotpSecret String?
+  staticIpPrimary     String?
+  staticIpSecondary   String?
+  connectionStatus    ConnectionStatus @default(DISCONNECTED)
+  accountType         AccountType      @default(FOLLOWER)
+  enabled             Boolean          @default(true)
+  healthScore         Int              @default(0)
+  lastHeartbeat       DateTime?
+  createdAt           DateTime         @default(now())
+  updatedAt           DateTime         @updatedAt
+
+  strategies     Strategy[]
+  followerLinks  Follower[]         @relation("FollowerTradingAccount")
+  brokerSessions BrokerSession[]
+
+  @@index([userId])
+  @@index([accountType])
+  @@map("trading_accounts")
+}
+
+model Strategy {
+  id               String         @id @default(uuid())
+  tradingAccountId String
+  tradingAccount   TradingAccount @relation(fields: [tradingAccountId], references: [id], onDelete: Cascade)
+  strategyName     String
+  description      String?
+  enabled          Boolean        @default(true)
+  visibility       Visibility     @default(PRIVATE)
+  masterAccount    Boolean        @default(false)
+  baseQuantity     Int            @default(1)
+  maxFollowers     Int            @default(0)
+  status           StrategyStatus @default(DRAFT)
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  followers     Follower[]
+  subscriptions Subscription[]
+
+  @@index([tradingAccountId])
+  @@map("strategies")
+}
+
+model Follower {
+  id               String         @id @default(uuid())
+  strategyId       String
+  strategy         Strategy       @relation(fields: [strategyId], references: [id], onDelete: Cascade)
+  followerUserId   String
+  followerUser     User           @relation("FollowerUser", fields: [followerUserId], references: [id], onDelete: Cascade)
+  tradingAccountId String
+  tradingAccount   TradingAccount @relation("FollowerTradingAccount", fields: [tradingAccountId], references: [id], onDelete: Cascade)
+  multiplier       Float          @default(1.0)
+  maximumLoss      Float?
+  maximumDailyLoss Float?
+  enabled          Boolean        @default(true)
+  createdAt        DateTime       @default(now())
+
+  @@unique([strategyId, followerUserId])
+  @@index([strategyId])
+  @@index([followerUserId])
+  @@index([tradingAccountId])
+  @@map("followers")
+}
+
+model Subscription {
+  id             String             @id @default(uuid())
+  followerUserId String
+  followerUser   User               @relation(fields: [followerUserId], references: [id], onDelete: Cascade)
+  strategyId     String
+  strategy       Strategy           @relation(fields: [strategyId], references: [id], onDelete: Cascade)
+  status         SubscriptionStatus @default(TRIAL)
+  startDate      DateTime           @default(now())
+  endDate        DateTime?
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+
+  @@index([followerUserId])
+  @@index([strategyId])
+  @@map("subscriptions")
+}
+
+model BrokerSession {
+  id                   String   @id @default(uuid())
+
+  tradingAccountId     String 
+  tradingAccount       TradingAccount @relation(fields: [tradingAccountId], references: [id], onDelete: Cascade)
+
+  broker               Broker
+
+  encryptedAccessToken String
+  publicToken          String?
+
+  userId               String
+  userName             String
+
+  loginTime            DateTime @default(now())
+  expiresAt            DateTime?
+
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  @@unique([tradingAccountId, broker])
+  @@index([tradingAccountId])
+  @@map("broker_sessions")
 }

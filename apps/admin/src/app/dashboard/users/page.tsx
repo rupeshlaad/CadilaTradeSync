@@ -10,7 +10,7 @@ export default function AdminUsersPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    api.listUsers()
+    api.admin.listUsers()
       .then(setUsers)
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));

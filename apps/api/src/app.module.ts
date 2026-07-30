@@ -5,6 +5,15 @@ import { UsersModule } from './users/users.module';
 import { HealthModule } from './health/health.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { RedisModule } from './redis/redis.module';
+import { EncryptionModule } from './encryption/encryption.module';
+import { TradingAccountsModule } from './trading-accounts/trading-accounts.module';
+import { StrategiesModule } from './strategies/strategies.module';
+import { FollowersModule } from './followers/followers.module';
+import { SubscriptionsModule } from './subscriptions/subscriptions.module';
+import { AdminModule } from './admin/admin.module';
+import { MasterAccountsModule } from './master-accounts/master-accounts.module';
+import { ZerodhaModule } from './brokers/zerodha/zerodha.module';
+import { FyersModule } from './brokers/fyers/fyers.module';
 
 @Module({
   imports: [
@@ -14,9 +23,18 @@ import { RedisModule } from './redis/redis.module';
     }),
     PrismaModule,
     RedisModule,
+    EncryptionModule,
     AuthModule,
     UsersModule,
     HealthModule,
+    TradingAccountsModule,
+    StrategiesModule,
+    FollowersModule,
+    SubscriptionsModule,
+    AdminModule,
+    MasterAccountsModule,
+    ZerodhaModule,
+    FyersModule,
   ],
 })
 export class AppModule {}
