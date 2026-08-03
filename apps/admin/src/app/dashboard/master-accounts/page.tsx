@@ -40,6 +40,14 @@ export default function MasterAccountsPage() {
   const [rows, setRows] = useState<TradingAccountDto[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Error carried over from the OAuth callback redirect
+  // (/dashboard/master-accounts?error=...). Captured lazily at first
+  // render so React 18 Strict Mode double-mount + load()'s setError(null)
+  // cannot race and swallow it. Cleared only when the user dismisses it.
+  const [oauthError, setOauthError] = useState<string | null>(() => {
+    if (typeof window === 'undefined') return null;
+    return new URLSearchParams(window.location.search).get('error');
+  });
   const [open, setOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<FormState>(emptyForm);
@@ -59,6 +67,23 @@ export default function MasterAccountsPage() {
 
   useEffect(() => {
     load();
+  }, []);
+
+  // Strip the ?error= query from the URL once, so a refresh doesn't
+  // re-show the same OAuth error. Runs regardless of Strict Mode
+  // double-invoke because it's idempotent (delete() on an absent key
+  // is a no-op).
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+    if (!params.has('error')) return;
+    params.delete('error');
+    const qs = params.toString();
+    window.history.replaceState(
+      {},
+      '',
+      `${window.location.pathname}${qs ? `?${qs}` : ''}`,
+    );
   }, []);
 
   function openCreate() {
@@ -144,7 +169,28 @@ export default function MasterAccountsPage() {
         </Button>
       </div>
 
-      {error && <p className="text-sm text-destructive">{error}</p>}
+      {oauthError && (
+        <div
+          className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive flex items-start justify-between gap-3"
+          data-testid="oauth-callback-error"
+          role="alert"
+        >
+          <div className="flex-1 min-w-0">
+            <p className="font-medium">Broker reconnect failed</p>
+            <p className="break-words">{oauthError}</p>
+          </div>
+          <button
+            type="button"
+            className="text-xs underline hover:no-underline shrink-0"
+            onClick={() => setOauthError(null)}
+            data-testid="oauth-callback-error-dismiss"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
+      {error && <p className="text-sm text-destructive" data-testid="master-accounts-error">{error}</p>}
 
       <Card>
         <CardContent className="pt-6">
