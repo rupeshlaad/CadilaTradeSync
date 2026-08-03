@@ -1,0 +1,50 @@
+{
+  "summary": "Sprint 5.0.1 — Strategy adminUpdate() regression fix verified via unit tests with a mocked PrismaService (no Postgres/Redis touched). All 9 acceptance-criteria assertions PASS. Full-project `tsc --noEmit` for @cts/api is green. git diff confirms ONLY apps/api/src/strategies/strategies.service.ts was modified; the new spec file is the only additional (test-only) file. No dependencies, schema, migrations, docker, or env were changed.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {
+        "endpoint": "PATCH /admin/strategies/:id (AdminStrategiesController.update)",
+        "issue": "Controller still uses `@Body() dto: any`, which bypasses the global ValidationPipe whitelist/forbidNonWhitelisted. The service-layer fix is defensive and works, but a follow-up should type the body as `UpdateStrategyDto` (or an admin-scoped DTO that also declares `tradingAccountId` with @IsOptional @IsUUID) so validation happens at the edge. Explicitly out of scope for this sprint per the sprint brief ('do not refactor unrelated code')."
+      },
+      {
+        "endpoint": "N/A — DTO",
+        "issue": "apps/api/src/strategies/dto/update-strategy.dto.ts still does not declare tradingAccountId, which is why the admin path had to fall back to `dto: any`. Same follow-up as above."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/apps/api/src/strategies/strategies.service.spec.ts"
+  ],
+  "action_items": [
+    "(Non-blocking) In a future sprint, tighten AdminStrategiesController.update to use a typed DTO (UpdateStrategyDto extended with an @IsOptional @IsUUID tradingAccountId) so ValidationPipe strips empty strings at the edge — the service layer is now defensive, but edge validation is cleaner.",
+    "(Non-blocking) apps/admin/src/app/dashboard/strategies/page.tsx should ideally not submit `tradingAccountId: ''` — either omit the key when the placeholder is selected, or block submit. The backend now tolerates it, but fixing the UI source removes the whole class of bug."
+  ],
+  "critical_code_review_comments": [
+    "adminUpdate() correctly loads the existing row first, so 404 is raised BEFORE any FK validation or update — matches acceptance criterion (f).",
+    "Data payload is whitelisted key-by-key (Prisma.StrategyUpdateInput); dto is never spread. This kills the raw-body leak vector documented in the sprint brief.",
+    "FK branch is exhaustive: undefined, null, '', '   ', identical value, changed-valid, changed-invalid are each handled with the semantics required by the sprint. Verified by unit tests (9/9 pass).",
+    "For a changed & valid FK the code uses `data.tradingAccount = { connect: { id } }` rather than the scalar `tradingAccountId`, which is the correct Prisma UpdateInput shape and also prevents accidental untyped scalar writes.",
+    "Invalid FK raises `BadRequestException` with a message including the offending id — Prisma.update is never called, so P2003 can no longer surface to the frontend (acceptance criteria (d)(e)).",
+    "Only `apps/api/src/strategies/strategies.service.ts` was modified (git diff verified). Strategy Execution module, Instrument module, Followers, Trade Monitor, Auth, schema, migrations, docker, env, and package files are all untouched.",
+    "Minor: `String(dto.tradingAccountId).trim()` also coerces a null-safe path even though the outer guard already excludes null/undefined — belt-and-braces, harmless.",
+    "Minor: adminUpdate no longer returns the enriched shape (with tradingAccount include, _count, serialize()) that admin list uses. This is unchanged from before the fix (the original also returned the bare row), so it is not a regression — flagging for awareness only."
+  ],
+  "updated_files": [],
+  "created_files": [
+    "/app/apps/api/src/strategies/strategies.service.spec.ts",
+    "/app/test_reports/iteration_2.json"
+  ],
+  "success_rate": { "backend": "100% (9/9 unit assertions)", "frontend": "N/A (skipped per request)" },
+  "test_credentials": "N/A — pure unit test with mocked Prisma",
+  "seed_data_creation": "None — Prisma mocked in-memory inside the spec.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Runner note: workspace has no jest configured for @cts/api. Tests were executed via `npx ts-node --transpile-only apps/api/src/strategies/strategies.service.spec.ts` from apps/api/. The spec uses a tiny in-file assertion harness and instantiates StrategiesService directly with a hand-rolled PrismaService mock (state.strategy.findUnique / update, state.tradingAccount.findUnique). If jest is added later, this file can be trivially ported by replacing `test(...)` and the `expect*` helpers with jest equivalents. Postgres/Redis were NOT started and were NOT required.",
+  "rca_of_the_issue": "Root cause (confirmed by code inspection): AdminStrategiesController.update declared @Body() dto: any, which is a Nest-level opt-out of the global ValidationPipe (whitelist:true, forbidNonWhitelisted:true configured in main.ts). The admin UI's <Select> placeholder submitted tradingAccountId:'' which then flowed through `prisma.strategy.update({ data: dto })` in the previous adminUpdate implementation. Prisma tried to set the FK column to '' and Postgres rejected it with P2003. Mitigation applied in this sprint: service-layer defensive whitelisting + trim/empty/whitespace skip + existence check on the target TradingAccount before any Prisma call. Long-term mitigation (future sprint): type the controller body properly and add tradingAccountId to the DTO with @IsUUID so the ValidationPipe rejects '' at the edge, and fix the admin UI to omit the key when the placeholder is selected."
+}
