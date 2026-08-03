@@ -19,6 +19,7 @@ import { InstrumentModule } from './instruments/instrument.module';
 import { AdminDbModule } from './admin-db/admin-db.module';
 import { ShoonyaModule } from './brokers/shoonya/shoonya.module';
 import { BrokersModule } from './brokers/brokers.module';
+import { StrategyExecutionModule } from './strategy-execution/strategy-execution.module';
 
 @Module({
   imports: [
@@ -45,6 +46,7 @@ import { BrokersModule } from './brokers/brokers.module';
     InstrumentModule,
     AdminDbModule,
     BrokersModule,
+    StrategyExecutionModule,
   ],
 })
 export class AppModule {}

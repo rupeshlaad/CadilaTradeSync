@@ -119,6 +119,57 @@ export interface AdminInstrumentStatsResponse {
   lastSummaries: Record<string, AdminInstrumentImportSummary>;
 }
 
+// -----------------------------
+// Strategy Execution (Phase 1)
+// -----------------------------
+
+export type ExecutionState =
+  | 'DRAFT'
+  | 'READY'
+  | 'RUNNING'
+  | 'PAUSED'
+  | 'STOPPED'
+  | 'ERROR';
+
+export type ExecutionValidationKey =
+  | 'strategy_exists'
+  | 'strategy_active'
+  | 'master_account_exists'
+  | 'broker_session_exists'
+  | 'broker_session_healthy'
+  | 'instrument_mappings_valid';
+
+export interface StrategyExecutionValidationCheck {
+  key: ExecutionValidationKey;
+  ok: boolean;
+  message: string;
+}
+
+export interface StrategyExecutionValidationResponse {
+  ok: boolean;
+  strategyId: string;
+  checks: StrategyExecutionValidationCheck[];
+  errors: StrategyExecutionValidationCheck[];
+  validatedAt: string;
+}
+
+export interface StrategyExecutionContext {
+  strategyId: string;
+  masterAccountId: string;
+  broker: Broker;
+  status: ExecutionState;
+  startedAt: string;
+  lastHeartbeat: string;
+  lastError?: string | null;
+}
+
+export interface StrategyExecutionStatusResponse {
+  strategyId: string;
+  state: ExecutionState;
+  context: StrategyExecutionContext | null;
+  lastValidation: StrategyExecutionValidationResponse | null;
+}
+
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
 const TOKEN_KEY = 'cts_admin_access_token';
 
@@ -147,9 +198,13 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 
   if (!res.ok) {
     const err = await res.json().catch(() => ({ message: res.statusText }));
-    throw new Error(
-      Array.isArray(err.message) ? err.message.join(', ') : err.message || 'Request failed',
-    );
+    const message = Array.isArray(err.message)
+      ? err.message.join(', ')
+      : err.message || 'Request failed';
+    const error = new Error(message) as Error & { body?: any; status?: number };
+    error.body = err;
+    error.status = res.status;
+    throw error;
   }
 
   if (res.status === 204) return undefined as T;
@@ -334,6 +389,38 @@ export const api = {
 
       stats: () =>
         request<AdminInstrumentStatsResponse>(`/admin/instruments/stats`),
+    },
+
+    strategyExecution: {
+      status: (strategyId: string) =>
+        request<StrategyExecutionStatusResponse>(
+          `/admin/strategy-execution/${strategyId}/status`,
+        ),
+      validate: (strategyId: string) =>
+        request<StrategyExecutionValidationResponse>(
+          `/admin/strategy-execution/${strategyId}/validate`,
+          { method: 'POST' },
+        ),
+      start: (strategyId: string) =>
+        request<StrategyExecutionStatusResponse>(
+          `/admin/strategy-execution/${strategyId}/start`,
+          { method: 'POST' },
+        ),
+      pause: (strategyId: string) =>
+        request<StrategyExecutionStatusResponse>(
+          `/admin/strategy-execution/${strategyId}/pause`,
+          { method: 'POST' },
+        ),
+      resume: (strategyId: string) =>
+        request<StrategyExecutionStatusResponse>(
+          `/admin/strategy-execution/${strategyId}/resume`,
+          { method: 'POST' },
+        ),
+      stop: (strategyId: string) =>
+        request<StrategyExecutionStatusResponse>(
+          `/admin/strategy-execution/${strategyId}/stop`,
+          { method: 'POST' },
+        ),
     },
   },
 };

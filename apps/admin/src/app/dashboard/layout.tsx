@@ -5,13 +5,14 @@ import Link from 'next/link';
 import { auth, api } from '@/lib/api';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { Button } from '@/components/ui/button';
-import { LayoutDashboard, Users, Shield, Server, LogOut, ShieldCheck, Database } from 'lucide-react';
+import { LayoutDashboard, Users, Shield, Server, LogOut, ShieldCheck, Database, Play } from 'lucide-react';
 import { Role, type PublicUser } from '@cts/shared';
 
 const NAV = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { href: '/dashboard/master-accounts', label: 'Master Accounts', icon: Server },
   { href: '/dashboard/strategies', label: 'Strategies', icon: Shield },
+  { href: '/dashboard/strategy-execution', label: 'Strategy Execution', icon: Play },
   { href: '/dashboard/followers', label: 'Followers', icon: Users },
   { href: '/dashboard/trade-monitor', label: 'Trade Monitor', icon: LayoutDashboard },
   { href: '/dashboard/instruments', label: 'Instruments', icon: Database },
