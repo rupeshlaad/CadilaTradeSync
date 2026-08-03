@@ -17,7 +17,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { Plus, Pencil, Trash2, Power } from 'lucide-react';
+import { Plus, Pencil, Trash2, Power, LineChart } from 'lucide-react';
+import Link from 'next/link';
 import { Broker, BROKER_LABELS, type TradingAccountDto, type CreateTradingAccountPayload } from '@cts/shared';
 
 type FormState = CreateTradingAccountPayload;
@@ -204,6 +205,11 @@ export default function MasterAccountsPage() {
                         <Switch checked={r.enabled} onCheckedChange={() => handleToggle(r)} />
                       </td>
                       <td className="py-3 pr-4 text-right space-x-1">
+                        <Button size="sm" variant="outline" asChild data-testid={`view-dashboard-${r.id}`}>
+                          <Link href={`/dashboard/master-accounts/${r.id}/dashboard`}>
+                            <LineChart className="h-4 w-4" /> View Dashboard
+                          </Link>
+                        </Button>
                         <Button size="icon" variant="ghost" onClick={() => openEdit(r)} aria-label="Edit">
                           <Pencil className="h-4 w-4" />
                         </Button>
