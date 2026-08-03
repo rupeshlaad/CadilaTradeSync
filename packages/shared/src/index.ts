@@ -116,10 +116,15 @@ export interface CreateTradingAccountPayload {
   platform: string;
   nickname: string;
   clientId: string;
+
   apiKey?: string;
   apiSecret?: string;
+
+  vendorCode?: string;
+
   password?: string;
   totpSecret?: string;
+
   staticIpPrimary?: string;
   staticIpSecondary?: string;
 }

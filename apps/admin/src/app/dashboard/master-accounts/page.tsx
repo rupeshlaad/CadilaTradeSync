@@ -131,13 +131,6 @@ export default function MasterAccountsPage() {
     }
   }
 
-  function connectBroker(row: TradingAccountDto) {
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
-
-    window.location.href =
-      `${apiUrl}/brokers/zerodha/login?tradingAccountId=${row.id}`;
-  }
-
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -184,16 +177,23 @@ export default function MasterAccountsPage() {
                       <td className="py-3 pr-4 text-xs text-muted-foreground">{r.platform}</td>
                       <td className="py-3 pr-4 font-mono text-xs">{r.clientId}</td>
                       <td className="py-3 pr-4">
-                        {r.connectionStatus === 'CONNECTED' ? (
-                          <Badge variant="success">CONNECTED</Badge>
-                        ) : (
-                          <Button
-                            size="sm"
-                            onClick={() => connectBroker(r)}
-                          >
-                            Connect
-                          </Button>
-                        )}
+                        <Button
+                          size="sm"
+                          onClick={() => {
+                            const api =
+                              process.env.NEXT_PUBLIC_API_URL ??
+                              'http://localhost:4000';
+
+                            window.location.href =
+                              `${api}/brokers/zerodha/login?tradingAccountId=${r.id}`;
+                          }}
+                        >
+                          {r.connectionStatus === 'CONNECTED'
+                            ? 'Reconnect'
+                            : r.connectionStatus === 'ERROR'
+                            ? 'Reconnect'
+                            : 'Connect'}
+                        </Button>
                       </td>
                       <td className="py-3 pr-4 text-xs text-muted-foreground">
                         {[r.hasApiKey && 'API Key', r.hasApiSecret && 'Secret', r.hasPassword && 'Password', r.hasTotpSecret && 'TOTP']

@@ -23,4 +23,6 @@ export interface BrokerAdapter {
   modifyOrder(orderId: string, order: any): Promise<any>;
 
   cancelOrder(orderId: string): Promise<any>;
+
+  getOrders(): Promise<any>;
 }

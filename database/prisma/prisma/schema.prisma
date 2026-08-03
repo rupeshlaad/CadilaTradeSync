@@ -87,6 +87,7 @@ model TradingAccount {
   clientId            String
   encryptedApiKey     String?
   encryptedApiSecret  String?
+  encryptedVendorCode String?
   encryptedPassword   String?
   encryptedTotpSecret String?
   staticIpPrimary     String?
@@ -191,4 +192,65 @@ model BrokerSession {
   @@unique([tradingAccountId, broker])
   @@index([tradingAccountId])
   @@map("broker_sessions")
+}
+
+model Instrument {
+  id             String   @id @default(uuid())
+
+  contractKey    String   @unique
+
+  exchange       String
+  segment        String
+  underlying     String
+  instrumentType String
+
+  expiry         DateTime?
+
+  strike         Float?
+
+  optionType     String?
+
+  lotSize        Int
+
+  tickSize       Float?
+
+  createdAt      DateTime @default(now())
+
+  brokers        InstrumentBroker[]
+
+  @@index([exchange])
+  @@index([segment])
+  @@index([underlying])
+  @@index([expiry])
+  @@index([strike])
+
+  @@map("instruments")
+}
+
+model InstrumentBroker {
+  id             String   @id @default(uuid())
+
+  instrumentId   String
+
+  instrument      Instrument @relation(fields: [instrumentId], references: [id], onDelete: Cascade)
+
+  broker         Broker
+
+  brokerSymbol   String
+
+  brokerToken    String?
+
+  exchangeSymbol String?
+
+  exchangeToken  String?
+
+  createdAt      DateTime @default(now())
+
+  @@unique([broker, brokerSymbol])
+
+  @@index([instrumentId])
+
+  @@index([broker])
+
+  @@map("instrument_brokers")
 }

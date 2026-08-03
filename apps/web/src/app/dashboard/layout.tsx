@@ -26,11 +26,35 @@ const NAV = [
     icon: Landmark,
   },
 
-  { href: '/dashboard/strategies', label: 'Strategies', icon: LineChart },
+  {
+    href: '/dashboard/marketplace',
+    label: 'Marketplace',
+    icon: LineChart,
+  },
 
-  { href: '/dashboard/wallet', label: 'Wallet', icon: Wallet },
+  {
+    href: '/dashboard/followers',
+    label: 'My Followers',
+    icon: User,
+  },
 
-  { href: '/dashboard/settings', label: 'Settings', icon: Settings },
+  {
+    href: '/dashboard/subscriptions',
+    label: 'Subscriptions',
+    icon: Wallet,
+  },
+
+  {
+    href: '/dashboard/reports',
+    label: 'Reports',
+    icon: LineChart,
+  },
+
+  {
+    href: '/dashboard/settings',
+    label: 'Settings',
+    icon: Settings,
+  },
 ];
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {

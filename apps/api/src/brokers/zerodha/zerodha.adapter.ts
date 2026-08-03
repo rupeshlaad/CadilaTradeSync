@@ -63,4 +63,11 @@ export class ZerodhaAdapter implements BrokerAdapter {
   async cancelOrder(orderId: string) {
     return this.kite.cancelOrder('regular', orderId);
   }
+
+  async getOrders() {
+   return this.kite.getOrders();
+  }
+  async getTrades() {
+   return this.kite.getTrades();
+  }
 }

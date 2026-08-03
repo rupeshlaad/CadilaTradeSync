@@ -20,7 +20,10 @@ import {
 import { Plus, Pencil, Trash2, Power } from 'lucide-react';
 import { Broker, BROKER_LABELS, type TradingAccountDto, type CreateTradingAccountPayload } from '@cts/shared';
 
-type FormState = CreateTradingAccountPayload & { enabled?: boolean };
+type FormState = CreateTradingAccountPayload & {
+  vendorCode?: string;
+  enabled?: boolean;
+};
 
 const emptyForm: FormState = {
   broker: Broker.ZERODHA,
@@ -29,6 +32,7 @@ const emptyForm: FormState = {
   clientId: '',
   apiKey: '',
   apiSecret: '',
+  vendorCode: '',
   password: '',
   totpSecret: '',
   staticIpPrimary: '',
@@ -74,6 +78,7 @@ export default function TradingAccountsPage() {
       clientId: row.clientId,
       apiKey: '',
       apiSecret: '',
+      vendorCode: '',
       password: '',
       totpSecret: '',
       staticIpPrimary: row.staticIpPrimary ?? '',
@@ -95,6 +100,7 @@ export default function TradingAccountsPage() {
       };
       if (form.apiKey) payload.apiKey = form.apiKey;
       if (form.apiSecret) payload.apiSecret = form.apiSecret;
+      if (form.vendorCode) payload.vendorCode = form.vendorCode;
       if (form.password) payload.password = form.password;
       if (form.totpSecret) payload.totpSecret = form.totpSecret;
       if (form.staticIpPrimary) payload.staticIpPrimary = form.staticIpPrimary;
@@ -136,6 +142,11 @@ export default function TradingAccountsPage() {
       case Broker.FYERS:
         window.location.href =
           `${apiUrl}/brokers/fyers/login?tradingAccountId=${row.id}`;
+        break;
+
+      case Broker.SHOONYA:
+        window.location.href =
+          `${apiUrl}/brokers/shoonya/login?tradingAccountId=${row.id}`;
         break;
 
       default:
@@ -266,14 +277,51 @@ export default function TradingAccountsPage() {
                 <Label>API Secret</Label>
                 <Input type="password" value={form.apiSecret ?? ''} onChange={(e) => setForm({ ...form, apiSecret: e.target.value })} />
               </div>
-              <div className="space-y-1.5">
-                <Label>Password</Label>
-                <Input type="password" value={form.password ?? ''} onChange={(e) => setForm({ ...form, password: e.target.value })} />
-              </div>
-              <div className="space-y-1.5">
-                <Label>TOTP Secret</Label>
-                <Input type="password" value={form.totpSecret ?? ''} onChange={(e) => setForm({ ...form, totpSecret: e.target.value })} />
-              </div>
+              {form.broker === Broker.SHOONYA && (
+                <div className="space-y-1.5">
+                  <Label>Vendor Code</Label>
+                  <Input
+                    value={form.vendorCode ?? ''}
+                    onChange={(e) =>
+                      setForm({
+                        ...form,
+                        vendorCode: e.target.value,
+                      })
+                    }
+                    placeholder="e.g. AB12345_U"
+                  />
+                </div>
+              )}
+              {(form.broker === Broker.SHOONYA || form.broker === Broker.ANGEL_ONE) && (
+                <div className="space-y-1.5">
+                  <Label>Password</Label>
+                  <Input
+                    type="password"
+                    value={form.password ?? ''}
+                    onChange={(e) =>
+                      setForm({
+                        ...form,
+                        password: e.target.value,
+                      })
+                    }
+                  />
+                </div>
+              )}
+              {(form.broker === Broker.SHOONYA || form.broker === Broker.ANGEL_ONE) && (
+                <div className="space-y-1.5">
+                  <Label>TOTP Secret</Label>
+                  <Input
+                    type="password"
+                    value={form.totpSecret ?? ''}
+                    onChange={(e) =>
+                      setForm({
+                        ...form,
+                        totpSecret: e.target.value,
+                      })
+                    }
+                  />
+                </div>
+              )}
               <div className="space-y-1.5">
                 <Label>Static IP (primary)</Label>
                 <Input value={form.staticIpPrimary ?? ''} onChange={(e) => setForm({ ...form, staticIpPrimary: e.target.value })} />

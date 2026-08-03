@@ -6,12 +6,16 @@ import { Role } from '@prisma/client';
 import { MasterAccountsService } from './master-accounts.service';
 import { CreateMasterAccountDto } from './dto/create-master-account.dto';
 import { UpdateMasterAccountDto } from './dto/update-master-account.dto';
+import { BrokerService } from '../brokers/broker.service';
 
 @Controller('admin/master-accounts')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(Role.ADMIN)
 export class MasterAccountsController {
-  constructor(private readonly service: MasterAccountsService) {}
+  constructor(
+    private readonly service: MasterAccountsService,
+    private readonly brokerService: BrokerService,
+  ) {}
 
   @Get()
   list() {
@@ -46,5 +50,10 @@ export class MasterAccountsController {
   @Post(':id/disable')
   disable(@Param('id') id: string) {
     return this.service.setEnabled(id, false);
+  }
+
+  @Get(':id/dashboard')
+  async dashboard(@Param('id') id: string) {
+    return this.brokerService.getDashboard(id);
   }
 }

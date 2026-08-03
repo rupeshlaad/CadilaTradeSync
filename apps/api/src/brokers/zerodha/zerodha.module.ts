@@ -3,6 +3,7 @@ import { PrismaModule } from '../../prisma/prisma.module';
 import { EncryptionModule } from '../../encryption/encryption.module';
 import { ZerodhaController } from './zerodha.controller';
 import { ZerodhaService } from './zerodha.service';
+import { BrokerService } from '../broker.service';
 
 @Module({
   imports: [
@@ -10,6 +11,13 @@ import { ZerodhaService } from './zerodha.service';
     EncryptionModule,
   ],
   controllers: [ZerodhaController],
-  providers: [ZerodhaService],
+  providers: [
+    ZerodhaService,
+    BrokerService,
+  ],
+  exports: [
+    ZerodhaService,
+    BrokerService,
+  ],
 })
 export class ZerodhaModule {}

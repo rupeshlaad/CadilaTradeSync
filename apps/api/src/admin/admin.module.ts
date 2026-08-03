@@ -1,13 +1,25 @@
 import { Module } from '@nestjs/common';
-import { AdminController } from './admin.controller';
+
+import { UsersModule } from '../users/users.module';
 import { TradingAccountsModule } from '../trading-accounts/trading-accounts.module';
 import { StrategiesModule } from '../strategies/strategies.module';
 import { FollowersModule } from '../followers/followers.module';
 import { SubscriptionsModule } from '../subscriptions/subscriptions.module';
-import { UsersModule } from '../users/users.module';
+
+import { AdminController } from './admin.controller';
+import { AdminStrategiesController } from './admin-strategies.controller';
 
 @Module({
-  imports: [TradingAccountsModule, StrategiesModule, FollowersModule, SubscriptionsModule, UsersModule],
-  controllers: [AdminController],
+  imports: [
+    UsersModule,
+    TradingAccountsModule,
+    StrategiesModule,
+    FollowersModule,
+    SubscriptionsModule,
+  ],
+  controllers: [
+    AdminController,
+    AdminStrategiesController,
+  ],
 })
 export class AdminModule {}

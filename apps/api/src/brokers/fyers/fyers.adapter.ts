@@ -65,4 +65,12 @@ export class FyersAdapter implements BrokerAdapter {
   async cancelOrder(orderId: string) {
     throw new Error('Not implemented');
   }
+
+  async getOrders() {
+   return this.fyers.getOrders();
+ }
+
+  async searchSymbol(symbol: string) {
+    return this.fyers.search_symbol(symbol);
+  }
 }

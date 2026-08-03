@@ -14,6 +14,11 @@ import { AdminModule } from './admin/admin.module';
 import { MasterAccountsModule } from './master-accounts/master-accounts.module';
 import { ZerodhaModule } from './brokers/zerodha/zerodha.module';
 import { FyersModule } from './brokers/fyers/fyers.module';
+import { MasterWatcherModule } from './master-watcher/master-watcher.module';
+import { InstrumentModule } from './instruments/instrument.module';
+import { AdminDbModule } from './admin-db/admin-db.module';
+import { ShoonyaModule } from './brokers/shoonya/shoonya.module';
+import { BrokersModule } from './brokers/brokers.module';
 
 @Module({
   imports: [
@@ -35,6 +40,11 @@ import { FyersModule } from './brokers/fyers/fyers.module';
     MasterAccountsModule,
     ZerodhaModule,
     FyersModule,
+    ShoonyaModule,
+    MasterWatcherModule,
+    InstrumentModule,
+    AdminDbModule,
+    BrokersModule,
   ],
 })
 export class AppModule {}

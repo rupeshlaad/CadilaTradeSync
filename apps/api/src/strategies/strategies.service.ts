@@ -2,7 +2,11 @@ import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/commo
 import { PrismaService } from '../prisma/prisma.module';
 import { CreateStrategyDto } from './dto/create-strategy.dto';
 import { UpdateStrategyDto } from './dto/update-strategy.dto';
-import { Prisma, Visibility } from '@prisma/client';
+import {
+  AccountType,
+  Prisma,
+  Visibility,
+} from '@prisma/client';
 
 @Injectable()
 export class StrategiesService {
@@ -50,23 +54,50 @@ export class StrategiesService {
 
   async create(userId: string, dto: CreateStrategyDto) {
     await this.assertOwnership(userId, dto.tradingAccountId);
+
+    const account = await this.prisma.tradingAccount.findUnique({
+      where: {
+        id: dto.tradingAccountId,
+      },
+    });
+
+    if (!account) {
+      throw new NotFoundException('Trading account not found');
+    }
+
+    if (account.accountType !== AccountType.MASTER) {
+      throw new ForbiddenException(
+        'Strategies can only be created for Master accounts.',
+      );
+    }
+
     const row = await this.prisma.strategy.create({
       data: {
         tradingAccountId: dto.tradingAccountId,
         strategyName: dto.strategyName,
         description: dto.description ?? null,
         visibility: dto.visibility ?? Visibility.PRIVATE,
-        masterAccount: dto.masterAccount ?? false,
+        masterAccount: true,
         baseQuantity: dto.baseQuantity ?? 1,
         maxFollowers: dto.maxFollowers ?? 0,
-        status: dto.status ?? 'DRAFT',
+        status: dto.status ?? 'ACTIVE',
         enabled: dto.enabled ?? true,
       },
       include: {
-        tradingAccount: { select: { nickname: true, broker: true } },
-        _count: { select: { followers: true } },
+        tradingAccount: {
+          select: {
+            nickname: true,
+            broker: true,
+          },
+        },
+        _count: {
+          select: {
+            followers: true,
+          },
+        },
       },
     });
+
     return this.serialize(row);
   }
 
@@ -129,5 +160,56 @@ export class StrategiesService {
       },
     });
     return rows.map((r) => this.serialize(r));
+  }
+
+  async adminCreate(dto: CreateStrategyDto) {
+    const row = await this.prisma.strategy.create({
+      data: {
+        tradingAccountId: dto.tradingAccountId,
+        strategyName: dto.strategyName,
+        description: dto.description ?? null,
+        visibility: dto.visibility ?? Visibility.PRIVATE,
+        masterAccount: true,
+        baseQuantity: dto.baseQuantity ?? 1,
+        maxFollowers: dto.maxFollowers ?? 0,
+        status: dto.status ?? 'ACTIVE',
+        enabled: dto.enabled ?? true,
+      },
+      include: {
+        tradingAccount: {
+          select: {
+            nickname: true,
+            broker: true,
+            user: {
+              select: {
+                email: true,
+              },
+            },
+          },
+        },
+        _count: {
+          select: {
+            followers: true,
+          },
+        },
+      },
+    });
+    return this.serialize(row);
+  }
+
+  async adminUpdate(id: string, dto: UpdateStrategyDto) {
+    return this.prisma.strategy.update({
+      where: { id },
+      data: dto,
+    });
+  }
+
+  async adminDelete(id: string) {
+    await this.prisma.strategy.delete({
+      where: { id },
+    });
+    return {
+      success: true,
+    };
   }
 }

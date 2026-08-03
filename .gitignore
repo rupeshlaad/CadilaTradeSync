@@ -36,3 +36,8 @@ database/prisma/migrations/dev.db*
 
 # Docker volumes
 docker/volumes
+
+# AI Temporary Files
+CTS_AI_SYNC/
+CTS_AI_SYNC.zip
+CTS_CONTEXT/
