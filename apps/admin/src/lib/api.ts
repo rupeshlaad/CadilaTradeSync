@@ -135,6 +135,15 @@ export const api = {
       dashboard: (id: string) =>
         request<any>(`/admin/master-accounts/${id}/dashboard`),
 
+      sessionHealth: (id: string) =>
+        request<any>(`/admin/master-accounts/${id}/session-health`),
+
+      disconnect: (id: string) =>
+        request<{ ok: true; broker: string; connectionStatus: string }>(
+          `/admin/master-accounts/${id}/disconnect`,
+          { method: 'POST' },
+        ),
+
       create: (payload: CreateTradingAccountPayload) =>
         request<TradingAccountDto>('/admin/master-accounts', {
           method: 'POST',

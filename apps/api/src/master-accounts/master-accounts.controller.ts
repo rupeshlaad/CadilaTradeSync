@@ -56,4 +56,14 @@ export class MasterAccountsController {
   async dashboard(@Param('id') id: string) {
     return this.brokerService.getDashboard(id);
   }
+
+  @Get(':id/session-health')
+  async sessionHealth(@Param('id') id: string) {
+    return this.brokerService.getSessionHealth(id);
+  }
+
+  @Post(':id/disconnect')
+  async disconnect(@Param('id') id: string) {
+    return this.brokerService.disconnect(id);
+  }
 }
