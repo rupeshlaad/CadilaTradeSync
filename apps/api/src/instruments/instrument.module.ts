@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { PrismaModule } from '../prisma/prisma.module';
 
 import { InstrumentController } from './instrument.controller';
+import { AdminInstrumentController } from './admin-instrument.controller';
 import { InstrumentService } from './instrument.service';
 import { InstrumentImportService } from './instrument-import.service';
 import { InstrumentResolverService } from './instrument-resolver.service';
@@ -15,6 +16,7 @@ import { FyersImporter } from './importers/fyers.importer';
   ],
   controllers: [
     InstrumentController,
+    AdminInstrumentController,
   ],
   providers: [
     InstrumentService,
