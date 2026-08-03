@@ -1,0 +1,45 @@
+{
+  "summary": "Sprint 3.1 OAuth reconnect UX fix tested end-to-end. Backend redirect behavior (4/4 scenarios) works perfectly: all failure/missing-token/invalid-token paths respond with HTTP 302 to http://localhost:3001/dashboard/master-accounts?error=... and never leak the old JSON payload (no 'success' or 'profile' keys in body). Frontend URL cleaning works (?error= is stripped from window URL after mount). HOWEVER, the error text is NOT rendered on the Master Accounts page — the destructive '<p class=text-destructive>' is empty because load()'s setError(null) races with and overwrites the URL-hydrated error. This is amplified by React 18 Strict Mode double-mount in Next.js dev (reactStrictMode: true in next.config).",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "MasterAccountsPage (apps/admin/src/app/dashboard/master-accounts/page.tsx)",
+        "issue": "OAuth callback ?error=... query is correctly stripped from URL but the error text is NEVER displayed. Two useEffects race: effect #1 calls load() which does setError(null); effect #2 reads ?error= and setError(err). Under React 18 Strict Mode dev double-invoke, the URL gets cleaned on the 1st mount, so on the 2nd mount effect#2 sees no error while effect#1's load() still clears setError(null). Net result: error never appears.",
+        "selector": ".text-destructive under Master Accounts heading",
+        "priority": "HIGH"
+      }
+    ],
+    "integration_issues": [
+      {
+        "flow": "OAuth callback error hydration on Master Accounts page",
+        "issue": "Backend correctly 302-redirects to /dashboard/master-accounts?error=<msg>, but the admin page swallows the error before rendering. User sees the empty-state ('No master accounts yet.') with no indication of the reconnect failure.",
+        "affected_selectors": [".text-destructive"]
+      }
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_oauth_callback_redirect.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Fix the race in MasterAccountsPage: either (a) read ?error= INSIDE load() and preserve it after fetch (do not call setError(null) unconditionally), or (b) merge the two useEffects so URL error is captured into a local variable BEFORE load() clears state, or (c) initialize the error state lazily from window.location.search using useState(() => new URLSearchParams(location.search).get('error')). Then clean the URL. This will make the error survive load()'s reset and React StrictMode's double-invoke."
+  ],
+  "critical_code_review_comments": [
+    "Two-useEffect approach in master-accounts/page.tsx is racy under React StrictMode; use lazy initial state or capture the URL error before load() begins.",
+    "loginStore in zerodha.controller.ts is an in-process Map with a single key 'current' — not safe for concurrent reconnect flows and lost on API restart. Fine for this sprint but worth noting.",
+    "Backend redirect handler correctly avoids raw exception leakage; good use of err.message fallback."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100%", "frontend": "50%"},
+  "test_credentials": "admin@cts.local / Admin@12345 (from /app/memory/test_credentials.md)",
+  "seed_data_creation": "None. Master accounts table is empty in this env (acceptable per problem statement).",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend redirect fix is complete and verified (4 pytest cases pass). Only the Admin frontend error-hydration in apps/admin/src/app/dashboard/master-accounts/page.tsx needs fixing. To retest UI: login as admin@cts.local/Admin@12345, then goto http://localhost:3001/dashboard/master-accounts?error=Reconnect%20test%20failure and verify (i) 'Reconnect test failure' text appears in a .text-destructive element, and (ii) window.location.search no longer contains 'error='. Currently only (ii) passes.",
+  "rca of the issue": "MasterAccountsPage has two mount-time useEffects. Effect A calls async load() which starts by calling setError(null). Effect B reads window.location.search, calls setError(errFromUrl), then history.replaceState to strip the ?error= param. Under React 18 Strict Mode (enabled in apps/admin/next.config.mjs), both effects fire twice (mount → cleanup-noop → mount). On the FIRST mount pass, Effect B correctly sets the error and cleans the URL. On the SECOND mount pass, Effect A's load() runs again and calls setError(null); Effect B now sees an empty URL (already cleaned) and does nothing — so the error ends up null. Fix: read the URL error via lazy initial state (useState(() => …)) OR guard load() so it does not blanket-clear error, OR merge into a single effect that captures the URL error into a local const before calling load()."
+}

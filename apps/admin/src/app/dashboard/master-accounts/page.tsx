@@ -61,6 +61,24 @@ export default function MasterAccountsPage() {
     load();
   }, []);
 
+  // Surface any error carried over from the OAuth callback redirect
+  // (e.g. /dashboard/master-accounts?error=... after a failed reconnect).
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+    const err = params.get('error');
+    if (err) {
+      setError(err);
+      params.delete('error');
+      const qs = params.toString();
+      window.history.replaceState(
+        {},
+        '',
+        `${window.location.pathname}${qs ? `?${qs}` : ''}`,
+      );
+    }
+  }, []);
+
   function openCreate() {
     setEditingId(null);
     setForm(emptyForm);
