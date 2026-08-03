@@ -6,6 +6,8 @@ import {
   type AdminInstrumentSearchRow,
   type AdminInstrumentResolved,
   type AdminInstrumentTranslateResponse,
+  type AdminInstrumentImportSummary,
+  type AdminInstrumentStatsResponse,
 } from '@/lib/api';
 import { Broker, BROKER_LABELS } from '@cts/shared';
 import { Card, CardContent } from '@/components/ui/card';
@@ -32,6 +34,12 @@ import {
   AlertCircle,
   Loader2,
   X as XIcon,
+  Copy,
+  Check,
+  Database,
+  Link2,
+  Repeat,
+  Clock,
 } from 'lucide-react';
 
 type ToastKind = 'success' | 'error' | 'info';
@@ -53,6 +61,27 @@ function formatDate(iso: string | null | undefined) {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
   return d.toISOString().slice(0, 10);
+}
+
+function formatDateTime(iso: string | null | undefined) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleString();
+}
+
+function formatDuration(ms: number) {
+  if (!Number.isFinite(ms) || ms < 0) return '—';
+  const totalSec = Math.round(ms / 1000);
+  if (totalSec < 60) return `${totalSec} sec`;
+  const m = Math.floor(totalSec / 60);
+  const s = totalSec % 60;
+  return `${m}m ${s}s`;
+}
+
+function formatCount(n: number | null | undefined) {
+  if (n == null) return '—';
+  return n.toLocaleString();
 }
 
 function statusForRow(row: AdminInstrumentSearchRow) {
@@ -212,19 +241,60 @@ export default function InstrumentsPage() {
     FYERS: false,
     ALL: false,
   });
+  const [importSummaries, setImportSummaries] = useState<
+    Partial<Record<Broker, AdminInstrumentImportSummary>>
+  >({});
+
+  // -------- Stats --------
+  const [stats, setStats] = useState<AdminInstrumentStatsResponse | null>(null);
+  const [statsLoading, setStatsLoading] = useState(true);
+  const [statsError, setStatsError] = useState<string | null>(null);
+
+  const loadStats = useCallback(async () => {
+    setStatsLoading(true);
+    setStatsError(null);
+    try {
+      const s = await api.admin.instruments.stats();
+      setStats(s);
+      // Seed importSummaries from persisted-per-process history so a page
+      // reload during an idle window still shows the most recent outcome.
+      if (s.lastSummaries) {
+        setImportSummaries((prev) => ({
+          ...s.lastSummaries,
+          ...prev,
+        }));
+      }
+    } catch (e: any) {
+      setStatsError(e?.message ?? 'Failed to load stats');
+    } finally {
+      setStatsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadStats();
+  }, [loadStats]);
+
+  // Translate section — refs used to auto-focus the source-symbol input
+  // when a user clicks "Translate" on a search row so the workflow is
+  // continuous instead of requiring manual typing.
+  const translateSectionRef = useRef<HTMLDivElement | null>(null);
+  const translateSymbolInputRef = useRef<HTMLInputElement | null>(null);
 
   async function runImportOne(b: Broker.ZERODHA | Broker.FYERS) {
     const key: ImportKey = b === Broker.ZERODHA ? 'ZERODHA' : 'FYERS';
     setImportBusy((s) => ({ ...s, [key]: true }));
     try {
-      await api.admin.instruments.importOne(b);
+      const res = await api.admin.instruments.importOne(b);
+      setImportSummaries((prev) => ({ ...prev, [b]: res.summary }));
       pushToast({
         kind: 'success',
         title: `${BROKER_LABELS[b]} import complete`,
-        message: 'Instrument universe refreshed.',
+        message: `Inserted ${res.summary.inserted.toLocaleString()} · Updated ${res.summary.updated.toLocaleString()} · ${formatDuration(res.summary.durationMs)}`,
       });
       // Refresh current search results so the table reflects the new data.
       if (debouncedQ) runSearch();
+      loadStats();
     } catch (e: any) {
       pushToast({
         kind: 'error',
@@ -239,13 +309,24 @@ export default function InstrumentsPage() {
   async function runImportAll() {
     setImportBusy((s) => ({ ...s, ALL: true }));
     try {
-      await api.admin.instruments.importAll();
+      const res = await api.admin.instruments.importAll();
+      const merged: Partial<Record<Broker, AdminInstrumentImportSummary>> = {};
+      for (const [broker, summary] of Object.entries(res.summaries ?? {})) {
+        merged[broker as Broker] = summary;
+      }
+      setImportSummaries((prev) => ({ ...prev, ...merged }));
+      const zTot = res.summaries?.[Broker.ZERODHA];
+      const fTot = res.summaries?.[Broker.FYERS];
+      const parts: string[] = [];
+      if (zTot) parts.push(`Zerodha ${zTot.inserted + zTot.updated}`);
+      if (fTot) parts.push(`Fyers ${fTot.inserted + fTot.updated}`);
       pushToast({
         kind: 'success',
         title: 'All brokers refreshed',
-        message: 'Zerodha and Fyers instrument universes reloaded.',
+        message: parts.join(' · ') || 'Zerodha and Fyers instrument universes reloaded.',
       });
       if (debouncedQ) runSearch();
+      loadStats();
     } catch (e: any) {
       pushToast({
         kind: 'error',
@@ -267,6 +348,82 @@ export default function InstrumentsPage() {
     }.`;
   }, [hasQuery, searchLoading, debouncedQ, broker, exchange, segment, instrumentType]);
 
+  // -------- Clipboard --------
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const copyToClipboard = useCallback(
+    async (value: string, label: string, key: string) => {
+      if (!value) return;
+      try {
+        if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+          await navigator.clipboard.writeText(value);
+        } else if (typeof document !== 'undefined') {
+          const ta = document.createElement('textarea');
+          ta.value = value;
+          ta.style.position = 'fixed';
+          ta.style.opacity = '0';
+          document.body.appendChild(ta);
+          ta.select();
+          document.execCommand('copy');
+          document.body.removeChild(ta);
+        }
+        setCopiedKey(key);
+        if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
+        copiedTimerRef.current = setTimeout(() => setCopiedKey(null), 1500);
+        pushToast({
+          kind: 'info',
+          title: `${label} copied`,
+          message: value,
+        });
+      } catch (err: any) {
+        pushToast({
+          kind: 'error',
+          title: `Failed to copy ${label}`,
+          message: err?.message ?? 'Clipboard is unavailable.',
+        });
+      }
+    },
+    [pushToast],
+  );
+
+  // -------- Translate-from-row --------
+  const translateFromRow = useCallback(
+    (row: AdminInstrumentSearchRow) => {
+      // Pre-fill: source broker + symbol come from the clicked row.
+      // Target broker defaults to the other broker so the flow is
+      // useful without further clicks.
+      const source = row.broker;
+      const target =
+        source === Broker.ZERODHA ? Broker.FYERS : Broker.ZERODHA;
+      setFromBroker(source);
+      setFromSymbol(row.brokerSymbol);
+      setToBroker(target);
+      setTranslation(null);
+      setTranslateError(null);
+      // Scroll the translation card into view and focus the symbol input
+      // so the "Translate" button is one keystroke away.
+      requestAnimationFrame(() => {
+        translateSectionRef.current?.scrollIntoView({
+          behavior: 'smooth',
+          block: 'start',
+        });
+        translateSymbolInputRef.current?.focus();
+      });
+    },
+    [],
+  );
+
+  const anyImportRunning =
+    importBusy.ZERODHA || importBusy.FYERS || importBusy.ALL;
+  const runningBrokerLabel = importBusy.ALL
+    ? 'All brokers'
+    : importBusy.ZERODHA
+    ? BROKER_LABELS[Broker.ZERODHA]
+    : importBusy.FYERS
+    ? BROKER_LABELS[Broker.FYERS]
+    : null;
+
   return (
     <div className="space-y-6" data-testid="instruments-page">
       {/* Header */}
@@ -285,11 +442,16 @@ export default function InstrumentsPage() {
             data-testid="import-zerodha-btn"
           >
             {importBusy.ZERODHA ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
+              <>
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Import in Progress
+              </>
             ) : (
-              <Download className="h-4 w-4" />
+              <>
+                <Download className="h-4 w-4" />
+                Import Zerodha
+              </>
             )}
-            Import Zerodha
           </Button>
           <Button
             variant="outline"
@@ -298,11 +460,16 @@ export default function InstrumentsPage() {
             data-testid="import-fyers-btn"
           >
             {importBusy.FYERS ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
+              <>
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Import in Progress
+              </>
             ) : (
-              <Download className="h-4 w-4" />
+              <>
+                <Download className="h-4 w-4" />
+                Import Fyers
+              </>
             )}
-            Import Fyers
           </Button>
           <Button
             onClick={runImportAll}
@@ -310,14 +477,109 @@ export default function InstrumentsPage() {
             data-testid="import-refresh-all-btn"
           >
             {importBusy.ALL ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
+              <>
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Import in Progress
+              </>
             ) : (
-              <RefreshCw className="h-4 w-4" />
+              <>
+                <RefreshCw className="h-4 w-4" />
+                Refresh All
+              </>
             )}
-            Refresh All
           </Button>
         </div>
       </div>
+
+      {/* Running-import banner */}
+      {anyImportRunning && (
+        <div
+          className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm flex items-center gap-3"
+          role="status"
+          data-testid="import-running-banner"
+        >
+          <Loader2 className="h-4 w-4 animate-spin text-amber-600 dark:text-amber-400" />
+          <div className="flex-1">
+            <span className="font-medium">Import in progress</span>
+            {runningBrokerLabel && (
+              <span className="text-muted-foreground"> · {runningBrokerLabel}</span>
+            )}
+            <span className="text-muted-foreground">
+              {' '}· This can take a couple of minutes. The button is disabled to prevent duplicate imports.
+            </span>
+          </div>
+        </div>
+      )}
+
+      {/* Statistics cards */}
+      <div
+        className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5"
+        data-testid="instrument-stats-cards"
+      >
+        <StatCard
+          label="Canonical Instruments"
+          value={formatCount(stats?.counts.canonical)}
+          loading={statsLoading && !stats}
+          icon={<Database className="h-4 w-4 text-muted-foreground" />}
+          testId="stat-card-canonical"
+        />
+        <StatCard
+          label="Broker Mappings"
+          value={formatCount(stats?.counts.brokerMappings)}
+          loading={statsLoading && !stats}
+          icon={<Link2 className="h-4 w-4 text-muted-foreground" />}
+          testId="stat-card-broker-mappings"
+        />
+        <StatCard
+          label="Zerodha Instruments"
+          value={formatCount(stats?.counts.zerodha)}
+          loading={statsLoading && !stats}
+          icon={<Badge variant="secondary">{BROKER_LABELS[Broker.ZERODHA]}</Badge>}
+          testId="stat-card-zerodha"
+        />
+        <StatCard
+          label="Fyers Instruments"
+          value={formatCount(stats?.counts.fyers)}
+          loading={statsLoading && !stats}
+          icon={<Badge variant="secondary">{BROKER_LABELS[Broker.FYERS]}</Badge>}
+          testId="stat-card-fyers"
+        />
+        <StatCard
+          label="Last Refresh"
+          value={
+            stats?.lastRefresh.overall ? formatDateTime(stats.lastRefresh.overall) : 'Never'
+          }
+          loading={statsLoading && !stats}
+          icon={<Clock className="h-4 w-4 text-muted-foreground" />}
+          testId="stat-card-last-refresh"
+          small
+        />
+      </div>
+      {statsError && (
+        <div
+          className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive"
+          role="alert"
+          data-testid="stats-error"
+        >
+          Failed to load stats: {statsError}
+        </div>
+      )}
+
+      {/* Import summaries */}
+      {(importSummaries[Broker.ZERODHA] || importSummaries[Broker.FYERS]) && (
+        <div
+          className="grid gap-4 md:grid-cols-2"
+          data-testid="import-summaries"
+        >
+          {(
+            [Broker.ZERODHA, Broker.FYERS] as const
+          ).map((b) =>
+            importSummaries[b] ? (
+              <ImportSummaryCard key={b} summary={importSummaries[b]!} />
+            ) : null,
+          )}
+        </div>
+      )}
 
       {/* Search + filters */}
       <Card>
@@ -331,11 +593,14 @@ export default function InstrumentsPage() {
                   id="instrument-search"
                   value={q}
                   onChange={(e) => setQ(e.target.value)}
-                  placeholder="Symbol or underlying (e.g. RELIANCE)"
+                  placeholder="Broker symbol, trading symbol, underlying or company name"
                   className="pl-9"
                   data-testid="instrument-search-input"
                 />
               </div>
+              <p className="text-[11px] text-muted-foreground">
+                Matches broker symbol prefix and any substring of the underlying / company name.
+              </p>
             </div>
             <div className="space-y-1.5">
               <Label>Broker</Label>
@@ -500,7 +765,19 @@ export default function InstrumentsPage() {
                         <td className="py-3 pr-4">
                           <Badge variant={status.variant}>{status.label}</Badge>
                         </td>
-                        <td className="py-3 pr-4 text-right">
+                        <td className="py-3 pr-4 text-right whitespace-nowrap">
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              translateFromRow(r);
+                            }}
+                            title="Translate this symbol to the other broker"
+                            data-testid={`instrument-translate-${r.broker}-${r.brokerSymbol}`}
+                          >
+                            <Repeat className="h-4 w-4" /> Translate
+                          </Button>
                           <Button
                             size="sm"
                             variant="ghost"
@@ -524,7 +801,7 @@ export default function InstrumentsPage() {
       </Card>
 
       {/* Broker translation */}
-      <Card>
+      <Card ref={translateSectionRef}>
         <CardContent className="pt-6">
           <div className="flex items-start justify-between gap-4 flex-wrap mb-4">
             <div>
@@ -559,6 +836,7 @@ export default function InstrumentsPage() {
             <div className="space-y-1.5">
               <Label>Source symbol</Label>
               <Input
+                ref={translateSymbolInputRef}
                 value={fromSymbol}
                 onChange={(e) => setFromSymbol(e.target.value)}
                 placeholder="e.g. RELIANCE"
@@ -713,7 +991,24 @@ export default function InstrumentsPage() {
                   Canonical instrument
                 </div>
                 <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
-                  <DetailField label="Contract key" value={detailsData.contractKey} mono />
+                  <DetailField
+                    label="Contract key"
+                    value={
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono break-all">
+                          {detailsData.contractKey}
+                        </span>
+                        <CopyButton
+                          value={detailsData.contractKey}
+                          label="Contract key"
+                          copyKey={`contract-key:${detailsData.contractKey}`}
+                          copiedKey={copiedKey}
+                          onCopy={copyToClipboard}
+                          testId="copy-contract-key-btn"
+                        />
+                      </div>
+                    }
+                  />
                   <DetailField label="Underlying" value={detailsData.underlying} />
                   <DetailField label="Exchange" value={detailsData.exchange} />
                   <DetailField label="Segment" value={detailsData.segment} />
@@ -764,9 +1059,35 @@ export default function InstrumentsPage() {
                             <td className="py-2 px-3">
                               <Badge variant="secondary">{BROKER_LABELS[b.broker]}</Badge>
                             </td>
-                            <td className="py-2 px-3 font-mono text-xs">{b.brokerSymbol}</td>
+                            <td className="py-2 px-3 font-mono text-xs">
+                              <div className="flex items-center gap-2">
+                                <span className="break-all">{b.brokerSymbol}</span>
+                                <CopyButton
+                                  value={b.brokerSymbol}
+                                  label="Broker symbol"
+                                  copyKey={`broker-symbol:${b.id}`}
+                                  copiedKey={copiedKey}
+                                  onCopy={copyToClipboard}
+                                  testId={`copy-broker-symbol-${b.broker}-${b.brokerSymbol}`}
+                                />
+                              </div>
+                            </td>
                             <td className="py-2 px-3 font-mono text-xs text-muted-foreground">
-                              {b.brokerToken ?? '—'}
+                              {b.brokerToken ? (
+                                <div className="flex items-center gap-2">
+                                  <span className="break-all">{b.brokerToken}</span>
+                                  <CopyButton
+                                    value={b.brokerToken}
+                                    label="Broker token"
+                                    copyKey={`broker-token:${b.id}`}
+                                    copiedKey={copiedKey}
+                                    onCopy={copyToClipboard}
+                                    testId={`copy-broker-token-${b.broker}-${b.brokerSymbol}`}
+                                  />
+                                </div>
+                              ) : (
+                                '—'
+                              )}
                             </td>
                           </tr>
                         ))}
@@ -841,5 +1162,158 @@ function DetailField({
       <div className="text-xs text-muted-foreground">{label}</div>
       <div className={`text-sm ${mono ? 'font-mono break-all' : ''}`}>{value}</div>
     </div>
+  );
+}
+
+function StatCard({
+  label,
+  value,
+  loading,
+  icon,
+  small,
+  testId,
+}: {
+  label: string;
+  value: React.ReactNode;
+  loading?: boolean;
+  icon?: React.ReactNode;
+  small?: boolean;
+  testId?: string;
+}) {
+  return (
+    <Card data-testid={testId}>
+      <CardContent className="pt-6 pb-5 space-y-1">
+        <div className="flex items-center justify-between gap-2">
+          <div className="text-xs text-muted-foreground uppercase tracking-wide">
+            {label}
+          </div>
+          {icon}
+        </div>
+        {loading ? (
+          <div className="h-8 w-24 rounded-md bg-muted/60 animate-pulse" aria-hidden />
+        ) : (
+          <div
+            className={small ? 'text-sm font-medium' : 'text-2xl font-semibold'}
+            data-testid={testId ? `${testId}-value` : undefined}
+          >
+            {value}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function ImportSummaryCard({ summary }: { summary: AdminInstrumentImportSummary }) {
+  const total = summary.inserted + summary.updated + summary.skipped + summary.failed;
+  const brokerKey = summary.broker;
+  return (
+    <Card data-testid={`import-summary-${brokerKey}`}>
+      <CardContent className="pt-6 pb-5 space-y-3">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <Badge variant="secondary">{BROKER_LABELS[brokerKey]}</Badge>
+            <span className="text-sm font-medium">Last import summary</span>
+          </div>
+          {summary.failed > 0 ? (
+            <Badge variant="warning">Partial</Badge>
+          ) : (
+            <Badge variant="success">OK</Badge>
+          )}
+        </div>
+        <div className="grid grid-cols-3 gap-x-4 gap-y-2 text-sm">
+          <SummaryStat label="Downloaded" value={summary.downloaded.toLocaleString()} />
+          <SummaryStat
+            label="Inserted"
+            value={summary.inserted.toLocaleString()}
+            testId={`import-summary-${brokerKey}-inserted`}
+          />
+          <SummaryStat
+            label="Updated"
+            value={summary.updated.toLocaleString()}
+            testId={`import-summary-${brokerKey}-updated`}
+          />
+          <SummaryStat
+            label="Skipped"
+            value={summary.skipped.toLocaleString()}
+            testId={`import-summary-${brokerKey}-skipped`}
+          />
+          <SummaryStat
+            label="Failed"
+            value={summary.failed.toLocaleString()}
+            emphasise={summary.failed > 0 ? 'destructive' : undefined}
+            testId={`import-summary-${brokerKey}-failed`}
+          />
+          <SummaryStat label="Processed" value={total.toLocaleString()} />
+        </div>
+        <div className="pt-2 border-t text-xs text-muted-foreground flex flex-wrap items-center gap-x-4 gap-y-1">
+          <span>Duration: {formatDuration(summary.durationMs)}</span>
+          <span>Last refresh: {formatDateTime(summary.finishedAt)}</span>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function SummaryStat({
+  label,
+  value,
+  emphasise,
+  testId,
+}: {
+  label: string;
+  value: string;
+  emphasise?: 'destructive';
+  testId?: string;
+}) {
+  return (
+    <div>
+      <div className="text-xs text-muted-foreground">{label}</div>
+      <div
+        className={`text-sm font-mono ${
+          emphasise === 'destructive' ? 'text-destructive font-semibold' : ''
+        }`}
+        data-testid={testId}
+      >
+        {value}
+      </div>
+    </div>
+  );
+}
+
+function CopyButton({
+  value,
+  label,
+  copyKey,
+  copiedKey,
+  onCopy,
+  testId,
+}: {
+  value: string;
+  label: string;
+  copyKey: string;
+  copiedKey: string | null;
+  onCopy: (value: string, label: string, key: string) => void;
+  testId?: string;
+}) {
+  const copied = copiedKey === copyKey;
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        onCopy(value, label, copyKey);
+      }}
+      title={`Copy ${label}`}
+      aria-label={`Copy ${label}`}
+      className="inline-flex items-center justify-center h-6 w-6 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors shrink-0"
+      data-testid={testId}
+    >
+      {copied ? (
+        <Check className="h-3.5 w-3.5 text-emerald-500" />
+      ) : (
+        <Copy className="h-3.5 w-3.5" />
+      )}
+    </button>
   );
 }

@@ -6,6 +6,7 @@ import { AdminInstrumentController } from './admin-instrument.controller';
 import { InstrumentService } from './instrument.service';
 import { InstrumentImportService } from './instrument-import.service';
 import { InstrumentResolverService } from './instrument-resolver.service';
+import { InstrumentStatsService } from './instrument-stats.service';
 
 import { ZerodhaImporter } from './importers/zerodha.importer';
 import { FyersImporter } from './importers/fyers.importer';
@@ -22,6 +23,7 @@ import { FyersImporter } from './importers/fyers.importer';
     InstrumentService,
     InstrumentImportService,
     InstrumentResolverService,
+    InstrumentStatsService,
     ZerodhaImporter,
     FyersImporter,
   ],
@@ -29,6 +31,7 @@ import { FyersImporter } from './importers/fyers.importer';
     InstrumentService,
     InstrumentImportService,
     InstrumentResolverService,
+    InstrumentStatsService,
   ],
 })
 export class InstrumentModule {}
