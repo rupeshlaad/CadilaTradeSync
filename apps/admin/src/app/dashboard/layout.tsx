@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { auth, api } from '@/lib/api';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { Button } from '@/components/ui/button';
-import { LayoutDashboard, Users, Shield, Server, LogOut, ShieldCheck } from 'lucide-react';
+import { LayoutDashboard, Users, Shield, Server, LogOut, ShieldCheck, Database } from 'lucide-react';
 import { Role, type PublicUser } from '@cts/shared';
 
 const NAV = [
@@ -14,6 +14,7 @@ const NAV = [
   { href: '/dashboard/strategies', label: 'Strategies', icon: Shield },
   { href: '/dashboard/followers', label: 'Followers', icon: Users },
   { href: '/dashboard/trade-monitor', label: 'Trade Monitor', icon: LayoutDashboard },
+  { href: '/dashboard/instruments', label: 'Instruments', icon: Database },
   { href: '/dashboard/users', label: 'Users', icon: Users },
   { href: '/dashboard/settings', label: 'Settings', icon: Shield },
 ];
