@@ -10,6 +10,75 @@ import type {
   CreateTradingAccountPayload,
   UpdateTradingAccountPayload,
 } from '@cts/shared';
+import { Broker } from '@cts/shared';
+
+export interface AdminInstrumentSummary {
+  id: string;
+  contractKey: string;
+  exchange: string;
+  segment: string;
+  underlying: string;
+  instrumentType: string;
+  expiry: string | null;
+  strike: number | null;
+  optionType: string | null;
+  lotSize: number;
+  tickSize: number | null;
+}
+
+export interface AdminInstrumentSearchRow {
+  broker: Broker;
+  brokerSymbol: string;
+  brokerToken: string | null;
+  instrument: AdminInstrumentSummary;
+}
+
+export interface AdminInstrumentSearchResponse {
+  count: number;
+  items: AdminInstrumentSearchRow[];
+}
+
+export interface AdminInstrumentBrokerMapping {
+  id: string;
+  instrumentId: string;
+  broker: Broker;
+  brokerSymbol: string;
+  brokerToken: string | null;
+  exchangeSymbol?: string | null;
+  exchangeToken?: string | null;
+  createdAt?: string;
+}
+
+export interface AdminInstrumentResolved {
+  id: string;
+  contractKey: string;
+  exchange: string;
+  segment: string;
+  underlying: string;
+  instrumentType: string;
+  expiry: string | null;
+  strike: number | null;
+  optionType: string | null;
+  lotSize: number;
+  tickSize: number | null;
+  createdAt?: string;
+  brokers: AdminInstrumentBrokerMapping[];
+}
+
+export interface AdminInstrumentTranslateResponse {
+  instrument: AdminInstrumentSummary;
+  source: { broker: Broker; brokerSymbol: string; brokerToken: string | null };
+  target: { broker: Broker; brokerSymbol: string; brokerToken: string | null };
+}
+
+export interface AdminInstrumentSearchQuery {
+  q: string;
+  broker?: Broker;
+  exchange?: string;
+  segment?: string;
+  instrumentType?: string;
+  limit?: number;
+}
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
 const TOKEN_KEY = 'cts_admin_access_token';
@@ -170,6 +239,59 @@ export const api = {
         request<TradingAccountDto>(`/admin/master-accounts/${id}/disable`, {
           method: 'POST',
         }),
+    },
+
+    instruments: {
+      search: (query: AdminInstrumentSearchQuery) => {
+        const params = new URLSearchParams();
+        params.set('q', query.q);
+        if (query.broker) params.set('broker', query.broker);
+        if (query.exchange) params.set('exchange', query.exchange);
+        if (query.segment) params.set('segment', query.segment);
+        if (query.instrumentType) params.set('instrumentType', query.instrumentType);
+        if (query.limit != null) params.set('limit', String(query.limit));
+        return request<AdminInstrumentSearchResponse>(
+          `/admin/instruments/search?${params.toString()}`,
+        );
+      },
+
+      lookup: (broker: Broker, symbol: string) => {
+        const params = new URLSearchParams({ broker, symbol });
+        return request<AdminInstrumentSearchRow>(
+          `/admin/instruments/lookup?${params.toString()}`,
+        );
+      },
+
+      resolve: (contractKey: string) => {
+        const params = new URLSearchParams({ contractKey });
+        return request<AdminInstrumentResolved>(
+          `/admin/instruments/resolve?${params.toString()}`,
+        );
+      },
+
+      translate: (fromBroker: Broker, fromSymbol: string, toBroker: Broker) => {
+        const params = new URLSearchParams({ fromBroker, fromSymbol, toBroker });
+        return request<AdminInstrumentTranslateResponse>(
+          `/admin/instruments/translate?${params.toString()}`,
+        );
+      },
+
+      listBrokers: (instrumentId: string) =>
+        request<AdminInstrumentBrokerMapping[]>(
+          `/admin/instruments/${instrumentId}/brokers`,
+        ),
+
+      importOne: (broker: Broker) =>
+        request<{ success: boolean; broker: Broker }>(
+          `/admin/instruments/import/${broker}`,
+          { method: 'POST' },
+        ),
+
+      importAll: () =>
+        request<{ success: boolean; brokers: Broker[] }>(
+          `/admin/instruments/import`,
+          { method: 'POST' },
+        ),
     },
   },
 };
