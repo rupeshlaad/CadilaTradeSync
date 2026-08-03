@@ -170,6 +170,80 @@ export interface StrategyExecutionStatusResponse {
   lastValidation: StrategyExecutionValidationResponse | null;
 }
 
+// -----------------------------
+// Trade Event Intake (Sprint 5.1)
+// -----------------------------
+
+export type TradeEventStatus =
+  | 'RECEIVED'
+  | 'NORMALIZED'
+  | 'VALIDATED'
+  | 'DUPLICATE'
+  | 'REJECTED';
+
+export type TradeEventSource =
+  | 'ZERODHA_POSTBACK'
+  | 'FYERS_POSTBACK'
+  | 'BROKER_POLL'
+  | 'MANUAL_ENTRY'
+  | 'UNKNOWN';
+
+export type TradeEventValidationKey =
+  | 'shape_valid'
+  | 'master_account_exists'
+  | 'master_account_connected'
+  | 'broker_session_healthy'
+  | 'strategy_exists'
+  | 'strategy_running'
+  | 'instrument_mapping_available'
+  | 'not_duplicate';
+
+export interface TradeEventValidationCheck {
+  key: TradeEventValidationKey;
+  ok: boolean;
+  message: string;
+}
+
+export interface TradeEventValidationResult {
+  ok: boolean;
+  checks: TradeEventValidationCheck[];
+  errors: TradeEventValidationCheck[];
+  validatedAt: string;
+}
+
+export interface TradeEvent {
+  id: string;
+  source: TradeEventSource;
+  broker: Broker;
+  masterAccountId: string;
+  strategyId: string | null;
+  brokerOrderId: string;
+  brokerExecutionId: string | null;
+  brokerSymbol: string;
+  instrumentId: string | null;
+  contractKey: string | null;
+  side: 'BUY' | 'SELL';
+  quantity: number;
+  price: number | null;
+  status: TradeEventStatus;
+  brokerTimestamp: string | null;
+  receivedAt: string;
+  raw: unknown;
+}
+
+export interface TradeEventRecord {
+  event: TradeEvent;
+  validation: TradeEventValidationResult | null;
+  rejectionReason: string | null;
+}
+
+export interface TradeEventPipelineSummary {
+  bufferSize: number;
+  bufferCapacity: number;
+  counts: Record<TradeEventStatus, number>;
+  latest: TradeEventRecord | null;
+}
+
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
 const TOKEN_KEY = 'cts_admin_access_token';
 
@@ -420,6 +494,19 @@ export const api = {
         request<StrategyExecutionStatusResponse>(
           `/admin/strategy-execution/${strategyId}/stop`,
           { method: 'POST' },
+        ),
+    },
+
+    tradeEvents: {
+      summary: () =>
+        request<TradeEventPipelineSummary>(`/admin/trade-events/summary`),
+      recent: (limit = 20) =>
+        request<{ items: TradeEventRecord[] }>(
+          `/admin/trade-events/recent?limit=${limit}`,
+        ),
+      latest: () =>
+        request<{ record: TradeEventRecord | null }>(
+          `/admin/trade-events/latest`,
         ),
     },
   },
