@@ -7,8 +7,24 @@ import { api } from '@/lib/api';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { ArrowLeft, RefreshCw, AlertTriangle, CheckCircle2, XCircle } from 'lucide-react';
-import { BROKER_LABELS, ConnectionStatus, type TradingAccountDto } from '@cts/shared';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import {
+  ArrowLeft,
+  RefreshCw,
+  AlertTriangle,
+  CheckCircle2,
+  XCircle,
+  PlugZap,
+  ShieldAlert,
+} from 'lucide-react';
+import { BROKER_LABELS, Broker, ConnectionStatus, type TradingAccountDto } from '@cts/shared';
 
 // ---------- Response types (kept local to avoid touching shared package) ----------
 
@@ -17,8 +33,11 @@ type SectionError = string | null;
 interface DashboardHealth {
   connected: boolean;
   connectionStatus: ConnectionStatus;
+  broker: Broker;
+  loginTime: string | null;
   lastHeartbeat: string | null;
-  loginTime: string;
+  sessionActive: boolean;
+  tokenExpired: boolean | null;
 }
 
 interface BrokerProfile {
@@ -100,10 +119,12 @@ function ConnectionBadge({ status }: { status: ConnectionStatus }) {
       ? 'success'
       : status === ConnectionStatus.CONNECTING
       ? 'warning'
+      : status === ConnectionStatus.EXPIRED
+      ? 'warning'
       : status === ConnectionStatus.ERROR
       ? 'destructive'
       : 'muted';
-  return <Badge variant={variant as any}>{status}</Badge>;
+  return <Badge variant={variant as any} data-testid="connection-status-badge">{status}</Badge>;
 }
 
 function SectionCard({
@@ -215,7 +236,11 @@ export default function MasterDashboardPage() {
   const [data, setData] = useState<DashboardResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [refreshingStatus, setRefreshingStatus] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [confirmDisconnect, setConfirmDisconnect] = useState(false);
+  const [disconnecting, setDisconnecting] = useState(false);
+  const [disconnectError, setDisconnectError] = useState<string | null>(null);
 
   async function load(initial = false) {
     if (!id) return;
@@ -234,6 +259,62 @@ export default function MasterDashboardPage() {
     } finally {
       setLoading(false);
       setRefreshing(false);
+    }
+  }
+
+  async function refreshStatus() {
+    if (!id) return;
+    try {
+      setRefreshingStatus(true);
+      setError(null);
+      const [acc, health] = await Promise.all([
+        api.admin.masterAccounts.get(id),
+        api.admin.masterAccounts.sessionHealth(id) as Promise<DashboardHealth>,
+      ]);
+      setAccount(acc);
+      // Merge the fresh health into the current dashboard payload without
+      // triggering a full broker round-trip. If we don't have a payload yet
+      // (initial disconnected load failed), synthesise a minimal one.
+      setData((prev) => {
+        if (prev) return { ...prev, health };
+        return {
+          profile: null,
+          margins: null,
+          holdings: null,
+          positions: null,
+          orders: null,
+          trades: null,
+          errors: {
+            profile: null,
+            margins: null,
+            holdings: null,
+            positions: null,
+            orders: null,
+            trades: null,
+          },
+          health,
+        };
+      });
+    } catch (e: any) {
+      setError(e?.message ?? 'Failed to refresh status');
+    } finally {
+      setRefreshingStatus(false);
+    }
+  }
+
+  async function handleDisconnect() {
+    if (!id) return;
+    try {
+      setDisconnecting(true);
+      setDisconnectError(null);
+      await api.admin.masterAccounts.disconnect(id);
+      setConfirmDisconnect(false);
+      // Reload account + dashboard so UI reflects the disconnected state.
+      await load(false);
+    } catch (e: any) {
+      setDisconnectError(e?.message ?? 'Failed to disconnect broker');
+    } finally {
+      setDisconnecting(false);
     }
   }
 
@@ -270,15 +351,41 @@ export default function MasterDashboardPage() {
             )}
           </p>
         </div>
-        <Button
-          variant="outline"
-          onClick={() => load(false)}
-          disabled={loading || refreshing}
-          data-testid="refresh-dashboard"
-        >
-          <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
-          {refreshing ? 'Refreshing…' : 'Refresh'}
-        </Button>
+        <div className="flex items-center gap-2 flex-wrap">
+          <Button
+            variant="outline"
+            onClick={refreshStatus}
+            disabled={loading || refreshingStatus}
+            data-testid="refresh-status"
+          >
+            <RefreshCw className={`h-4 w-4 ${refreshingStatus ? 'animate-spin' : ''}`} />
+            {refreshingStatus ? 'Refreshing…' : 'Refresh Status'}
+          </Button>
+          <Button
+            variant="outline"
+            onClick={() => load(false)}
+            disabled={loading || refreshing}
+            data-testid="refresh-dashboard"
+          >
+            <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
+            {refreshing ? 'Refreshing…' : 'Refresh'}
+          </Button>
+          <Button
+            variant="destructive"
+            onClick={() => {
+              setDisconnectError(null);
+              setConfirmDisconnect(true);
+            }}
+            disabled={
+              loading ||
+              !data ||
+              data.health.connectionStatus === ConnectionStatus.DISCONNECTED
+            }
+            data-testid="disconnect-broker"
+          >
+            <PlugZap className="h-4 w-4" /> Disconnect Broker
+          </Button>
+        </div>
       </div>
 
       {error && (
@@ -310,10 +417,10 @@ export default function MasterDashboardPage() {
               <CardDescription>Live session and broker connectivity</CardDescription>
             </CardHeader>
             <CardContent className="pt-0">
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
                 <div className="space-y-1">
-                  <p className="text-xs uppercase tracking-wide text-muted-foreground">Live</p>
-                  <div className="flex items-center gap-2">
+                  <p className="text-xs uppercase tracking-wide text-muted-foreground">Live Connection</p>
+                  <div className="flex items-center gap-2" data-testid="live-connection">
                     <StatusDot ok={data.health.connected} />
                     <span className="text-sm font-medium">
                       {data.health.connected ? 'Connected' : 'Disconnected'}
@@ -321,21 +428,90 @@ export default function MasterDashboardPage() {
                   </div>
                 </div>
                 <div className="space-y-1">
+                  <p className="text-xs uppercase tracking-wide text-muted-foreground">Broker</p>
+                  <p className="text-sm font-medium" data-testid="broker-name">
+                    {BROKER_LABELS[data.health.broker] ?? data.health.broker}
+                  </p>
+                </div>
+                <div className="space-y-1">
                   <p className="text-xs uppercase tracking-wide text-muted-foreground">Status</p>
                   <ConnectionBadge status={data.health.connectionStatus} />
                 </div>
                 <div className="space-y-1">
+                  <p className="text-xs uppercase tracking-wide text-muted-foreground">Session</p>
+                  <div className="flex items-center gap-2" data-testid="session-status">
+                    {data.health.sessionActive ? (
+                      <Badge variant="success" className="gap-1">
+                        <CheckCircle2 className="h-3 w-3" /> Active
+                      </Badge>
+                    ) : data.health.tokenExpired ? (
+                      <Badge variant="warning" className="gap-1">
+                        <ShieldAlert className="h-3 w-3" /> Token expired
+                      </Badge>
+                    ) : (
+                      <Badge variant="muted" className="gap-1">
+                        <XCircle className="h-3 w-3" /> Inactive
+                      </Badge>
+                    )}
+                  </div>
+                </div>
+                <div className="space-y-1">
                   <p className="text-xs uppercase tracking-wide text-muted-foreground">Login Time</p>
-                  <p className="text-sm font-mono">{fmtDate(data.health.loginTime)}</p>
+                  <p className="text-sm font-mono" data-testid="login-time">{fmtDate(data.health.loginTime)}</p>
                 </div>
                 <div className="space-y-1">
                   <p className="text-xs uppercase tracking-wide text-muted-foreground">Last Heartbeat</p>
-                  <p className="text-sm font-mono">{fmtDate(data.health.lastHeartbeat)}</p>
+                  <p className="text-sm font-mono" data-testid="last-heartbeat">{fmtDate(data.health.lastHeartbeat)}</p>
                 </div>
               </div>
+
+              {data.health.connectionStatus === ConnectionStatus.DISCONNECTED && (
+                <div
+                  className="mt-4 rounded-md border border-amber-500/30 bg-amber-500/5 p-3 text-sm flex items-start gap-3 flex-wrap"
+                  data-testid="reconnect-cta"
+                >
+                  <ShieldAlert className="h-4 w-4 text-amber-600 dark:text-amber-400 mt-0.5 shrink-0" />
+                  <div className="flex-1 min-w-[220px]">
+                    <p className="font-medium">This broker is disconnected.</p>
+                    <p className="text-muted-foreground">
+                      Reconnect from the Master Accounts list to resume live data, holdings, positions,
+                      orders and trades.
+                    </p>
+                  </div>
+                  <Button asChild size="sm" variant="outline">
+                    <Link
+                      href={`/dashboard/master-accounts`}
+                      data-testid="go-reconnect"
+                    >
+                      Go to Master Accounts
+                    </Link>
+                  </Button>
+                </div>
+              )}
+
+              {data.health.connectionStatus === ConnectionStatus.EXPIRED && (
+                <div
+                  className="mt-4 rounded-md border border-amber-500/30 bg-amber-500/5 p-3 text-sm flex items-start gap-3 flex-wrap"
+                  data-testid="expired-cta"
+                >
+                  <ShieldAlert className="h-4 w-4 text-amber-600 dark:text-amber-400 mt-0.5 shrink-0" />
+                  <div className="flex-1 min-w-[220px]">
+                    <p className="font-medium">Session token has expired.</p>
+                    <p className="text-muted-foreground">
+                      Reconnect the broker to refresh the access token.
+                    </p>
+                  </div>
+                  <Button asChild size="sm" variant="outline">
+                    <Link href={`/dashboard/master-accounts`}>Go to Master Accounts</Link>
+                  </Button>
+                </div>
+              )}
             </CardContent>
           </Card>
 
+          {/* Broker-dependent widgets — hidden gracefully when disconnected */}
+          {data.health.connectionStatus === ConnectionStatus.DISCONNECTED ? null : (
+          <>
           {/* Profile & Margins side by side */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             <SectionCard
@@ -573,8 +749,55 @@ export default function MasterDashboardPage() {
               ]}
             />
           </SectionCard>
+          </>
+          )}
         </>
       )}
+
+      <Dialog
+        open={confirmDisconnect}
+        onOpenChange={(v) => {
+          if (!disconnecting) setConfirmDisconnect(v);
+        }}
+      >
+        <DialogContent data-testid="disconnect-confirm-dialog">
+          <DialogHeader>
+            <DialogTitle>Disconnect broker?</DialogTitle>
+            <DialogDescription>
+              This will end the active broker session for{' '}
+              <span className="font-medium text-foreground">{account?.nickname ?? 'this account'}</span>.
+              Live data, holdings, positions, orders and trades will stop until you reconnect.
+              The master account itself will be preserved.
+            </DialogDescription>
+          </DialogHeader>
+          {disconnectError && (
+            <div className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive flex items-start gap-2">
+              <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
+              <span>{disconnectError}</span>
+            </div>
+          )}
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setConfirmDisconnect(false)}
+              disabled={disconnecting}
+              data-testid="disconnect-cancel"
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              onClick={handleDisconnect}
+              disabled={disconnecting}
+              data-testid="disconnect-confirm"
+            >
+              {disconnecting ? 'Disconnecting…' : 'Disconnect'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

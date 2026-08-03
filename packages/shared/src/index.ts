@@ -28,6 +28,7 @@ export enum ConnectionStatus {
   CONNECTING = 'CONNECTING',
   CONNECTED = 'CONNECTED',
   ERROR = 'ERROR',
+  EXPIRED = 'EXPIRED',
 }
 
 export enum Visibility {

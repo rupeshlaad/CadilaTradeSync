@@ -31,6 +31,7 @@ enum ConnectionStatus {
   CONNECTING
   CONNECTED
   ERROR
+  EXPIRED
 }
 
 enum Visibility {
