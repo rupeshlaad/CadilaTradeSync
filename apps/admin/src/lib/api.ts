@@ -80,6 +80,45 @@ export interface AdminInstrumentSearchQuery {
   limit?: number;
 }
 
+export interface AdminInstrumentImportSummary {
+  broker: Broker;
+  downloaded: number;
+  inserted: number;
+  updated: number;
+  skipped: number;
+  failed: number;
+  durationMs: number;
+  startedAt: string;
+  finishedAt: string;
+}
+
+export interface AdminInstrumentImportOneResponse {
+  success: boolean;
+  broker: Broker;
+  summary: AdminInstrumentImportSummary;
+}
+
+export interface AdminInstrumentImportAllResponse {
+  success: boolean;
+  brokers: Broker[];
+  summaries: Record<string, AdminInstrumentImportSummary>;
+}
+
+export interface AdminInstrumentStatsResponse {
+  counts: {
+    canonical: number;
+    brokerMappings: number;
+    zerodha: number;
+    fyers: number;
+  };
+  lastRefresh: {
+    overall: string | null;
+    zerodha: string | null;
+    fyers: string | null;
+  };
+  lastSummaries: Record<string, AdminInstrumentImportSummary>;
+}
+
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
 const TOKEN_KEY = 'cts_admin_access_token';
 
@@ -282,16 +321,19 @@ export const api = {
         ),
 
       importOne: (broker: Broker) =>
-        request<{ success: boolean; broker: Broker }>(
+        request<AdminInstrumentImportOneResponse>(
           `/admin/instruments/import/${broker}`,
           { method: 'POST' },
         ),
 
       importAll: () =>
-        request<{ success: boolean; brokers: Broker[] }>(
+        request<AdminInstrumentImportAllResponse>(
           `/admin/instruments/import`,
           { method: 'POST' },
         ),
+
+      stats: () =>
+        request<AdminInstrumentStatsResponse>(`/admin/instruments/stats`),
     },
   },
 };

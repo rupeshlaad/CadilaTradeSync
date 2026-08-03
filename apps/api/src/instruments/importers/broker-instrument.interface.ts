@@ -29,3 +29,15 @@ export interface ParsedInstrument {
   brokerToken: string | null;
 
 }
+
+export interface ImportSummary {
+  broker: Broker;
+  downloaded: number;
+  inserted: number;
+  updated: number;
+  skipped: number;
+  failed: number;
+  durationMs: number;
+  startedAt: string;
+  finishedAt: string;
+}

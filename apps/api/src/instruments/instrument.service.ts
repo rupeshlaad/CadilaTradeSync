@@ -77,8 +77,11 @@ export class InstrumentService {
    * underlying canonical Instrument row for context.
    *
    * Matching rules (case-insensitive):
-   *  - brokerSymbol startsWith(query)  — cheap, index-friendly, high signal
-   *  - underlying    startsWith(query) — captures options/futures by name
+   *  - brokerSymbol startsWith(query)   — index-friendly, high signal for
+   *                                        broker / trading symbol prefixes.
+   *  - underlying   contains(query)     — captures company-name searches
+   *                                        ("Reliance Industries") and mid-
+   *                                        string matches for options/futures.
    *
    * Optional filters (broker, exchange, segment, instrumentType) narrow the
    * result set further. Results are capped at `limit` (default 25, max 100).
@@ -104,7 +107,7 @@ export class InstrumentService {
         { brokerSymbol: { startsWith: q, mode: 'insensitive' } },
         {
           instrument: {
-            is: { underlying: { startsWith: q, mode: 'insensitive' } },
+            is: { underlying: { contains: q, mode: 'insensitive' } },
           },
         },
       ],

@@ -14,6 +14,7 @@ import { Roles } from '../auth/decorators/roles.decorator';
 
 import { InstrumentService } from './instrument.service';
 import { InstrumentResolverService } from './instrument-resolver.service';
+import { InstrumentStatsService } from './instrument-stats.service';
 import { ZerodhaImporter } from './importers/zerodha.importer';
 import { FyersImporter } from './importers/fyers.importer';
 
@@ -33,6 +34,7 @@ export class AdminInstrumentController {
     private readonly resolver: InstrumentResolverService,
     private readonly zerodhaImporter: ZerodhaImporter,
     private readonly fyersImporter: FyersImporter,
+    private readonly stats: InstrumentStatsService,
   ) {}
 
   /**
@@ -143,12 +145,12 @@ export class AdminInstrumentController {
   async triggerImport(@Param('broker') broker: string) {
     const normalised = broker?.toUpperCase();
     if (normalised === Broker.ZERODHA) {
-      await this.zerodhaImporter.import();
-      return { success: true, broker: Broker.ZERODHA };
+      const summary = await this.zerodhaImporter.import();
+      return { success: true, broker: Broker.ZERODHA, summary };
     }
     if (normalised === Broker.FYERS) {
-      await this.fyersImporter.import();
-      return { success: true, broker: Broker.FYERS };
+      const summary = await this.fyersImporter.import();
+      return { success: true, broker: Broker.FYERS, summary };
     }
     throw new NotFoundException(
       `No importer registered for broker "${broker}"`,
@@ -161,10 +163,24 @@ export class AdminInstrumentController {
    */
   @Post('import')
   async triggerImportAll() {
-    await Promise.all([
+    const [zerodha, fyers] = await Promise.all([
       this.zerodhaImporter.import(),
       this.fyersImporter.import(),
     ]);
-    return { success: true, brokers: [Broker.ZERODHA, Broker.FYERS] };
+    return {
+      success: true,
+      brokers: [Broker.ZERODHA, Broker.FYERS],
+      summaries: { ZERODHA: zerodha, FYERS: fyers },
+    };
+  }
+
+  /**
+   * GET /admin/instruments/stats
+   * Returns live DB counts, per-broker last refresh timestamps, and the
+   * most recent import summary for each broker (in-memory since API boot).
+   */
+  @Get('stats')
+  async getStats() {
+    return this.stats.snapshot();
   }
 }

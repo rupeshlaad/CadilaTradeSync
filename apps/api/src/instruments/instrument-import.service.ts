@@ -3,13 +3,15 @@ import { Broker } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.module';
 import { ParsedInstrument } from './importers/broker-instrument.interface';
 
+export type ImportSaveOutcome = 'inserted' | 'updated';
+
 @Injectable()
 export class InstrumentImportService {
   constructor(
     private readonly prisma: PrismaService,
   ) {}
 
-  async save(instrument: ParsedInstrument) {
+  async save(instrument: ParsedInstrument): Promise<ImportSaveOutcome> {
 
     const dbInstrument = await this.prisma.instrument.upsert({
 
@@ -65,6 +67,20 @@ export class InstrumentImportService {
 
     });
 
+    // Detect insert vs update on the broker mapping side so the importer
+    // can report an accurate summary. The Instrument row is upserted
+    // above regardless (contractKey is shared across brokers), so mapping
+    // presence is the correct signal for "did we add a new row?".
+    const existingMapping = await this.prisma.instrumentBroker.findUnique({
+      where: {
+        broker_brokerSymbol: {
+          broker: instrument.broker,
+          brokerSymbol: instrument.brokerSymbol,
+        },
+      },
+      select: { id: true },
+    });
+
     await this.prisma.instrumentBroker.upsert({
 
       where: {
@@ -98,6 +114,8 @@ export class InstrumentImportService {
       },
 
     });
+
+    return existingMapping ? 'updated' : 'inserted';
 
   }
 }
