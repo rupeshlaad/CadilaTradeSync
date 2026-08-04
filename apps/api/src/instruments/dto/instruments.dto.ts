@@ -1,4 +1,4 @@
-import { IsEnum, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
+import { IsEnum, IsInt, IsNotEmpty, IsOptional, IsString, Max, MinLength, Min } from 'class-validator';
 import { Type } from 'class-transformer';
 import { Broker } from '@prisma/client';
 
@@ -58,4 +58,36 @@ export class TranslateInstrumentDto {
 export class ResolveByContractKeyDto {
   @IsString()
   contractKey!: string;
+}
+
+/**
+ * Sprint 5.4.1 — Manual Trading instrument autocomplete.
+ *
+ * Broker-scoped, relevance-ranked search over the InstrumentBroker
+ * join table so the manual-trading UI can offer a typeahead picker
+ * that always yields a valid broker-symbol mapping (which is the
+ * exact string the master broker adapter needs at placement time).
+ *
+ * The query intentionally requires both `broker` and `q` so the API
+ * cannot be called speculatively — every result corresponds to an
+ * actual, orderable symbol on the caller's chosen master broker.
+ */
+export class ManualInstrumentSearchDto {
+  /** Broker whose symbol universe should be searched. */
+  @IsEnum(Broker)
+  broker!: Broker;
+
+  /** Free-text query — minimum 2 characters. */
+  @IsString()
+  @IsNotEmpty()
+  @MinLength(2)
+  q!: string;
+
+  /** Result cap (default 20, max 50). */
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(50)
+  limit?: number;
 }

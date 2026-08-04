@@ -26,6 +26,7 @@ import {
 
 import {
   api,
+  type ManualInstrumentSearchRow,
   type ManualTradeOrderType,
   type ManualTradeProduct,
   type ManualTradeRecord,
@@ -35,7 +36,8 @@ import {
   type ManualTradeValidity,
   type PlaceManualTradePayload,
 } from '@/lib/api';
-import type { StrategyDto, TradingAccountDto } from '@cts/shared';
+import type { Broker, StrategyDto, TradingAccountDto } from '@cts/shared';
+import { InstrumentSearch } from './instrument-search';
 
 // ---------------------------------------------------------------------------
 
@@ -142,6 +144,8 @@ type AdminStrategy = StrategyDto & {
 
 export default function ManualTradingPage() {
   const [form, setForm] = useState<FormState>(INITIAL_FORM);
+  const [selectedInstrument, setSelectedInstrument] =
+    useState<ManualInstrumentSearchRow | null>(null);
   const [masters, setMasters] = useState<AdminTradingAccount[]>([]);
   const [strategies, setStrategies] = useState<AdminStrategy[]>([]);
   const [recent, setRecent] = useState<ManualTradeRecord[]>([]);
@@ -203,22 +207,75 @@ export default function ManualTradingPage() {
 
   const activeStrategy = eligibleStrategies.find((s) => s.id === form.strategyId);
   const activeMaster = masters.find((m) => m.id === form.masterAccountId);
+  const masterBroker: Broker | null =
+    (activeMaster?.broker as Broker | undefined) ?? null;
 
   const needsPrice = form.orderType === 'LIMIT' || form.orderType === 'SL';
   const needsTrigger = form.orderType === 'SL' || form.orderType === 'SL-M';
 
+  // Sprint 5.4.1 — Place Order is only enabled when the operator has
+  // picked an instrument via the broker-scoped autocomplete. Free-text
+  // symbols never satisfy this invariant.
   const canSubmit =
     !submitting &&
     !!form.masterAccountId &&
     !!form.strategyId &&
+    !!selectedInstrument &&
     !!form.exchange &&
     !!form.symbol &&
+    selectedInstrument.brokerSymbol === form.symbol &&
     !!form.quantity &&
     Number(form.quantity) > 0 &&
     (!needsPrice || (!!form.price && Number(form.price) > 0)) &&
     (!needsTrigger || (!!form.triggerPrice && Number(form.triggerPrice) > 0));
 
+  // Reset the picker when the master account (and therefore its
+  // broker) changes so we never carry a stale symbol from a different
+  // broker's universe into the order form.
+  useEffect(() => {
+    if (!selectedInstrument) return;
+    // If the master broker doesn't match the selection's broker
+    // context (or the master account was cleared), drop the selection.
+    if (!masterBroker) {
+      setSelectedInstrument(null);
+      setForm((prev) => ({ ...prev, symbol: '' }));
+    }
+    // We intentionally do NOT auto-clear on same-broker reselection —
+    // if the operator swaps to another CONNECTED master account on
+    // the same broker, the symbol is still valid.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.masterAccountId]);
+
+  const handleInstrumentSelect = useCallback(
+    (row: ManualInstrumentSearchRow) => {
+      setSelectedInstrument(row);
+      setForm((prev) => ({
+        ...prev,
+        symbol: row.brokerSymbol,
+        exchange: row.exchange,
+      }));
+      // Clear stale validation banners from a previous submission.
+      setValidationErrors(null);
+      setPlacementError(null);
+    },
+    [],
+  );
+
+  const handleInstrumentClear = useCallback(() => {
+    setSelectedInstrument(null);
+    setForm((prev) => ({ ...prev, symbol: '' }));
+  }, []);
+
   const submit = async () => {
+    if (!selectedInstrument) {
+      // Belt-and-braces: the button is already disabled in this
+      // state, but never allow a bypass — free-text symbols must
+      // never reach the manual-trade API.
+      setPlacementError(
+        'Please select an instrument from the search results before placing an order.',
+      );
+      return;
+    }
     setSubmitting(true);
     setValidationErrors(null);
     setPlacementError(null);
@@ -227,8 +284,8 @@ export default function ManualTradingPage() {
       const payload: PlaceManualTradePayload = {
         masterAccountId: form.masterAccountId,
         strategyId: form.strategyId,
-        exchange: form.exchange.trim(),
-        symbol: form.symbol.trim().toUpperCase(),
+        exchange: selectedInstrument.exchange,
+        symbol: selectedInstrument.brokerSymbol,
         side: form.side,
         orderType: form.orderType,
         quantity: Number(form.quantity),
@@ -272,6 +329,7 @@ export default function ManualTradingPage() {
 
   const reset = () => {
     setForm(INITIAL_FORM);
+    setSelectedInstrument(null);
     setValidationErrors(null);
     setPlacementError(null);
     setLastResult(null);
@@ -328,6 +386,10 @@ export default function ManualTradingPage() {
             onReset={reset}
             activeMaster={activeMaster}
             activeStrategy={activeStrategy}
+            masterBroker={masterBroker}
+            selectedInstrument={selectedInstrument}
+            onInstrumentSelect={handleInstrumentSelect}
+            onInstrumentClear={handleInstrumentClear}
           />
 
           <RecentOrdersTable rows={recent} />
@@ -363,6 +425,10 @@ function OrderEntryPanel({
   onReset,
   activeMaster,
   activeStrategy,
+  masterBroker,
+  selectedInstrument,
+  onInstrumentSelect,
+  onInstrumentClear,
 }: {
   form: FormState;
   setForm: (patch: FormState) => void;
@@ -376,6 +442,10 @@ function OrderEntryPanel({
   onReset: () => void;
   activeMaster?: AdminTradingAccount;
   activeStrategy?: AdminStrategy;
+  masterBroker: Broker | null;
+  selectedInstrument: ManualInstrumentSearchRow | null;
+  onInstrumentSelect: (row: ManualInstrumentSearchRow) => void;
+  onInstrumentClear: () => void;
 }) {
   const patch = (delta: Partial<FormState>) => setForm({ ...form, ...delta });
 
@@ -444,30 +514,95 @@ function OrderEntryPanel({
           </Field>
 
           <Field label="Exchange">
-            <Select
-              value={form.exchange}
-              onChange={(e) => patch({ exchange: e.target.value })}
-              data-testid="field-exchange"
-            >
-              {EXCHANGES.map((ex) => (
-                <option key={ex} value={ex}>
-                  {ex}
-                </option>
-              ))}
-            </Select>
+            {selectedInstrument ? (
+              <div
+                className="flex h-10 w-full items-center rounded-md border bg-muted/40 px-3 text-sm text-muted-foreground"
+                data-testid="field-exchange-readonly"
+              >
+                <span className="font-mono">{selectedInstrument.exchange}</span>
+                <span className="ml-2 text-[11px] uppercase tracking-wide">
+                  · {selectedInstrument.segment}
+                </span>
+              </div>
+            ) : (
+              <Select
+                value={form.exchange}
+                onChange={(e) => patch({ exchange: e.target.value })}
+                data-testid="field-exchange"
+              >
+                {EXCHANGES.map((ex) => (
+                  <option key={ex} value={ex}>
+                    {ex}
+                  </option>
+                ))}
+              </Select>
+            )}
           </Field>
 
-          <Field label="Symbol">
-            <Input
-              placeholder="e.g. NIFTY24DEC24000CE"
-              value={form.symbol}
-              onChange={(e) =>
-                patch({ symbol: e.target.value.toUpperCase() })
-              }
-              spellCheck={false}
-              data-testid="field-symbol"
+          <div>
+            <InstrumentSearch
+              broker={masterBroker}
+              selected={selectedInstrument}
+              onSelect={onInstrumentSelect}
+              onClear={onInstrumentClear}
+              disabled={!masterBroker}
             />
-          </Field>
+            {selectedInstrument && (
+              <div
+                className="mt-1 text-[11px] text-muted-foreground grid grid-cols-2 gap-x-3"
+                data-testid="instrument-search-meta"
+              >
+                <span>
+                  Broker symbol:{' '}
+                  <span
+                    className="font-mono text-foreground"
+                    data-testid="instrument-search-broker-symbol"
+                  >
+                    {selectedInstrument.brokerSymbol}
+                  </span>
+                </span>
+                <span>
+                  Lot size:{' '}
+                  <span
+                    className="font-mono text-foreground"
+                    data-testid="instrument-search-lot-size"
+                  >
+                    {selectedInstrument.lotSize}
+                  </span>
+                </span>
+                {selectedInstrument.tickSize != null && (
+                  <span>
+                    Tick size:{' '}
+                    <span
+                      className="font-mono text-foreground"
+                      data-testid="instrument-search-tick-size"
+                    >
+                      {selectedInstrument.tickSize}
+                    </span>
+                  </span>
+                )}
+                {selectedInstrument.expiry && (
+                  <span>
+                    Expiry:{' '}
+                    <span className="font-mono text-foreground">
+                      {selectedInstrument.expiry.substring(0, 10)}
+                    </span>
+                  </span>
+                )}
+                {selectedInstrument.strike != null && (
+                  <span>
+                    Strike:{' '}
+                    <span className="font-mono text-foreground">
+                      {selectedInstrument.strike}
+                      {selectedInstrument.optionType
+                        ? ` ${selectedInstrument.optionType}`
+                        : ''}
+                    </span>
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
 
           <Field label="Transaction">
             <div className="grid grid-cols-2 gap-2">

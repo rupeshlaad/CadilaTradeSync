@@ -20,6 +20,7 @@ import { FyersImporter } from './importers/fyers.importer';
 
 import {
   LookupInstrumentDto,
+  ManualInstrumentSearchDto,
   ResolveByContractKeyDto,
   SearchInstrumentsDto,
   TranslateInstrumentDto,
@@ -76,6 +77,36 @@ export class AdminInstrumentController {
           tickSize: r.instrument.tickSize,
         },
       })),
+    };
+  }
+
+  /**
+   * GET /admin/instruments/manual-search
+   *  ?broker=ZERODHA|FYERS|…   (required)
+   *  &q=<query>                 (required, min 2 chars)
+   *  &limit=20                  (optional, default 20, max 50)
+   *
+   * Sprint 5.4.1 — Powers the Manual Trading symbol autocomplete.
+   * Broker-scoped and relevance-ranked (exact → prefix → contains).
+   * The response shape is intentionally different from the generic
+   * `/admin/instruments/search` endpoint: every field the picker
+   * needs to pre-fill the order form (tradingSymbol, brokerSymbol,
+   * displayName, exchange, segment, lotSize, tickSize, expiry,
+   * strike, optionType) is included so no follow-up lookup is
+   * required at selection time.
+   */
+  @Get('manual-search')
+  async manualSearch(@Query() query: ManualInstrumentSearchDto) {
+    const items = await this.instrumentService.searchForManualTrading({
+      broker: query.broker,
+      q: query.q,
+      limit: query.limit,
+    });
+    return {
+      broker: query.broker,
+      q: query.q,
+      count: items.length,
+      items,
     };
   }
 
