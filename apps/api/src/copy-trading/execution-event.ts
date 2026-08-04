@@ -70,6 +70,15 @@ export interface ExecutionEvent {
   masterAccountNickname: string | null;
   broker: string;
 
+  /**
+   * Broker-side order id on the master account, when the caller
+   * forwarded one (real broker polls / postbacks always do; synthetic
+   * or manual events may pass null). Used by the position-lifecycle
+   * registry (Sprint 5.3) to correlate follower broker order ids with
+   * a tracked master position.
+   */
+  masterBrokerOrderId: string | null;
+
   symbol: string;
   side: 'BUY' | 'SELL';
   quantity: number;

@@ -452,6 +452,75 @@ export interface ExecutionHistoryListQuery {
   sort?: string;
 }
 
+// ---------------------------------------------------------------------------
+// Sprint 5.3 — Position Lifecycle.
+// Types mirror apps/api/src/position-lifecycle/lifecycle.types.ts
+// ---------------------------------------------------------------------------
+
+export type PositionLifecycleState =
+  | 'PENDING'
+  | 'PARTIALLY_FILLED'
+  | 'OPEN'
+  | 'CANCELLED'
+  | 'REJECTED'
+  | 'EXITING'
+  | 'CLOSED';
+
+export interface PositionLifecycleTimelineEntry {
+  at: string;
+  kind: string;
+  label: string;
+  details?: Record<string, unknown>;
+}
+
+export interface PositionFollowerLink {
+  followerAccountId: string;
+  followerId: string | null;
+  followerEmail: string | null;
+  broker: Broker;
+  brokerOrderId: string;
+  followerSymbol: string | null;
+  quantity: number | null;
+  createdAt: string;
+  lastAction: string;
+  lastActionAt: string;
+  lastActionOk: boolean;
+  lastActionMessage: string | null;
+}
+
+export interface PositionLifecycleSummary {
+  key: string;
+  broker: Broker;
+  masterAccountId: string;
+  brokerOrderId: string;
+  strategyId: string | null;
+  symbol: string;
+  exchange: string | null;
+  side: 'BUY' | 'SELL';
+  quantity: number;
+  filledQuantity: number;
+  pendingQuantity: number;
+  price: number | null;
+  triggerPrice: number | null;
+  orderType: string | null;
+  productType: string | null;
+  state: PositionLifecycleState;
+  followerCount: number;
+  createdAt: string;
+  updatedAt: string;
+  closedAt: string | null;
+}
+
+export interface PositionLifecycleDetail extends PositionLifecycleSummary {
+  followers: PositionFollowerLink[];
+  timeline: PositionLifecycleTimelineEntry[];
+}
+
+export interface PositionLifecycleListResponse {
+  count: number;
+  items: PositionLifecycleSummary[];
+}
+
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
 const TOKEN_KEY = 'cts_admin_access_token';
 
@@ -754,6 +823,19 @@ export const api = {
       byId: (id: string) =>
         request<ExecutionHistoryDetail>(
           `/admin/execution-history/${encodeURIComponent(id)}`,
+        ),
+    },
+
+    positionLifecycle: {
+      positions: (status?: 'OPEN') => {
+        const qs = status ? `?status=${status}` : '';
+        return request<PositionLifecycleListResponse>(
+          `/admin/position-lifecycle/positions${qs}`,
+        );
+      },
+      position: (key: string) =>
+        request<PositionLifecycleDetail>(
+          `/admin/position-lifecycle/positions/${encodeURIComponent(key)}`,
         ),
     },
   },
