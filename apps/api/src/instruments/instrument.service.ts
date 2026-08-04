@@ -120,4 +120,189 @@ export class InstrumentService {
       take: limit,
     });
   }
+
+  /**
+   * Sprint 5.4.1 — Broker-scoped, relevance-ranked search that powers
+   * the Manual Trading autocomplete.
+   *
+   * Matching (case-insensitive) is performed against:
+   *   - InstrumentBroker.brokerSymbol      (broker/trading symbol)
+   *   - InstrumentBroker.exchangeSymbol    (exchange-side trading symbol
+   *                                          when the importer populated it)
+   *   - Instrument.underlying              (company name / underlying)
+   *
+   * Prisma cannot express "order by relevance" natively, so we fetch a
+   * bounded candidate pool via a single index-friendly OR query and
+   * rank the rows in memory:
+   *
+   *   0. Exact brokerSymbol / underlying match
+   *   1. brokerSymbol starts-with
+   *   2. underlying starts-with
+   *   3. brokerSymbol contains / underlying contains
+   *
+   * The pool is capped at `limit * 4` (or 200, whichever is smaller)
+   * so response times stay bounded on the ~200k-row InstrumentBroker
+   * table. All the columns we filter on are already indexed either
+   * directly (`@@unique([broker, brokerSymbol])`, `underlying` index)
+   * or via the parent Instrument row's index set.
+   */
+  async searchForManualTrading(opts: {
+    broker: Broker;
+    q: string;
+    limit?: number;
+  }): Promise<ManualInstrumentSearchRow[]> {
+    const raw = (opts.q ?? '').trim();
+    if (raw.length < 2) return [];
+
+    const limit = Math.min(Math.max(opts.limit ?? 20, 1), 50);
+    const poolSize = Math.min(Math.max(limit * 4, limit), 200);
+
+    const where: Prisma.InstrumentBrokerWhereInput = {
+      broker: opts.broker,
+      OR: [
+        { brokerSymbol: { contains: raw, mode: 'insensitive' } },
+        { exchangeSymbol: { contains: raw, mode: 'insensitive' } },
+        {
+          instrument: {
+            is: { underlying: { contains: raw, mode: 'insensitive' } },
+          },
+        },
+      ],
+    };
+
+    const rows = await this.prisma.instrumentBroker.findMany({
+      where,
+      include: { instrument: true },
+      orderBy: [{ brokerSymbol: 'asc' }],
+      take: poolSize,
+    });
+
+    const needle = raw.toLowerCase();
+    const ranked = rows
+      .map((r) => ({ row: r, rank: rankInstrumentMatch(needle, r) }))
+      .filter((r) => r.rank < RANK_NO_MATCH)
+      .sort((a, b) => {
+        if (a.rank !== b.rank) return a.rank - b.rank;
+        // Tie-breaker: prefer shorter broker symbols (INFY before INFYnnDECFUT)
+        const la = a.row.brokerSymbol.length;
+        const lb = b.row.brokerSymbol.length;
+        if (la !== lb) return la - lb;
+        return a.row.brokerSymbol.localeCompare(b.row.brokerSymbol);
+      })
+      .slice(0, limit);
+
+    return ranked.map(({ row }) => ({
+      instrumentId: row.instrument.id,
+      tradingSymbol: row.brokerSymbol,
+      brokerSymbol: row.brokerSymbol,
+      displayName: buildInstrumentDisplayName(row.instrument),
+      exchange: row.instrument.exchange,
+      segment: row.instrument.segment,
+      lotSize: row.instrument.lotSize,
+      tickSize: row.instrument.tickSize,
+      expiry: row.instrument.expiry
+        ? row.instrument.expiry.toISOString()
+        : null,
+      strike: row.instrument.strike,
+      optionType: row.instrument.optionType,
+    }));
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Sprint 5.4.1 — Manual Trading search result shape
+// ---------------------------------------------------------------------------
+
+/**
+ * A single result row returned from
+ * `InstrumentService.searchForManualTrading`. Field names match the
+ * sprint spec so the admin UI can consume them without translation.
+ */
+export interface ManualInstrumentSearchRow {
+  instrumentId: string;
+  tradingSymbol: string;
+  brokerSymbol: string;
+  displayName: string;
+  exchange: string;
+  segment: string;
+  lotSize: number;
+  tickSize: number | null;
+  expiry: string | null;
+  strike: number | null;
+  optionType: string | null;
+}
+
+const RANK_EXACT = 0;
+const RANK_BROKER_PREFIX = 1;
+const RANK_UNDERLYING_PREFIX = 2;
+const RANK_CONTAINS = 3;
+const RANK_NO_MATCH = 999;
+
+function rankInstrumentMatch(
+  needle: string,
+  row: { brokerSymbol: string; exchangeSymbol: string | null; instrument: { underlying: string } },
+): number {
+  const brokerSym = row.brokerSymbol.toLowerCase();
+  const exchangeSym = (row.exchangeSymbol ?? '').toLowerCase();
+  const underlying = row.instrument.underlying.toLowerCase();
+
+  if (brokerSym === needle || underlying === needle || exchangeSym === needle) {
+    return RANK_EXACT;
+  }
+  if (brokerSym.startsWith(needle) || exchangeSym.startsWith(needle)) {
+    return RANK_BROKER_PREFIX;
+  }
+  if (underlying.startsWith(needle)) {
+    return RANK_UNDERLYING_PREFIX;
+  }
+  if (
+    brokerSym.includes(needle) ||
+    exchangeSym.includes(needle) ||
+    underlying.includes(needle)
+  ) {
+    return RANK_CONTAINS;
+  }
+  return RANK_NO_MATCH;
+}
+
+/**
+ * Human-friendly one-line description of a canonical Instrument row.
+ * The importer stores everything we need — this just composes it.
+ *
+ *   Cash equity   →  "INFY"
+ *   Future        →  "NIFTY 25-DEC-2025 FUT"
+ *   Option        →  "NIFTY 25-DEC-2025 24000 CE"
+ */
+function buildInstrumentDisplayName(inst: {
+  underlying: string;
+  instrumentType: string;
+  expiry: Date | null;
+  strike: number | null;
+  optionType: string | null;
+}): string {
+  const parts: string[] = [inst.underlying];
+  if (inst.expiry) {
+    parts.push(formatInstrumentExpiry(inst.expiry));
+  }
+  if (inst.optionType && inst.strike !== null && inst.strike !== undefined) {
+    parts.push(String(inst.strike));
+    parts.push(inst.optionType);
+  } else if (
+    inst.instrumentType &&
+    inst.instrumentType.toUpperCase() === 'FUT'
+  ) {
+    parts.push('FUT');
+  }
+  return parts.join(' ');
+}
+
+function formatInstrumentExpiry(expiry: Date): string {
+  const months = [
+    'JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN',
+    'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC',
+  ];
+  const dd = String(expiry.getUTCDate()).padStart(2, '0');
+  const mmm = months[expiry.getUTCMonth()];
+  const yyyy = expiry.getUTCFullYear();
+  return `${dd}-${mmm}-${yyyy}`;
 }

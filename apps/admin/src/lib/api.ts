@@ -80,6 +80,31 @@ export interface AdminInstrumentSearchQuery {
   limit?: number;
 }
 
+/**
+ * Sprint 5.4.1 — Manual Trading instrument autocomplete.
+ * Mirrors ManualInstrumentSearchRow returned by the API.
+ */
+export interface ManualInstrumentSearchRow {
+  instrumentId: string;
+  tradingSymbol: string;
+  brokerSymbol: string;
+  displayName: string;
+  exchange: string;
+  segment: string;
+  lotSize: number;
+  tickSize: number | null;
+  expiry: string | null;
+  strike: number | null;
+  optionType: string | null;
+}
+
+export interface ManualInstrumentSearchResponse {
+  broker: Broker;
+  q: string;
+  count: number;
+  items: ManualInstrumentSearchRow[];
+}
+
 export interface AdminInstrumentImportSummary {
   broker: Broker;
   downloaded: number;
@@ -801,6 +826,23 @@ export const api = {
         if (query.limit != null) params.set('limit', String(query.limit));
         return request<AdminInstrumentSearchResponse>(
           `/admin/instruments/search?${params.toString()}`,
+        );
+      },
+
+      /**
+       * Sprint 5.4.1 — Broker-scoped, relevance-ranked search that
+       * powers the Manual Trading symbol autocomplete.
+       */
+      manualSearch: (
+        broker: Broker,
+        q: string,
+        opts: { limit?: number; signal?: AbortSignal } = {},
+      ) => {
+        const params = new URLSearchParams({ broker, q });
+        if (opts.limit != null) params.set('limit', String(opts.limit));
+        return request<ManualInstrumentSearchResponse>(
+          `/admin/instruments/manual-search?${params.toString()}`,
+          opts.signal ? { signal: opts.signal } : undefined,
         );
       },
 
