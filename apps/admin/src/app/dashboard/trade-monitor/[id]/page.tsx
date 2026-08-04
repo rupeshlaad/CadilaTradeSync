@@ -574,7 +574,7 @@ function PositionLifecycleCard({
               Sprint 5.3 — synchronized master → follower lifecycle timeline
             </CardDescription>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <Badge
               variant={lifecycleStateVariant(lifecycle.state)}
               data-testid="position-lifecycle-state"
@@ -584,6 +584,13 @@ function PositionLifecycleCard({
             <Badge variant="outline" className="font-mono text-[11px]">
               {lifecycle.broker} · {lifecycle.brokerOrderId}
             </Badge>
+            <Link
+              href={`/dashboard/orders/${encodeURIComponent(lifecycle.key)}`}
+              className="text-xs text-primary hover:underline font-medium"
+              data-testid="position-lifecycle-manage-order-link"
+            >
+              Manage Order →
+            </Link>
           </div>
         </div>
       </CardHeader>

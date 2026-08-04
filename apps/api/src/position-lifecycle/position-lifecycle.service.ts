@@ -162,31 +162,115 @@ export class PositionLifecycleService {
       };
     }
 
+    return this.applyAcceptedTransition(
+      event,
+      previousState,
+      decision.nextState,
+      signature,
+      context.tradeSource,
+    );
+  }
+
+  /**
+   * Sprint 5.5.1 — admin-initiated lifecycle ingestion.
+   *
+   * Entry point used by the Order-Actions service for a Modify /
+   * Cancel / Exit issued from the admin UI. The caller has already
+   * placed the corresponding master-broker action and passes a
+   * fully-built `LifecycleEvent` describing the resulting state.
+   *
+   * The event is validated through the SAME state machine, applied
+   * to the registry with the SAME timeline & follower-dispatch code
+   * path as broker-poll ingestion, so no parallel execution pipeline
+   * is introduced. Every downstream side-effect (follower sync via
+   * `PositionSynchronizationService`, execution-history persistence
+   * via the recorder subscription) fires exactly as it does for a
+   * broker-detected transition.
+   */
+  async ingestAdminEvent(
+    event: LifecycleEvent,
+    options: { tradeSource?: string } = {},
+  ): Promise<LifecycleIngestOutcome> {
+    const key = this.registry.buildKey(
+      event.broker,
+      event.masterAccountId,
+      event.brokerOrderId,
+    );
+    const previousState = this.registry.get(key)?.state ?? null;
+
+    const decision = decideTransition(previousState, event.type);
+    if (!decision.ok || !decision.nextState) {
+      const reason = decision.reason ?? 'Illegal lifecycle transition';
+      this.logger.warn(
+        `Admin lifecycle event ${event.type} rejected for ${key}: ${reason}`,
+      );
+      this.registry.appendTimeline(key, buildRejectionEntry(reason, event));
+      return {
+        key,
+        accepted: false,
+        event,
+        previousState,
+        nextState: previousState,
+        reason,
+        followerSync: [],
+      };
+    }
+
+    // Admin-originated events are not derived from a raw broker
+    // payload; fabricate a consistent signature so the registry's
+    // dedup gate stays coherent for subsequent broker polls.
+    const signature = {
+      status: event.rawStatus ?? event.type,
+      filledQuantity: event.filledQuantity,
+      quantity: event.quantity,
+      price: event.price,
+      triggerPrice: event.triggerPrice,
+      brokerUpdatedAt: event.brokerUpdatedAt,
+    };
+
+    return this.applyAcceptedTransition(
+      event,
+      previousState,
+      decision.nextState,
+      signature,
+      options.tradeSource,
+    );
+  }
+
+  // -------------------------------------------------------------------------
+  // Shared apply + dispatch (used by both ingest() and ingestAdminEvent())
+  // -------------------------------------------------------------------------
+
+  private async applyAcceptedTransition(
+    event: LifecycleEvent,
+    previousState: PositionState | null,
+    nextState: PositionState,
+    signature: import('./lifecycle.types').OrderSignature,
+    tradeSource: string | undefined,
+  ): Promise<LifecycleIngestOutcome> {
+    const key = this.registry.buildKey(
+      event.broker,
+      event.masterAccountId,
+      event.brokerOrderId,
+    );
+
     // Look up the active strategy for the master account so we can
     // pin it on the position record (best-effort — a position can be
     // tracked even before a strategy is active, in which case
     // strategyId stays null).
-    const strategyId = await this.lookupStrategyId(context.tradingAccountId);
+    const strategyId = await this.lookupStrategyId(event.masterAccountId);
 
-    const timelineEntry = buildTransitionEntry(
-      event,
-      previousState,
-      decision.nextState,
-    );
+    const timelineEntry = buildTransitionEntry(event, previousState, nextState);
     const record = this.registry.applyEvent(
       event,
-      decision.nextState,
+      nextState,
       timelineEntry,
       signature,
       strategyId,
     );
 
     // Dispatch the follower-side action for the accepted lifecycle event.
-    let followerSync = await this.dispatchFollowers(
-      event,
-      record,
-      context.tradeSource,
-    );
+    const followerSync = await this.dispatchFollowers(event, record, tradeSource);
 
     // Persist per-follower outcome as additional timeline entries so
     // the Trade Monitor detail page can render them without joining
@@ -214,11 +298,11 @@ export class PositionLifecycleService {
     ) {
       const closedEntry = buildTransitionEntry(
         event,
-        decision.nextState,
+        nextState,
         PositionState.CLOSED,
       );
       closedEntry.kind = 'POSITION_CLOSED';
-      closedEntry.label = `All followers exited — ${decision.nextState} → CLOSED`;
+      closedEntry.label = `All followers exited — ${nextState} → CLOSED`;
       this.registry.applyEvent(
         event,
         PositionState.CLOSED,
@@ -238,7 +322,7 @@ export class PositionLifecycleService {
         followerSync.length > 0 &&
         followerSync.every((o) => o.ok)
           ? PositionState.CLOSED
-          : decision.nextState,
+          : nextState,
       reason: null,
       followerSync,
     };
