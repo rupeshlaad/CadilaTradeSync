@@ -22,4 +22,13 @@ export interface TradeEvent {
   status: string;
 
   timestamp: Date;
+
+  /**
+   * Origin of the trade event, forwarded to the execution recorder as
+   * `tradeSource` so the Trade Monitor / execution-history audit trail
+   * can distinguish broker-detected polls from admin-initiated manual
+   * placements. Defaults to `BROKER_POLL` when unset for backward
+   * compatibility with the existing master-watcher path.
+   */
+  source?: string;
 }
