@@ -25,6 +25,22 @@ const BUFFER_CAPACITY = 100;
 export class ExecutionEventRecorderService {
   private readonly buffer: ExecutionEvent[] = [];
   private totalRecorded = 0;
+  private readonly commitHandlers: Array<
+    (event: ExecutionEvent) => void | Promise<void>
+  > = [];
+
+  /**
+   * Register a side-effect that fires (fire-and-forget) after every
+   * builder.commit() lands an event in the buffer. Errors thrown by
+   * subscribers are swallowed here so a persistence failure can never
+   * block the in-memory recorder or CopyTradingService.handleTrade.
+   *
+   * Used by ExecutionHistoryPersistenceService to write the same
+   * event to the permanent execution audit trail (Sprint 5.2).
+   */
+  onCommit(handler: (event: ExecutionEvent) => void | Promise<void>) {
+    this.commitHandlers.push(handler);
+  }
 
   begin(seed: {
     masterAccountId: string;
@@ -33,7 +49,12 @@ export class ExecutionEventRecorderService {
     symbol: string;
     side: 'BUY' | 'SELL';
     quantity: number;
+    price?: number | null;
     productType: string;
+    orderType?: string | null;
+    tradeSource?: string | null;
+    masterExchange?: string | null;
+    masterSegment?: string | null;
     orderId: string | null;
     timestamp?: string | Date | null;
   }): ExecutionEventBuilder {
@@ -58,16 +79,25 @@ export class ExecutionEventRecorderService {
       symbol: seed.symbol,
       side: seed.side,
       quantity: seed.quantity,
+      price: seed.price ?? null,
       productType: seed.productType,
+      orderType: seed.orderType ?? null,
+      tradeSource: seed.tradeSource ?? 'BROKER_POLL',
+      masterExchange: seed.masterExchange ?? null,
+      masterSegment: seed.masterSegment ?? null,
       followersFound: 0,
       followers: [],
       outcome: 'FANNED_OUT',
       errorReason: null,
+      processingTimeMs: null,
     };
 
-    return new ExecutionEventBuilder(event, (finalised) =>
-      this.commit(finalised),
-    );
+    const startedAtMs = Date.now();
+
+    return new ExecutionEventBuilder(event, (finalised) => {
+      finalised.processingTimeMs = Math.max(0, Date.now() - startedAtMs);
+      this.commit(finalised);
+    });
   }
 
   getRecent(limit = 20): ExecutionEvent[] {
@@ -127,6 +157,18 @@ export class ExecutionEventRecorderService {
       this.buffer.length = BUFFER_CAPACITY;
     }
     this.totalRecorded++;
+
+    // Fire-and-forget subscribers. Persistence errors must never
+    // interfere with CopyTradingService.handleTrade.
+    for (const handler of this.commitHandlers) {
+      try {
+        Promise.resolve(handler(event)).catch(() => {
+          /* swallowed intentionally — subscriber owns its own logging */
+        });
+      } catch {
+        /* swallowed intentionally */
+      }
+    }
   }
 }
 

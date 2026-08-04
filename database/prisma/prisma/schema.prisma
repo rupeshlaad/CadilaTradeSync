@@ -255,3 +255,101 @@ model InstrumentBroker {
 
   @@map("instrument_brokers")
 }
+
+// ---------- Execution audit (Sprint 5.2) ----------
+//
+// Permanent operational audit trail written by CopyTradingService via
+// the ExecutionHistoryPersistenceService. Never overwritten, never
+// mutated after insert — one ExecutionHistory row per handleTrade()
+// invocation and one ExecutionFollowerResult row per follower attempt.
+
+model ExecutionHistory {
+  id                  String   @id @default(uuid())
+
+  timestamp           DateTime
+
+  strategyId          String?
+  strategyName        String?
+
+  masterAccountId     String
+  masterAccountName   String?
+  masterBroker        String
+  masterSymbol        String
+  masterExchange      String?
+  masterSegment       String?
+
+  masterSide          String
+  masterQuantity      Int
+  masterPrice         Float?
+
+  orderType           String?
+  productType         String?
+  tradeSource         String?
+
+  // Overall outcome for the master trade:
+  //   COMPLETED / PARTIAL / FAILED / NO_STRATEGY / NO_FOLLOWERS / ERROR
+  status              String
+
+  totalFollowers      Int      @default(0)
+  successfulFollowers Int      @default(0)
+  failedFollowers     Int      @default(0)
+  skippedFollowers    Int      @default(0)
+
+  processingTimeMs    Int?
+
+  createdAt           DateTime @default(now())
+
+  followers ExecutionFollowerResult[]
+
+  @@index([timestamp])
+  @@index([createdAt])
+  @@index([strategyId])
+  @@index([masterAccountId])
+  @@index([masterBroker])
+  @@index([masterSymbol])
+  @@index([status])
+
+  @@map("execution_history")
+}
+
+model ExecutionFollowerResult {
+  id                 String   @id @default(uuid())
+
+  executionHistoryId String
+  executionHistory   ExecutionHistory @relation(fields: [executionHistoryId], references: [id], onDelete: Cascade)
+
+  followerId       String?
+  followerEmail    String?
+  broker           String
+
+  brokerOrderId    String?
+
+  // Per-follower outcome:
+  //   PENDING / EXECUTING / SUCCESS / FAILED / SKIPPED
+  status           String
+
+  // Classification bucket for failed/skipped attempts. Free-form so
+  // future adapter-specific classifications can be added without a
+  // migration. Reuses the values produced by
+  // copy-trading/execution-event.recorder.classifyFailure.
+  failureType      String?
+  failureReason    String?
+
+  rawBrokerResponse Json?
+
+  followerSymbol    String?
+  executedQuantity  Int?
+  executedPrice     Float?
+
+  startedAt         DateTime?
+  completedAt       DateTime?
+
+  createdAt         DateTime @default(now())
+
+  @@index([executionHistoryId])
+  @@index([status])
+  @@index([broker])
+  @@index([failureType])
+
+  @@map("execution_follower_results")
+}

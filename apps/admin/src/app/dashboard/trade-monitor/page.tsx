@@ -1,6 +1,7 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import Link from 'next/link';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import {
   Card,
@@ -11,27 +12,52 @@ import {
 } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Select } from '@/components/ui/select';
 import {
   Activity,
   RefreshCw,
-  CheckCircle2,
-  XCircle,
   ChevronDown,
   ChevronRight,
-  Clock,
-  MinusCircle,
+  ArrowUpRight,
+  Search,
 } from 'lucide-react';
 
 import {
   api,
-  type ExecutionEvent,
-  type ExecutionEventSummary,
-  type ExecutionFollowerStatus,
-  type FollowerExecution,
+  type ExecutionHistoryFollowerRow,
+  type ExecutionHistoryListQuery,
+  type ExecutionHistoryListResponse,
+  type ExecutionHistoryRow,
+  type ExecutionHistorySummary,
 } from '@/lib/api';
 
 // ---------------------------------------------------------------------------
-// Formatting + badge helpers
+// Constants
+// ---------------------------------------------------------------------------
+
+const STATUS_OPTIONS = [
+  { value: '', label: 'All statuses' },
+  { value: 'COMPLETED', label: 'Completed' },
+  { value: 'PARTIAL', label: 'Partial' },
+  { value: 'FAILED', label: 'Failed' },
+  { value: 'NO_STRATEGY', label: 'No strategy' },
+  { value: 'NO_FOLLOWERS', label: 'No followers' },
+  { value: 'ERROR', label: 'Error' },
+];
+
+const BROKER_OPTIONS = [
+  { value: '', label: 'All brokers' },
+  { value: 'ZERODHA', label: 'Zerodha' },
+  { value: 'FYERS', label: 'Fyers' },
+  { value: 'SHOONYA', label: 'Shoonya' },
+];
+
+const PAGE_SIZE = 25;
+
+// ---------------------------------------------------------------------------
+// Formatting helpers
 // ---------------------------------------------------------------------------
 
 type BadgeVariant =
@@ -43,38 +69,41 @@ type BadgeVariant =
   | 'warning'
   | 'muted';
 
-function followerStatusVariant(s: ExecutionFollowerStatus): BadgeVariant {
-  switch (s) {
+function statusVariant(status: string): BadgeVariant {
+  switch (status) {
+    case 'COMPLETED':
+      return 'success';
+    case 'PARTIAL':
+      return 'warning';
+    case 'FAILED':
+    case 'ERROR':
+      return 'destructive';
+    case 'NO_STRATEGY':
+    case 'NO_FOLLOWERS':
+      return 'muted';
+    default:
+      return 'outline';
+  }
+}
+
+function followerStatusVariant(status: string): BadgeVariant {
+  switch (status) {
     case 'SUCCESS':
       return 'success';
     case 'FAILED':
       return 'destructive';
+    case 'SKIPPED':
+      return 'muted';
     case 'PENDING':
     case 'EXECUTING':
       return 'warning';
-    case 'SKIPPED':
-      return 'muted';
     default:
       return 'outline';
   }
 }
 
-function outcomeVariant(outcome: ExecutionEvent['outcome']): BadgeVariant {
-  switch (outcome) {
-    case 'FANNED_OUT':
-      return 'success';
-    case 'NO_ACTIVE_STRATEGY':
-    case 'NO_ENABLED_FOLLOWERS':
-      return 'muted';
-    case 'ERROR':
-      return 'destructive';
-    default:
-      return 'outline';
-  }
-}
-
-function sideVariant(side: 'BUY' | 'SELL'): BadgeVariant {
-  return side === 'BUY' ? 'success' : 'destructive';
+function sideVariant(side: string): BadgeVariant {
+  return side === 'BUY' ? 'success' : side === 'SELL' ? 'destructive' : 'outline';
 }
 
 function fmtTime(iso: string | null | undefined) {
@@ -84,77 +113,131 @@ function fmtTime(iso: string | null | undefined) {
   return d.toLocaleString();
 }
 
+function fmtMs(v: number | null | undefined) {
+  if (v === null || v === undefined) return '—';
+  if (v < 1000) return `${v} ms`;
+  return `${(v / 1000).toFixed(2)} s`;
+}
+
+function fmtNum(v: number | null | undefined) {
+  return v === null || v === undefined ? '—' : v.toLocaleString();
+}
+
 function shortId(id: string | null | undefined, n = 8) {
   if (!id) return '—';
   return id.length > n ? `${id.slice(0, n)}…` : id;
 }
 
-/**
- * A one-line rollup for the collapsed row: e.g. "3 of 5 SUCCESS · 1 FAILED".
- * Uses the same source-of-truth counters that the expanded row derives its
- * follower badges from.
- */
-function followerRollup(event: ExecutionEvent) {
-  const counts: Record<ExecutionFollowerStatus, number> = {
-    PENDING: 0,
-    EXECUTING: 0,
-    SUCCESS: 0,
-    FAILED: 0,
-    SKIPPED: 0,
-  };
-  for (const f of event.followers) counts[f.status]++;
-  const parts: string[] = [];
-  if (counts.SUCCESS) parts.push(`${counts.SUCCESS} success`);
-  if (counts.FAILED) parts.push(`${counts.FAILED} failed`);
-  if (counts.PENDING || counts.EXECUTING)
-    parts.push(`${counts.PENDING + counts.EXECUTING} pending`);
-  if (counts.SKIPPED) parts.push(`${counts.SKIPPED} skipped`);
-  return parts.length === 0
-    ? `${event.followers.length} follower(s)`
-    : parts.join(' · ');
+// ---------------------------------------------------------------------------
+// Filters state
+// ---------------------------------------------------------------------------
+
+interface FiltersState {
+  strategy: string;
+  broker: string;
+  symbol: string;
+  status: string;
+  dateFrom: string;
+  dateTo: string;
+  search: string;
+  sort: string;
+  page: number;
 }
+
+const INITIAL_FILTERS: FiltersState = {
+  strategy: '',
+  broker: '',
+  symbol: '',
+  status: '',
+  dateFrom: '',
+  dateTo: '',
+  search: '',
+  sort: 'timestamp:desc',
+  page: 1,
+};
 
 // ---------------------------------------------------------------------------
 // Page
 // ---------------------------------------------------------------------------
 
 export default function TradeMonitorPage() {
-  const [summary, setSummary] = useState<ExecutionEventSummary | null>(null);
-  const [events, setEvents] = useState<ExecutionEvent[]>([]);
+  const [summary, setSummary] = useState<ExecutionHistorySummary | null>(null);
+  const [list, setList] = useState<ExecutionHistoryListResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [filters, setFilters] = useState<FiltersState>(INITIAL_FILTERS);
+  const [pendingFilters, setPendingFilters] = useState<FiltersState>(INITIAL_FILTERS);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [followerCache, setFollowerCache] = useState<
+    Record<string, ExecutionHistoryFollowerRow[] | 'loading' | 'error'>
+  >({});
 
-  const load = useCallback(async () => {
-    setRefreshing(true);
-    setError(null);
-    try {
-      const [s, r] = await Promise.all([
-        api.admin.executionEvents.summary(),
-        api.admin.executionEvents.recent(100),
-      ]);
-      setSummary(s);
-      setEvents(r.items);
-    } catch (e: any) {
-      setError(e?.message ?? 'Failed to load execution events');
-    } finally {
-      setRefreshing(false);
-      setLoading(false);
-    }
-  }, []);
+  const load = useCallback(
+    async (f: FiltersState) => {
+      setRefreshing(true);
+      setError(null);
+      try {
+        const query: ExecutionHistoryListQuery = {
+          page: f.page,
+          limit: PAGE_SIZE,
+          strategy: f.strategy || undefined,
+          broker: f.broker || undefined,
+          symbol: f.symbol || undefined,
+          status: f.status || undefined,
+          dateFrom: f.dateFrom || undefined,
+          dateTo: f.dateTo || undefined,
+          search: f.search || undefined,
+          sort: f.sort || undefined,
+        };
+        const [s, r] = await Promise.all([
+          api.admin.executionHistory.summary(),
+          api.admin.executionHistory.list(query),
+        ]);
+        setSummary(s);
+        setList(r);
+      } catch (e: any) {
+        setError(e?.message ?? 'Failed to load execution history');
+      } finally {
+        setRefreshing(false);
+        setLoading(false);
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
-    load();
-  }, [load]);
+    load(filters);
+  }, [filters, load]);
 
-  const toggle = (id: string) => {
+  const applyFilters = () => setFilters({ ...pendingFilters, page: 1 });
+  const clearFilters = () => {
+    setPendingFilters(INITIAL_FILTERS);
+    setFilters(INITIAL_FILTERS);
+  };
+  const setPage = (p: number) => setFilters((prev) => ({ ...prev, page: p }));
+
+  const toggleExpanded = async (id: string) => {
     setExpanded((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
       return next;
     });
+
+    // Lazy-load followers once per row.
+    if (!followerCache[id]) {
+      setFollowerCache((prev) => ({ ...prev, [id]: 'loading' }));
+      try {
+        const detail = await api.admin.executionHistory.byId(id);
+        setFollowerCache((prev) => ({ ...prev, [id]: detail.followers }));
+      } catch {
+        setFollowerCache((prev) => ({ ...prev, [id]: 'error' }));
+      }
+    }
   };
 
   return (
@@ -165,13 +248,13 @@ export default function TradeMonitorPage() {
             <Activity className="h-6 w-6" /> Trade Monitor
           </h2>
           <p className="text-muted-foreground">
-            Operational view of the real copy-trading fan-out. One row per
-            master trade processed by <code>CopyTradingService</code>.
+            Permanent operational audit trail. Every master trade processed by
+            the copy-trading service is stored with its follower results.
           </p>
         </div>
         <Button
           variant="outline"
-          onClick={load}
+          onClick={() => load(filters)}
           disabled={refreshing}
           data-testid="trade-monitor-refresh-btn"
         >
@@ -182,41 +265,14 @@ export default function TradeMonitorPage() {
         </Button>
       </div>
 
-      {/* Today counters — all derived from the real execution buffer */}
-      <div
-        className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3"
-        data-testid="trade-monitor-summary"
-      >
-        <SummaryCard
-          label="Today's events"
-          value={summary?.today.events ?? 0}
-          hint={
-            summary
-              ? `${summary.bufferSize} of ${summary.bufferCapacity} in buffer`
-              : undefined
-          }
-        />
-        <SummaryCard
-          label="Successful orders"
-          value={summary?.today.successfulOrders ?? 0}
-          variant="success"
-        />
-        <SummaryCard
-          label="Failed orders"
-          value={summary?.today.failedOrders ?? 0}
-          variant="destructive"
-        />
-        <SummaryCard
-          label="Pending orders"
-          value={summary?.today.pendingOrders ?? 0}
-          variant="warning"
-        />
-        <SummaryCard
-          label="Followers executed"
-          value={summary?.today.followersExecuted ?? 0}
-          variant="secondary"
-        />
-      </div>
+      <SummaryCards summary={summary} />
+
+      <FiltersPanel
+        pending={pendingFilters}
+        onChange={setPendingFilters}
+        onApply={applyFilters}
+        onClear={clearFilters}
+      />
 
       {error && (
         <div
@@ -227,25 +283,23 @@ export default function TradeMonitorPage() {
         </div>
       )}
 
-      {/* Recent trades table */}
       <Card>
         <CardHeader>
-          <CardTitle>Recent Trades</CardTitle>
+          <CardTitle>Executions</CardTitle>
           <CardDescription>
-            Most recent first. Click a row to expand the master trade and its
-            follower results. Read-only — no execution controls.
+            Server-paginated, most recent first. Click a row to inspect the
+            follower attempts; use the detail link for the full audit.
           </CardDescription>
         </CardHeader>
         <CardContent className="p-0">
           {loading ? (
             <div className="p-6 text-sm text-muted-foreground">Loading…</div>
-          ) : events.length === 0 ? (
+          ) : !list || list.items.length === 0 ? (
             <div
               className="p-6 text-sm text-muted-foreground"
               data-testid="trade-monitor-empty"
             >
-              No master trades have been processed yet by the copy-trading
-              service.
+              No executions match the current filters.
             </div>
           ) : (
             <div className="overflow-x-auto">
@@ -260,47 +314,91 @@ export default function TradeMonitorPage() {
                     <th className="text-left px-3 py-2">Symbol</th>
                     <th className="text-left px-3 py-2">Side</th>
                     <th className="text-right px-3 py-2">Qty</th>
-                    <th className="text-left px-3 py-2">Product</th>
                     <th className="text-right px-3 py-2">Followers</th>
-                    <th className="text-left px-3 py-2">Outcome</th>
-                    <th className="text-left px-3 py-2">Result</th>
+                    <th className="text-right px-3 py-2">Success</th>
+                    <th className="text-right px-3 py-2">Failed</th>
+                    <th className="text-right px-3 py-2">Time</th>
+                    <th className="text-left px-3 py-2">Status</th>
+                    <th className="w-6"></th>
                   </tr>
                 </thead>
                 <tbody data-testid="trade-monitor-table-body">
-                  {events.map((e) => {
-                    const isOpen = expanded.has(e.id);
-                    return (
-                      <FragmentRow
-                        key={e.id}
-                        event={e}
-                        isOpen={isOpen}
-                        onToggle={() => toggle(e.id)}
-                      />
-                    );
-                  })}
+                  {list.items.map((row) => (
+                    <RowGroup
+                      key={row.id}
+                      row={row}
+                      isOpen={expanded.has(row.id)}
+                      followers={followerCache[row.id]}
+                      onToggle={() => toggleExpanded(row.id)}
+                    />
+                  ))}
                 </tbody>
               </table>
             </div>
           )}
         </CardContent>
       </Card>
+
+      {list && (
+        <Pagination
+          page={list.pagination.page}
+          totalPages={list.pagination.totalPages}
+          total={list.pagination.total}
+          onPage={setPage}
+        />
+      )}
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Summary tile
+// Summary cards
 // ---------------------------------------------------------------------------
 
-function SummaryCard({
+function SummaryCards({ summary }: { summary: ExecutionHistorySummary | null }) {
+  const t = summary?.today;
+  return (
+    <div
+      className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3"
+      data-testid="trade-monitor-summary"
+    >
+      <StatTile label="Today's trades" value={t?.trades ?? 0} />
+      <StatTile
+        label="Successful"
+        value={t?.successful ?? 0}
+        variant="success"
+      />
+      <StatTile
+        label="Failed"
+        value={t?.failed ?? 0}
+        variant="destructive"
+      />
+      <StatTile
+        label="Success %"
+        value={t ? `${t.successPercent}%` : '—'}
+        variant="secondary"
+      />
+      <StatTile
+        label="Followers executed"
+        value={t?.followersExecuted ?? 0}
+        variant="secondary"
+      />
+      <StatTile
+        label="Avg processing"
+        value={fmtMs(t?.avgProcessingTimeMs ?? null)}
+        variant="outline"
+      />
+    </div>
+  );
+}
+
+function StatTile({
   label,
   value,
-  hint,
   variant = 'default',
 }: {
   label: string;
   value: number | string;
-  hint?: string;
   variant?: BadgeVariant;
 }) {
   return (
@@ -313,25 +411,171 @@ function SummaryCard({
             {label}
           </Badge>
         </div>
-        {hint && (
-          <div className="text-xs text-muted-foreground mt-1">{hint}</div>
-        )}
       </CardContent>
     </Card>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Row + expandable detail
+// Filters
 // ---------------------------------------------------------------------------
 
-function FragmentRow({
-  event,
+function FiltersPanel({
+  pending,
+  onChange,
+  onApply,
+  onClear,
+}: {
+  pending: FiltersState;
+  onChange: (next: FiltersState) => void;
+  onApply: () => void;
+  onClear: () => void;
+}) {
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="text-base">Filters</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <div
+          className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3"
+          data-testid="trade-monitor-filters"
+        >
+          <FilterField label="Date from">
+            <Input
+              type="date"
+              value={pending.dateFrom}
+              onChange={(e) =>
+                onChange({ ...pending, dateFrom: e.target.value })
+              }
+              data-testid="filter-date-from"
+            />
+          </FilterField>
+          <FilterField label="Date to">
+            <Input
+              type="date"
+              value={pending.dateTo}
+              onChange={(e) =>
+                onChange({ ...pending, dateTo: e.target.value })
+              }
+              data-testid="filter-date-to"
+            />
+          </FilterField>
+          <FilterField label="Strategy">
+            <Input
+              placeholder="id or name"
+              value={pending.strategy}
+              onChange={(e) =>
+                onChange({ ...pending, strategy: e.target.value })
+              }
+              data-testid="filter-strategy"
+            />
+          </FilterField>
+          <FilterField label="Broker">
+            <Select
+              value={pending.broker}
+              onChange={(e) =>
+                onChange({ ...pending, broker: e.target.value })
+              }
+              data-testid="filter-broker"
+            >
+              {BROKER_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </Select>
+          </FilterField>
+          <FilterField label="Symbol">
+            <Input
+              placeholder="e.g. NIFTY"
+              value={pending.symbol}
+              onChange={(e) =>
+                onChange({ ...pending, symbol: e.target.value })
+              }
+              data-testid="filter-symbol"
+            />
+          </FilterField>
+          <FilterField label="Status">
+            <Select
+              value={pending.status}
+              onChange={(e) =>
+                onChange({ ...pending, status: e.target.value })
+              }
+              data-testid="filter-status"
+            >
+              {STATUS_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </Select>
+          </FilterField>
+          <FilterField label="Search">
+            <div className="relative">
+              <Search className="h-3.5 w-3.5 absolute left-2 top-2.5 text-muted-foreground" />
+              <Input
+                className="pl-7"
+                placeholder="symbol, email, order id…"
+                value={pending.search}
+                onChange={(e) =>
+                  onChange({ ...pending, search: e.target.value })
+                }
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') onApply();
+                }}
+                data-testid="filter-search"
+              />
+            </div>
+          </FilterField>
+        </div>
+        <div className="flex items-center gap-2 mt-4">
+          <Button onClick={onApply} data-testid="filter-apply-btn">
+            Apply
+          </Button>
+          <Button
+            variant="outline"
+            onClick={onClear}
+            data-testid="filter-clear-btn"
+          >
+            Clear
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function FilterField({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div>
+      <Label className="text-xs uppercase text-muted-foreground">
+        {label}
+      </Label>
+      <div className="mt-1">{children}</div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Row + expandable follower detail
+// ---------------------------------------------------------------------------
+
+function RowGroup({
+  row,
   isOpen,
+  followers,
   onToggle,
 }: {
-  event: ExecutionEvent;
+  row: ExecutionHistoryRow;
   isOpen: boolean;
+  followers: ExecutionHistoryFollowerRow[] | 'loading' | 'error' | undefined;
   onToggle: () => void;
 }) {
   const Icon = isOpen ? ChevronDown : ChevronRight;
@@ -342,46 +586,61 @@ function FragmentRow({
         className={`border-t cursor-pointer transition-colors ${
           isOpen ? 'bg-accent' : 'hover:bg-accent/40'
         }`}
-        data-testid={`trade-monitor-row-${event.id}`}
+        data-testid={`trade-monitor-row-${row.id}`}
       >
         <td className="px-2 py-2">
           <Icon className="h-4 w-4 text-muted-foreground" />
         </td>
         <td className="px-3 py-2 whitespace-nowrap text-muted-foreground">
-          {fmtTime(event.timestamp)}
+          {fmtTime(row.timestamp)}
         </td>
-        <td className="px-3 py-2" title={event.strategyId ?? ''}>
-          {event.strategyName ?? (
+        <td className="px-3 py-2" title={row.strategyId ?? ''}>
+          {row.strategyName ?? (
             <span className="text-muted-foreground italic">—</span>
           )}
         </td>
-        <td className="px-3 py-2" title={event.masterAccountId}>
-          {event.masterAccountNickname ?? shortId(event.masterAccountId)}
+        <td className="px-3 py-2" title={row.masterAccountId}>
+          {row.masterAccountName ?? shortId(row.masterAccountId)}
         </td>
-        <td className="px-3 py-2">{event.broker}</td>
-        <td className="px-3 py-2 font-medium">{event.symbol}</td>
+        <td className="px-3 py-2">{row.masterBroker}</td>
+        <td className="px-3 py-2 font-medium">{row.masterSymbol}</td>
         <td className="px-3 py-2">
-          <Badge variant={sideVariant(event.side)}>{event.side}</Badge>
+          <Badge variant={sideVariant(row.masterSide)}>{row.masterSide}</Badge>
         </td>
-        <td className="px-3 py-2 text-right">{event.quantity}</td>
-        <td className="px-3 py-2 text-xs">{event.productType || '—'}</td>
-        <td className="px-3 py-2 text-right">{event.followersFound}</td>
+        <td className="px-3 py-2 text-right">{row.masterQuantity}</td>
+        <td className="px-3 py-2 text-right">{row.totalFollowers}</td>
+        <td className="px-3 py-2 text-right text-emerald-600 dark:text-emerald-400">
+          {row.successfulFollowers}
+        </td>
+        <td className="px-3 py-2 text-right text-destructive">
+          {row.failedFollowers}
+        </td>
+        <td className="px-3 py-2 text-right text-muted-foreground">
+          {fmtMs(row.processingTimeMs)}
+        </td>
         <td className="px-3 py-2">
-          <Badge variant={outcomeVariant(event.outcome)}>
-            {event.outcome.replace(/_/g, ' ')}
+          <Badge variant={statusVariant(row.status)}>
+            {row.status.replace(/_/g, ' ')}
           </Badge>
         </td>
-        <td className="px-3 py-2 text-xs text-muted-foreground">
-          {followerRollup(event)}
+        <td className="px-3 py-2 text-right">
+          <Link
+            href={`/dashboard/trade-monitor/${row.id}`}
+            onClick={(e) => e.stopPropagation()}
+            className="text-xs text-primary hover:underline inline-flex items-center gap-1"
+            data-testid={`trade-monitor-detail-link-${row.id}`}
+          >
+            Detail <ArrowUpRight className="h-3 w-3" />
+          </Link>
         </td>
       </tr>
       {isOpen && (
         <tr
           className="border-t bg-muted/20"
-          data-testid={`trade-monitor-detail-${event.id}`}
+          data-testid={`trade-monitor-detail-row-${row.id}`}
         >
-          <td colSpan={12} className="px-6 py-4">
-            <ExpandedDetail event={event} />
+          <td colSpan={14} className="px-6 py-4">
+            <InlineDetail row={row} followers={followers} />
           </td>
         </tr>
       )}
@@ -389,76 +648,78 @@ function FragmentRow({
   );
 }
 
-function ExpandedDetail({ event }: { event: ExecutionEvent }) {
+function InlineDetail({
+  row,
+  followers,
+}: {
+  row: ExecutionHistoryRow;
+  followers: ExecutionHistoryFollowerRow[] | 'loading' | 'error' | undefined;
+}) {
   return (
     <div className="grid gap-6 lg:grid-cols-3">
-      {/* Master trade */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-base flex items-center gap-2">
-            <Clock className="h-4 w-4" /> Master Trade
-          </CardTitle>
+          <CardTitle className="text-base">Master Trade</CardTitle>
           <CardDescription className="font-mono text-xs">
-            {event.id}
+            {row.id}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-2 text-sm">
-          <DetailRow label="Strategy" value={event.strategyName ?? '—'} />
-          <DetailRow label="Strategy id" value={event.strategyId ?? '—'} mono />
+          <DetailRow label="Strategy" value={row.strategyName ?? '—'} />
           <DetailRow
             label="Master account"
-            value={event.masterAccountNickname ?? event.masterAccountId}
+            value={row.masterAccountName ?? row.masterAccountId}
           />
+          <DetailRow label="Broker" value={row.masterBroker} />
+          <DetailRow label="Symbol" value={row.masterSymbol} />
           <DetailRow
-            label="Account id"
-            value={event.masterAccountId}
-            mono
+            label="Exchange / Segment"
+            value={`${row.masterExchange ?? '—'} · ${row.masterSegment ?? '—'}`}
           />
-          <DetailRow label="Broker" value={event.broker} />
-          <DetailRow label="Symbol" value={event.symbol} />
-          <DetailRow label="Side" value={event.side} />
-          <DetailRow label="Quantity" value={String(event.quantity)} />
-          <DetailRow label="Product type" value={event.productType || '—'} />
-          <DetailRow label="Time" value={fmtTime(event.timestamp)} />
-          <div className="pt-1 flex items-center gap-2">
-            <span className="text-xs text-muted-foreground uppercase tracking-wide">
-              Outcome
-            </span>
-            <Badge variant={outcomeVariant(event.outcome)}>
-              {event.outcome.replace(/_/g, ' ')}
-            </Badge>
-          </div>
-          {event.errorReason && (
-            <div className="mt-3 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive">
-              {event.errorReason}
-            </div>
-          )}
+          <DetailRow label="Side" value={row.masterSide} />
+          <DetailRow label="Quantity" value={String(row.masterQuantity)} />
+          <DetailRow
+            label="Price"
+            value={row.masterPrice === null ? '—' : String(row.masterPrice)}
+          />
+          <DetailRow label="Order type" value={row.orderType ?? '—'} />
+          <DetailRow label="Product type" value={row.productType ?? '—'} />
+          <DetailRow label="Trade source" value={row.tradeSource ?? '—'} />
+          <DetailRow label="Time" value={fmtTime(row.timestamp)} />
+          <DetailRow
+            label="Processing time"
+            value={fmtMs(row.processingTimeMs)}
+          />
         </CardContent>
       </Card>
 
-      {/* Follower results */}
       <Card className="lg:col-span-2">
         <CardHeader>
           <CardTitle className="text-base">
-            Follower Results ({event.followers.length})
+            Follower Results ({row.totalFollowers})
           </CardTitle>
           <CardDescription>
-            {event.followersFound} enabled follower(s) matched this strategy.
+            {fmtNum(row.successfulFollowers)} success · {fmtNum(row.failedFollowers)}{' '}
+            failed · {fmtNum(row.skippedFollowers)} skipped
           </CardDescription>
         </CardHeader>
         <CardContent className="p-0">
-          {event.followers.length === 0 ? (
+          {followers === undefined || followers === 'loading' ? (
             <div className="p-4 text-sm text-muted-foreground">
-              {event.outcome === 'NO_ACTIVE_STRATEGY'
-                ? 'The master trade did not match an active strategy — no followers were attempted.'
-                : event.outcome === 'NO_ENABLED_FOLLOWERS'
-                ? 'No enabled followers were subscribed to this strategy.'
-                : 'No follower attempts were recorded.'}
+              Loading follower results…
+            </div>
+          ) : followers === 'error' ? (
+            <div className="p-4 text-sm text-destructive">
+              Failed to load follower results.
+            </div>
+          ) : followers.length === 0 ? (
+            <div className="p-4 text-sm text-muted-foreground">
+              No follower attempts were recorded for this execution.
             </div>
           ) : (
             <div className="divide-y">
-              {event.followers.map((f) => (
-                <FollowerRow key={f.id} follower={f} />
+              {followers.map((f) => (
+                <FollowerCard key={f.id} follower={f} />
               ))}
             </div>
           )}
@@ -468,36 +729,43 @@ function ExpandedDetail({ event }: { event: ExecutionEvent }) {
   );
 }
 
-function FollowerRow({ follower }: { follower: FollowerExecution }) {
-  const Icon = statusIcon(follower.status);
-  const iconClass = statusIconClass(follower.status);
+function FollowerCard({
+  follower,
+}: {
+  follower: ExecutionHistoryFollowerRow;
+}) {
   return (
     <div className="p-4 space-y-2">
       <div className="flex items-start justify-between gap-4 flex-wrap">
-        <div className="flex items-start gap-3">
-          <Icon className={`h-4 w-4 mt-0.5 shrink-0 ${iconClass}`} />
-          <div>
-            <div className="font-medium">
-              {follower.followerName}{' '}
-              <span className="text-muted-foreground font-normal text-xs">
-                ({follower.followerEmail})
-              </span>
-            </div>
-            <div className="text-xs text-muted-foreground">
-              {follower.broker} · account{' '}
-              <span className="font-mono">
-                {shortId(follower.followerAccountId)}
-              </span>
-              {follower.followerSymbol && (
-                <>
-                  {' · '}mapped symbol{' '}
-                  <span className="font-mono">{follower.followerSymbol}</span>
-                </>
-              )}
-              {follower.quantity !== null && (
-                <> {' · '}qty {follower.quantity}</>
-              )}
-            </div>
+        <div>
+          <div className="font-medium">
+            {follower.followerEmail ?? follower.followerId ?? '—'}
+          </div>
+          <div className="text-xs text-muted-foreground">
+            {follower.broker}
+            {follower.followerSymbol && (
+              <>
+                {' · '}mapped{' '}
+                <span className="font-mono">{follower.followerSymbol}</span>
+              </>
+            )}
+            {follower.executedQuantity !== null && (
+              <> {' · '}qty {follower.executedQuantity}</>
+            )}
+            {follower.brokerOrderId && (
+              <>
+                {' · '}order id{' '}
+                <span className="font-mono">{follower.brokerOrderId}</span>
+              </>
+            )}
+          </div>
+          <div className="text-xs text-muted-foreground">
+            {follower.startedAt && (
+              <>started {fmtTime(follower.startedAt)}</>
+            )}
+            {follower.completedAt && (
+              <> · finished {fmtTime(follower.completedAt)}</>
+            )}
           </div>
         </div>
         <div className="flex flex-col items-end gap-1">
@@ -511,22 +779,22 @@ function FollowerRow({ follower }: { follower: FollowerExecution }) {
           )}
         </div>
       </div>
-      {follower.reason && (
+      {follower.failureReason && (
         <div className="rounded-md border bg-muted/40 p-2 text-xs">
           <div className="text-muted-foreground uppercase tracking-wide text-[10px] mb-1">
             Failure reason
           </div>
-          <div>{follower.reason}</div>
+          <div>{follower.failureReason}</div>
         </div>
       )}
-      {follower.brokerResponse !== null &&
-        follower.brokerResponse !== undefined && (
+      {follower.rawBrokerResponse !== null &&
+        follower.rawBrokerResponse !== undefined && (
           <details className="text-xs">
             <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
               Broker response
             </summary>
             <pre className="mt-2 rounded-md border bg-muted/40 p-2 overflow-x-auto text-[11px]">
-              {formatResponse(follower.brokerResponse)}
+              {formatResponse(follower.rawBrokerResponse)}
             </pre>
           </details>
         )}
@@ -534,49 +802,19 @@ function FollowerRow({ follower }: { follower: FollowerExecution }) {
   );
 }
 
-function statusIcon(status: ExecutionFollowerStatus) {
-  switch (status) {
-    case 'SUCCESS':
-      return CheckCircle2;
-    case 'FAILED':
-      return XCircle;
-    case 'SKIPPED':
-      return MinusCircle;
-    default:
-      return Clock;
-  }
-}
-
-function statusIconClass(status: ExecutionFollowerStatus) {
-  switch (status) {
-    case 'SUCCESS':
-      return 'text-emerald-500';
-    case 'FAILED':
-      return 'text-destructive';
-    case 'SKIPPED':
-      return 'text-muted-foreground';
-    default:
-      return 'text-amber-500';
-  }
-}
-
 function DetailRow({
   label,
   value,
-  mono,
 }: {
   label: string;
   value: string;
-  mono?: boolean;
 }) {
   return (
     <div className="flex items-start gap-3">
       <div className="w-40 shrink-0 text-xs uppercase tracking-wide text-muted-foreground">
         {label}
       </div>
-      <div className={`flex-1 break-all ${mono ? 'font-mono text-xs' : ''}`}>
-        {value}
-      </div>
+      <div className="flex-1 break-all">{value}</div>
     </div>
   );
 }
@@ -589,4 +827,95 @@ function formatResponse(response: unknown): string {
   } catch {
     return String(response);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Pagination
+// ---------------------------------------------------------------------------
+
+function Pagination({
+  page,
+  totalPages,
+  total,
+  onPage,
+}: {
+  page: number;
+  totalPages: number;
+  total: number;
+  onPage: (p: number) => void;
+}) {
+  const range = useMemo(() => buildPageRange(page, totalPages), [page, totalPages]);
+  return (
+    <div
+      className="flex items-center justify-between gap-4 flex-wrap"
+      data-testid="trade-monitor-pagination"
+    >
+      <div className="text-xs text-muted-foreground">
+        Page {page} of {totalPages} · {total.toLocaleString()} execution(s)
+      </div>
+      <div className="flex items-center gap-1">
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={page <= 1}
+          onClick={() => onPage(Math.max(1, page - 1))}
+          data-testid="page-prev"
+        >
+          Prev
+        </Button>
+        {range.map((p, i) =>
+          p === '…' ? (
+            <span
+              key={`gap-${i}`}
+              className="px-2 text-xs text-muted-foreground"
+            >
+              …
+            </span>
+          ) : (
+            <Button
+              key={p}
+              variant={p === page ? 'default' : 'outline'}
+              size="sm"
+              onClick={() => onPage(p)}
+              data-testid={`page-${p}`}
+            >
+              {p}
+            </Button>
+          ),
+        )}
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={page >= totalPages}
+          onClick={() => onPage(Math.min(totalPages, page + 1))}
+          data-testid="page-next"
+        >
+          Next
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function buildPageRange(page: number, totalPages: number): (number | '…')[] {
+  const result: (number | '…')[] = [];
+  const push = (n: number | '…') => {
+    if (n === '…') {
+      if (result[result.length - 1] === '…') return;
+    }
+    result.push(n);
+  };
+  const window = 2;
+  for (let i = 1; i <= totalPages; i++) {
+    if (
+      i === 1 ||
+      i === totalPages ||
+      (i >= page - window && i <= page + window)
+    ) {
+      push(i);
+    } else {
+      push('…');
+    }
+  }
+  return result;
 }

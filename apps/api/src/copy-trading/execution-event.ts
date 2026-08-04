@@ -73,7 +73,13 @@ export interface ExecutionEvent {
   symbol: string;
   side: 'BUY' | 'SELL';
   quantity: number;
+  price: number | null;
   productType: string;
+  orderType: string | null;
+  tradeSource: string;
+
+  masterExchange: string | null;
+  masterSegment: string | null;
 
   followersFound: number;
   followers: FollowerExecution[];
@@ -87,6 +93,9 @@ export interface ExecutionEvent {
 
   /** Set on outcome=ERROR — captures a top-level exception in handleTrade. */
   errorReason: string | null;
+
+  /** Elapsed milliseconds from `begin()` to `commit()`. */
+  processingTimeMs: number | null;
 }
 
 /**
