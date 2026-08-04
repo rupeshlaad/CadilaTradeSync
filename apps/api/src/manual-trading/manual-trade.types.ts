@@ -127,6 +127,23 @@ export interface ManualTradeRecord {
   brokerResponse: unknown | null;
   /** Reason surfaced when status = REJECTED / FAILED. */
   rejectionReason: string | null;
+  /**
+   * Structural classification of the failure surface — reuses the
+   * ExecutionFailureType vocabulary the copy-trading recorder emits
+   * (ORDER_REJECTED, TOKEN_EXPIRED, IP_WHITELIST, BROKER_ERROR, …) so
+   * the UI can badge / filter without regex-ing the raw message.
+   */
+  failureType: string | null;
+  /**
+   * Stage at which the trade failed. Populated only when status is
+   * REJECTED or FAILED — one of:
+   *   - `local_validation`  → shape / required-field DTO rejection
+   *   - `preflight_validation` → structural pre-flight validator (a check failed)
+   *   - `broker_placement`  → master broker rejected the order
+   *   - `broker_error`      → adapter threw during the placement call
+   *   - `fan_out`           → CopyTradingService fan-out surfaced errors
+   */
+  failureStage: string | null;
 
   /** Validation snapshot rendered next to the entry in the UI. */
   validation: ManualTradeValidationResult;
