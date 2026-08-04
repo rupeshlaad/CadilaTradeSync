@@ -14,6 +14,7 @@ import { ZerodhaAdapter } from '../brokers/zerodha/zerodha.adapter';
 import { FyersAdapter } from '../brokers/fyers/fyers.adapter';
 
 import { ExecutionEventRecorderService } from '../copy-trading/execution-event.recorder';
+import { classifyFailure } from '../copy-trading/execution-event.recorder';
 import type { ExecutionEvent } from '../copy-trading/execution-event';
 import { PositionLifecycleService } from '../position-lifecycle/position-lifecycle.service';
 
@@ -103,6 +104,8 @@ export class ManualTradeService implements OnModuleInit {
       brokerOrderId: null,
       brokerResponse: null,
       rejectionReason: null,
+      failureType: null,
+      failureStage: null,
       validation,
       executionEventId: null,
       followersFound: validation.resolvedStrategy?.followerCount ?? 0,
@@ -120,11 +123,18 @@ export class ManualTradeService implements OnModuleInit {
       record.rejectionReason = validation.errors
         .map((e) => `${e.key}: ${e.message}`)
         .join('; ');
+      record.failureType = 'VALIDATION_FAILED';
+      record.failureStage = 'preflight_validation';
       record.updatedAt = new Date().toISOString();
       throw new BadRequestException({
-        message: 'Manual trade validation failed',
+        message: record.rejectionReason,
         manualTradeId: record.id,
+        stage: 'preflight_validation',
+        failureType: record.failureType,
+        brokerMessage: null,
+        timestamp: record.updatedAt,
         errors: validation.errors,
+        record,
       });
     }
 
@@ -138,17 +148,35 @@ export class ManualTradeService implements OnModuleInit {
       placementResponse = result.response;
       brokerOrderId = result.brokerOrderId;
     } catch (err: any) {
+      // Broker adapter surfaced an exception (auth failure, network,
+      // rate limit, KiteConnect / Fyers rejection). Preserve the FULL
+      // broker message end-to-end — the UI must show exactly what the
+      // broker said (e.g. "No IPs configured for this app.", "Trading
+      // in NSE is not allowed using NRML product type.").
+      const brokerMessage =
+        pickBrokerMessage(err) ?? err?.message ?? 'Master broker placement failed';
+      const failureType = classifyFailure({
+        message: brokerMessage,
+        response: err,
+      });
       record.status = ManualTradeStatus.FAILED;
-      record.rejectionReason = err?.message ?? 'Master broker placement failed';
-      record.brokerResponse = { name: err?.name, message: err?.message };
+      record.rejectionReason = brokerMessage;
+      record.failureType = failureType;
+      record.failureStage = 'broker_error';
+      record.brokerResponse = safeErrorSnapshot(err);
       record.updatedAt = new Date().toISOString();
       this.logger.error(
-        `Manual trade ${record.id} FAILED at broker placement: ${record.rejectionReason}`,
+        `Manual trade ${record.id} FAILED at broker placement: ${brokerMessage}`,
       );
       throw new BadRequestException({
-        message: 'Master broker placement failed',
+        message: brokerMessage,
         manualTradeId: record.id,
-        reason: record.rejectionReason,
+        stage: 'broker_error',
+        failureType,
+        brokerMessage,
+        timestamp: record.updatedAt,
+        brokerResponse: record.brokerResponse,
+        record,
       });
     }
 
@@ -157,18 +185,33 @@ export class ManualTradeService implements OnModuleInit {
     record.updatedAt = new Date().toISOString();
 
     if (!brokerOrderId) {
-      record.status = ManualTradeStatus.REJECTED;
-      record.rejectionReason =
+      // Adapter returned a non-throwing rejection payload (e.g.
+      // `{ s: 'error', message: '...' }` from Fyers, or a Zerodha
+      // response without an order_id). Bubble up the exact broker
+      // text — never a generic placeholder.
+      const brokerMessage =
         extractRejectionReason(placementResponse) ??
         'Master broker did not return a valid order id';
+      const failureType = classifyFailure({
+        message: brokerMessage,
+        response: placementResponse,
+      });
+      record.status = ManualTradeStatus.REJECTED;
+      record.rejectionReason = brokerMessage;
+      record.failureType = failureType;
+      record.failureStage = 'broker_placement';
       this.logger.warn(
-        `Manual trade ${record.id} REJECTED by master broker: ${record.rejectionReason}`,
+        `Manual trade ${record.id} REJECTED by master broker: ${brokerMessage}`,
       );
       throw new BadRequestException({
-        message: 'Master broker rejected the order',
+        message: brokerMessage,
         manualTradeId: record.id,
-        reason: record.rejectionReason,
+        stage: 'broker_placement',
+        failureType,
+        brokerMessage,
+        timestamp: record.updatedAt,
         brokerResponse: placementResponse,
+        record,
       });
     }
 
@@ -554,14 +597,89 @@ function extractFyersOrderId(response: unknown): string | null {
 
 function extractRejectionReason(response: unknown): string | null {
   if (!response) return null;
-  if (typeof response === 'string') return response;
+  if (typeof response === 'string') return response.trim() || null;
   if (typeof response !== 'object') return null;
   const r = response as Record<string, unknown>;
-  const candidates = [r.message, r.emsg, r.error, r.status_message];
+  const candidates = [
+    r.message,
+    r.emsg,
+    r.error,
+    r.error_message,
+    r.status_message,
+    r.errorMessage,
+    r.reason,
+    r.description,
+    (r.data as any)?.message,
+    (r.data as any)?.emsg,
+    (r.data as any)?.error,
+  ];
   for (const c of candidates) {
     if (typeof c === 'string' && c.trim().length > 0) return c.trim();
   }
   return null;
+}
+
+/**
+ * Pull the fullest possible broker text out of an exception thrown by
+ * a broker adapter (KiteConnect, Fyers) or a plain axios-style error.
+ * Preserves the entire message verbatim — never truncated — so the UI
+ * can render the exact broker response to the operator.
+ */
+function pickBrokerMessage(err: any): string | null {
+  if (!err) return null;
+  if (typeof err === 'string') return err.trim() || null;
+
+  // Kite / axios-style errors expose the broker text under
+  // response.data / data.message; direct throws carry it on `message`.
+  const nested = extractRejectionReason(err);
+  if (nested) return nested;
+
+  const response = err.response ?? err.data;
+  if (response) {
+    const inner = extractRejectionReason(response);
+    if (inner) return inner;
+  }
+
+  if (typeof err.message === 'string' && err.message.trim().length > 0) {
+    return err.message.trim();
+  }
+  return null;
+}
+
+/**
+ * Serialise a thrown adapter error into something safe to persist and
+ * ship back through the JSON response. Retains ALL identifying fields
+ * (name, message, error_type, code, status, broker payload) without
+ * truncation so downstream tooling has the full context.
+ */
+function safeErrorSnapshot(err: any): unknown {
+  if (!err || typeof err !== 'object') {
+    return err ?? null;
+  }
+  const out: Record<string, unknown> = {};
+  for (const key of [
+    'name',
+    'message',
+    'error_type',
+    'code',
+    'status',
+    'statusText',
+  ]) {
+    const v = err[key];
+    if (v !== undefined && v !== null) out[key] = v;
+  }
+  const response = err.response ?? err.data;
+  if (response && typeof response === 'object') {
+    // Response payloads from HTTP clients often carry a `data` field
+    // with the broker's raw JSON — persist it verbatim.
+    const data = (response as any).data ?? response;
+    try {
+      out.brokerResponse = JSON.parse(JSON.stringify(data));
+    } catch {
+      out.brokerResponse = String(data);
+    }
+  }
+  return out;
 }
 
 function extractBrokerOrderIdFromResponse(response: unknown): string | null {

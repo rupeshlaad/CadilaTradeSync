@@ -596,6 +596,10 @@ export interface ManualTradeRecord {
   brokerOrderId: string | null;
   brokerResponse: unknown | null;
   rejectionReason: string | null;
+  /** Structural classification of the failure (BROKER_ERROR, TOKEN_EXPIRED, …). */
+  failureType: string | null;
+  /** Stage at which the manual trade failed (broker_placement, broker_error, …). */
+  failureStage: string | null;
   validation: ManualTradeValidationResult;
   executionEventId: string | null;
   followersFound: number;

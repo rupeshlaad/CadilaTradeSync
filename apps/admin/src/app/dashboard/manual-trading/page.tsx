@@ -242,13 +242,29 @@ export default function ManualTradingPage() {
       setLastResult(res);
       await loadRecent();
     } catch (e: any) {
-      const body = e?.body;
+      const body = e?.body ?? {};
+      // The API returns the FULL manual-trade record on every failure
+      // path so the UI can render exactly what the broker said without
+      // any downstream lookup. Preserve it verbatim.
+      if (body?.record) {
+        setLastResult(body.record as ManualTradeRecord);
+      }
       if (Array.isArray(body?.errors)) {
         setValidationErrors(body.errors as ManualTradeValidationCheck[]);
-        setPlacementError(body?.message ?? 'Manual trade rejected');
-      } else {
-        setPlacementError(e?.message ?? 'Failed to place manual trade');
       }
+      // Prefer the broker text over any generic HTTP status message —
+      // the sprint explicitly requires the full broker rejection to
+      // surface here.
+      const brokerMessage =
+        body?.brokerMessage ??
+        body?.message ??
+        e?.message ??
+        'Failed to place manual trade';
+      setPlacementError(brokerMessage);
+      // Refresh the ledger so the newly-failed record shows up in the
+      // Recent Orders table too (matches the sprint's "same reason
+      // everywhere" requirement).
+      loadRecent().catch(() => {});
     } finally {
       setSubmitting(false);
     }
@@ -668,13 +684,27 @@ function ExecutionStatusPanel({
       </CardHeader>
       <CardContent className="space-y-3 text-sm">
         {error && !result && (
-          <div className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-destructive text-sm">
+          <div className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-destructive text-sm whitespace-pre-wrap break-words">
             {error}
           </div>
         )}
         {result && (
           <>
             <div className="grid grid-cols-2 gap-2 text-xs">
+              <Cell label="Status">
+                <Badge variant={statusVariant(result.status)}>
+                  {statusText(result.status)}
+                </Badge>
+              </Cell>
+              <Cell label="Failure Type">
+                {result.failureType ? (
+                  <Badge variant="destructive" className="uppercase">
+                    {result.failureType.replace(/_/g, ' ')}
+                  </Badge>
+                ) : (
+                  <span className="text-muted-foreground">—</span>
+                )}
+              </Cell>
               <Cell label="Master">{result.masterAccountName ?? result.masterAccountId}</Cell>
               <Cell label="Broker">{result.broker}</Cell>
               <Cell label="Symbol">{result.symbol}</Cell>
@@ -687,6 +717,14 @@ function ExecutionStatusPanel({
               <Cell label="Price">{result.price ?? '—'}</Cell>
               <Cell label="Trigger">{result.triggerPrice ?? '—'}</Cell>
               <Cell label="Validity">{result.validity}</Cell>
+              <Cell label="Timestamp">{fmtTime(result.updatedAt)}</Cell>
+              {result.failureStage && (
+                <Cell label="Failure Stage">
+                  <span className="font-mono text-[11px] uppercase">
+                    {result.failureStage.replace(/_/g, ' ')}
+                  </span>
+                </Cell>
+              )}
             </div>
             {result.brokerOrderId && (
               <div className="rounded-md border bg-muted/40 p-2 text-xs">
@@ -694,6 +732,19 @@ function ExecutionStatusPanel({
                   Master broker order id
                 </div>
                 <div className="font-mono break-all">{result.brokerOrderId}</div>
+              </div>
+            )}
+            {result.rejectionReason && (
+              <div
+                className="rounded-md border border-destructive/40 bg-destructive/10 p-2 text-xs"
+                data-testid="broker-rejection-reason"
+              >
+                <div className="text-muted-foreground uppercase tracking-wide text-[10px] mb-1">
+                  Broker Message
+                </div>
+                <div className="whitespace-pre-wrap break-words text-destructive">
+                  {result.rejectionReason}
+                </div>
               </div>
             )}
             <div className="grid grid-cols-4 gap-2 text-xs">
@@ -714,14 +765,6 @@ function ExecutionStatusPanel({
                 accent="muted"
               />
             </div>
-            {result.rejectionReason && (
-              <div className="rounded-md border border-destructive/40 bg-destructive/10 p-2 text-xs">
-                <div className="text-muted-foreground uppercase tracking-wide text-[10px] mb-1">
-                  Reason
-                </div>
-                <div>{result.rejectionReason}</div>
-              </div>
-            )}
           </>
         )}
       </CardContent>
@@ -782,11 +825,15 @@ function ValidationSummary({
   errors: ManualTradeValidationCheck[] | null;
   record: ManualTradeRecord | null;
 }) {
-  const checks =
+  const preflightChecks =
     record?.validation.checks ??
-    (errors
-      ? errors.map((e) => ({ ...e }))
-      : []);
+    (errors ? errors.map((e) => ({ ...e })) : []);
+
+  // Stage-level rollup so operators see a top-to-bottom picture of
+  // exactly where the trade fell over — pre-flight, broker placement,
+  // fan-out — even when a downstream stage fails after every pre-flight
+  // check passed.
+  const stages = buildStageChecks(record, preflightChecks);
 
   if (!record && !errors) {
     return (
@@ -814,33 +861,170 @@ function ValidationSummary({
             : `Validated at ${fmtTime(record?.validation.validatedAt)}`}
         </CardDescription>
       </CardHeader>
-      <CardContent className="space-y-2 text-sm">
-        {checks.length === 0 ? (
-          <div className="text-muted-foreground">No checks recorded.</div>
-        ) : (
-          checks.map((c) => (
+      <CardContent className="space-y-4 text-sm">
+        <div className="space-y-1.5">
+          <div className="text-[11px] uppercase tracking-wide text-muted-foreground">
+            Pipeline stages
+          </div>
+          {stages.map((s) => (
             <div
-              key={c.key}
+              key={s.key}
               className="flex items-start gap-2"
-              data-testid={`validation-${c.key}`}
+              data-testid={`stage-${s.key}`}
             >
-              {c.ok ? (
+              {s.ok ? (
                 <CheckCircle2 className="h-4 w-4 text-emerald-500 mt-0.5 shrink-0" />
               ) : (
                 <XCircle className="h-4 w-4 text-destructive mt-0.5 shrink-0" />
               )}
-              <div>
-                <div className="font-mono text-[11px] uppercase text-muted-foreground">
-                  {c.key.replace(/_/g, ' ')}
-                </div>
-                <div>{c.message}</div>
+              <div className="flex-1">
+                <div className="font-medium text-sm">{s.label}</div>
+                {s.detail && (
+                  <div className="text-xs text-muted-foreground whitespace-pre-wrap break-words">
+                    {s.detail}
+                  </div>
+                )}
               </div>
             </div>
-          ))
+          ))}
+        </div>
+
+        {preflightChecks.length > 0 && (
+          <div className="space-y-1.5 border-t pt-3">
+            <div className="text-[11px] uppercase tracking-wide text-muted-foreground">
+              Pre-flight checks
+            </div>
+            {preflightChecks.map((c) => (
+              <div
+                key={c.key}
+                className="flex items-start gap-2"
+                data-testid={`validation-${c.key}`}
+              >
+                {c.ok ? (
+                  <CheckCircle2 className="h-4 w-4 text-emerald-500 mt-0.5 shrink-0" />
+                ) : (
+                  <XCircle className="h-4 w-4 text-destructive mt-0.5 shrink-0" />
+                )}
+                <div>
+                  <div className="font-mono text-[11px] uppercase text-muted-foreground">
+                    {c.key.replace(/_/g, ' ')}
+                  </div>
+                  <div className="whitespace-pre-wrap break-words">
+                    {c.message}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
         )}
       </CardContent>
     </Card>
   );
+}
+
+interface StageCheck {
+  key: string;
+  label: string;
+  ok: boolean;
+  detail: string | null;
+}
+
+/**
+ * Roll pre-flight + broker-placement + fan-out into a single
+ * stage-by-stage view. The sprint explicitly asks for a "which stage
+ * failed" breakdown; this function computes it deterministically from
+ * the manual-trade record + local validation errors.
+ */
+function buildStageChecks(
+  record: ManualTradeRecord | null,
+  preflightChecks: ManualTradeValidationCheck[],
+): StageCheck[] {
+  const stages: StageCheck[] = [];
+
+  // 1) Local validation — the DTO-level shape/required-field check.
+  //    Anything reaching preflightChecks with content means the local
+  //    ValidationPipe already accepted the payload.
+  stages.push({
+    key: 'local_validation',
+    label: 'Local validation',
+    ok: true,
+    detail: 'Form payload passed shape / required-field validation',
+  });
+
+  // 2) Strategy validation — resolves to true iff every strategy-scoped
+  //    pre-flight check succeeded.
+  const strategyKeys = [
+    'strategy_active',
+    'strategy_belongs_to_master',
+    'strategy_has_enabled_followers',
+    'instrument_exists',
+    'broker_symbol_mapping_exists',
+    'required_fields_present',
+  ];
+  const strategyChecks = preflightChecks.filter((c) => strategyKeys.includes(c.key));
+  const strategyFail = strategyChecks.find((c) => !c.ok) ?? null;
+  stages.push({
+    key: 'strategy_validation',
+    label: 'Strategy validation',
+    ok: strategyChecks.length > 0 ? !strategyFail : true,
+    detail: strategyFail ? strategyFail.message : null,
+  });
+
+  // 3) Master session — connection + broker session health.
+  const sessionKeys = [
+    'master_account_exists',
+    'master_account_connected',
+    'broker_session_healthy',
+  ];
+  const sessionChecks = preflightChecks.filter((c) => sessionKeys.includes(c.key));
+  const sessionFail = sessionChecks.find((c) => !c.ok) ?? null;
+  stages.push({
+    key: 'master_session',
+    label: 'Master session',
+    ok: sessionChecks.length > 0 ? !sessionFail : true,
+    detail: sessionFail ? sessionFail.message : null,
+  });
+
+  // 4) Broker order placement — only relevant if pre-flight succeeded.
+  const preflightOk = preflightChecks.every((c) => c.ok);
+  if (!preflightOk) {
+    stages.push({
+      key: 'broker_order_placement',
+      label: 'Broker order placement',
+      ok: false,
+      detail: 'Skipped — pre-flight validation failed',
+    });
+  } else if (!record) {
+    stages.push({
+      key: 'broker_order_placement',
+      label: 'Broker order placement',
+      ok: false,
+      detail: null,
+    });
+  } else if (record.failureStage === 'broker_placement' || record.failureStage === 'broker_error') {
+    stages.push({
+      key: 'broker_order_placement',
+      label: 'Broker order placement',
+      ok: false,
+      detail: record.rejectionReason,
+    });
+  } else if (record.brokerOrderId) {
+    stages.push({
+      key: 'broker_order_placement',
+      label: 'Broker order placement',
+      ok: true,
+      detail: `Broker accepted order ${record.brokerOrderId}`,
+    });
+  } else {
+    stages.push({
+      key: 'broker_order_placement',
+      label: 'Broker order placement',
+      ok: false,
+      detail: record.rejectionReason,
+    });
+  }
+
+  return stages;
 }
 
 // ---------------------------------------------------------------------------
@@ -930,7 +1114,7 @@ function RecentOrdersTable({ rows }: { rows: ManualTradeRecord[] }) {
                 {rows.map((row) => (
                   <tr
                     key={row.id}
-                    className="border-t"
+                    className="border-t align-top"
                     data-testid={`manual-trading-row-${row.id}`}
                   >
                     <td className="px-3 py-2 whitespace-nowrap text-muted-foreground">
@@ -962,8 +1146,16 @@ function RecentOrdersTable({ rows }: { rows: ManualTradeRecord[] }) {
                     <td className="px-3 py-2 font-mono text-xs">
                       {row.brokerOrderId ?? '—'}
                     </td>
-                    <td className="px-3 py-2">
+                    <td className="px-3 py-2 max-w-xs">
                       <RowStatusBadge status={row.status} />
+                      {row.rejectionReason && (
+                        <div
+                          className="text-[11px] text-destructive whitespace-pre-wrap break-words mt-1"
+                          data-testid={`row-reason-${row.id}`}
+                        >
+                          {row.rejectionReason}
+                        </div>
+                      )}
                     </td>
                   </tr>
                 ))}
