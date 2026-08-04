@@ -810,6 +810,12 @@ export const api = {
         request(`/admin/strategies/${id}`, {
           method: 'DELETE',
         }),
+
+      // Sprint 6.0 — Strategy Intelligence summary (presentation-only).
+      summary: (id: string) =>
+        request<import('@cts/shared').StrategySummaryDto>(
+          `/admin/strategies/${encodeURIComponent(id)}/summary`,
+        ),
     },
 
     listFollowers: () => request<FollowerDto[]>('/admin/followers'),

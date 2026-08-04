@@ -200,3 +200,104 @@ export interface SubscriptionDto {
 
 export const APP_NAME = 'Candila TradeSync';
 export const APP_SHORT_NAME = 'CTS';
+
+// ---------------------------------------------------------------------------
+// Sprint 6.0 — Strategy Intelligence Dashboard (Phase 1 — presentation).
+//
+// Reusable, presentation-oriented DTO exposed by GET /strategies/:id/summary
+// (user-scoped, marketplace-visible when the strategy is PUBLIC) and
+// GET /admin/strategies/:id/summary (admin-scoped). Consumed by the Master
+// Portal strategy detail page and the Follower Marketplace detail page —
+// same payload, same shared components.
+//
+// Historical Strategy Performance will be imported in a future sprint.
+// Live Strategy Performance will be generated from ExecutionHistory in a
+// future sprint. Every performance / risk field is nullable today so the
+// shared UI can render "Not Available" without fabricated values.
+// ---------------------------------------------------------------------------
+
+export type StrategyRiskLevel = 'LOW' | 'MEDIUM' | 'HIGH';
+
+/**
+ * Static profile fields extracted directly from the Strategy row. The
+ * `strategyCode` is derived from the id (short prefix) so the UI can
+ * display a human-friendly identifier without a schema change.
+ */
+export interface StrategyProfileDto {
+  id: string;
+  strategyName: string;
+  strategyCode: string;
+  description: string | null;
+  status: StrategyStatus;
+  visibility: Visibility;
+  riskLevel: StrategyRiskLevel | null;
+  supportedBrokers: Broker[];
+  supportedMarkets: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * Aggregate counts (existing data only — no calculations). "Active
+ * subscribers" == Subscription rows with status ACTIVE. "Active
+ * followers" == enabled Follower rows. "Active master accounts" ==
+ * count of distinct enabled MASTER trading accounts backing the
+ * strategy. Each is nullable when the data is genuinely unavailable
+ * so the UI can render "Not Available".
+ */
+export interface StrategyOverviewDto {
+  activeSubscribers: number | null;
+  activeMasterAccounts: number | null;
+  activeFollowers: number | null;
+  currentStatus: StrategyStatus;
+}
+
+/**
+ * Performance placeholders. Every field is null in Phase 1. `lastUpdated`
+ * is null until the future performance-import sprint lands.
+ */
+export interface StrategyPerformanceDto {
+  todayReturn: number | null;
+  weeklyReturn: number | null;
+  monthlyReturn: number | null;
+  overallReturn: number | null;
+  winRate: number | null;
+  totalTrades: number | null;
+  capitalManaged: number | null;
+  lastUpdated: string | null;
+}
+
+/**
+ * Risk placeholder. Every field is null / empty in Phase 1 — the UI
+ * renders "Data will be available after performance import." when
+ * neither drawdown nor volatility is set.
+ */
+export interface StrategyRiskDto {
+  riskLevel: StrategyRiskLevel | null;
+  maxDrawdown: number | null;
+  volatility: number | null;
+  notes: string[];
+}
+
+/**
+ * Recent activity slot. Kept as a list of opaque items so the shape can
+ * be extended (e.g. from ExecutionHistory) in a future sprint without a
+ * type break for existing consumers.
+ */
+export interface StrategyRecentActivityItem {
+  at: string;
+  kind: string;
+  label: string;
+}
+
+export interface StrategyRecentActivityDto {
+  items: StrategyRecentActivityItem[];
+}
+
+export interface StrategySummaryDto {
+  profile: StrategyProfileDto;
+  overview: StrategyOverviewDto;
+  performance: StrategyPerformanceDto;
+  risk: StrategyRiskDto;
+  recentActivity: StrategyRecentActivityDto;
+}

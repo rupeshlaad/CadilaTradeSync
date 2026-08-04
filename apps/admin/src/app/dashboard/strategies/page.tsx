@@ -1,5 +1,6 @@
 'use client';
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { api } from '@/lib/api';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -129,6 +130,13 @@ export default function AdminStrategiesPage() {
                       <td className="py-2 pr-4"><Badge variant={s.enabled ? 'success' : 'destructive'}>{s.enabled ? 'ON' : 'OFF'}</Badge></td>
                       <td className="py-2 pr-4">
                         <div className="flex gap-2">
+                          <Link
+                            href={`/dashboard/strategies/${s.id}`}
+                            className="inline-flex items-center rounded-md border px-2.5 py-1 text-xs font-medium hover:bg-accent"
+                            data-testid={`admin-strategies-profile-link-${s.id}`}
+                          >
+                            Profile
+                          </Link>
                           <Button
                             size="sm"
                             variant="outline"
