@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 
 import { TradeEventNormalizationService } from './trade-event-normalization.service';
 import { TradeEventValidationService } from './trade-event-validation.service';
+import { TradeEventReadinessService } from './trade-event-readiness.service';
 import {
   RawBrokerTrade,
   TradeEvent,
@@ -16,16 +17,19 @@ const DEDUPE_CACHE_SIZE = 500;
 /**
  * Public entry point for broker listeners / pollers / manual entries.
  *
- * The intake service:
- *   1. Normalizes the raw broker payload into a canonical TradeEvent.
- *   2. De-duplicates against recently seen (broker, orderId, execId)
- *      triples so a broker re-broadcast never enters the pipeline
- *      twice. The dedupe cache is bounded (~last 500 events) and lives
- *      in-process only — this is intentional; a durable dedupe store
- *      is deferred to a later sprint per the "no persistence" rule.
- *   3. Validates the event via TradeEventValidationService.
- *   4. Records the result in a bounded recent-events buffer so the
- *      admin UI can render the "Trade Event Pipeline" panel.
+ * The intake service formalises the internal Trade Event pipeline that
+ * every executed master trade must traverse before the copy-trading
+ * engine may act on it:
+ *
+ *   Trade Event
+ *     ↓
+ *   Normalization          (broker payload → canonical TradeEvent)
+ *     ↓
+ *   Validation             (structured, pre-execution checks)
+ *     ↓
+ *   Execution Readiness    (are there downstream consumers to react?)
+ *     ↓
+ *   Available for downstream CopyTradingService (status = READY)
  *
  * The service intentionally DOES NOT:
  *   - Place broker orders.
@@ -34,7 +38,7 @@ const DEDUPE_CACHE_SIZE = 500;
  *   - Poll or subscribe to broker websockets.
  * Those responsibilities belong to future sprints; this sprint only
  * defines the intake contract so upstream listeners can call `ingest()`
- * uniformly.
+ * uniformly and downstream consumers can watch for READY records.
  */
 @Injectable()
 export class TradeEventIntakeService {
@@ -47,6 +51,7 @@ export class TradeEventIntakeService {
   constructor(
     private readonly normalization: TradeEventNormalizationService,
     private readonly validation: TradeEventValidationService,
+    private readonly readiness: TradeEventReadinessService,
   ) {}
 
   /**
@@ -68,46 +73,72 @@ export class TradeEventIntakeService {
 
     let event = outcome.event;
 
-    // 2) Dedupe on (broker, orderId, executionId)
+    // 2) Dedupe on (broker, orderId, executionId). Duplicates still
+    //    run through validation with `wasDuplicate=true` so the admin
+    //    monitor renders a consistent structured record (including the
+    //    not_duplicate check). Only the final status differs.
     const key = this.dedupeKey(event);
-    if (this.dedupe.has(key)) {
+    const wasDuplicate = this.dedupe.has(key);
+    if (!wasDuplicate) this.remember(key);
+
+    // 3) Validate
+    const validation = await this.validation.validate(event, { wasDuplicate });
+
+    if (wasDuplicate) {
       event = { ...event, status: TradeEventStatus.DUPLICATE };
       const record: TradeEventRecord = {
         event,
-        validation: null,
+        validation,
+        readiness: null,
         rejectionReason: 'Duplicate broker event ignored',
       };
       this.push(record);
       this.logger.log(`TradeEvent ${event.id} ignored — duplicate of ${key}`);
       return record;
     }
-    this.remember(key);
 
-    // 3) Validate
-    const validation = await this.validation.validate(event);
-    event = {
-      ...event,
-      status: validation.ok
-        ? TradeEventStatus.VALIDATED
-        : TradeEventStatus.REJECTED,
-    };
+    if (!validation.ok) {
+      event = { ...event, status: TradeEventStatus.REJECTED };
+      const record: TradeEventRecord = {
+        event,
+        validation,
+        readiness: null,
+        rejectionReason: validation.errors
+          .map((e) => `${e.key}: ${e.message}`)
+          .join('; '),
+      };
+      this.push(record);
+      this.logger.warn(
+        `TradeEvent ${event.id} rejected — ${record.rejectionReason}`,
+      );
+      return record;
+    }
+
+    // 4) Execution Readiness — foundation-only gate. Validated events
+    //    that have no downstream consumer stay at VALIDATED with
+    //    ready=false; anything else transitions to READY so downstream
+    //    services can pick it up.
+    event = { ...event, status: TradeEventStatus.VALIDATED };
+    const readiness = await this.readiness.assess(event, validation);
+    if (readiness.ready) {
+      event = { ...event, status: TradeEventStatus.READY };
+    }
 
     const record: TradeEventRecord = {
       event,
       validation,
-      rejectionReason: validation.ok
-        ? null
-        : validation.errors.map((e) => `${e.key}: ${e.message}`).join('; '),
+      readiness,
+      rejectionReason: null,
     };
     this.push(record);
 
-    if (validation.ok) {
+    if (readiness.ready) {
       this.logger.log(
-        `TradeEvent ${event.id} validated — ${event.broker} ${event.brokerSymbol} ${event.side} ${event.quantity}`,
+        `TradeEvent ${event.id} READY — ${event.broker} ${event.brokerSymbol} ${event.side} ${event.quantity}`,
       );
     } else {
-      this.logger.warn(
-        `TradeEvent ${event.id} rejected — ${record.rejectionReason}`,
+      this.logger.log(
+        `TradeEvent ${event.id} VALIDATED but not ready — ${readiness.reason ?? 'unknown'}`,
       );
     }
 
@@ -128,6 +159,18 @@ export class TradeEventIntakeService {
   }
 
   /**
+   * Read-only accessor for downstream consumers that want to react to
+   * ready-for-execution events without themselves having to walk the
+   * full buffer. Intentionally kept as a pull API — the intake service
+   * never pushes to downstream consumers in this foundation.
+   */
+  getReadyRecent(limit = 20): TradeEventRecord[] {
+    return this.getRecent(limit).filter(
+      (r) => r.event.status === TradeEventStatus.READY,
+    );
+  }
+
+  /**
    * Lightweight pipeline overview: counts per status across the
    * currently-buffered records (bounded window, so this is a rolling
    * summary, not a lifetime aggregate).
@@ -137,6 +180,7 @@ export class TradeEventIntakeService {
       [TradeEventStatus.RECEIVED]: 0,
       [TradeEventStatus.NORMALIZED]: 0,
       [TradeEventStatus.VALIDATED]: 0,
+      [TradeEventStatus.READY]: 0,
       [TradeEventStatus.DUPLICATE]: 0,
       [TradeEventStatus.REJECTED]: 0,
     };
@@ -200,11 +244,20 @@ export class TradeEventIntakeService {
       side: 'BUY',
       quantity: 0,
       price: null,
+      rawStatus:
+        raw?.rawStatus === undefined || raw?.rawStatus === null
+          ? null
+          : String(raw.rawStatus),
       status: TradeEventStatus.REJECTED,
       brokerTimestamp: null,
       receivedAt: nowIso,
       raw: raw?.raw ?? raw,
     };
-    return { event, validation: null, rejectionReason: reason };
+    return {
+      event,
+      validation: null,
+      readiness: null,
+      rejectionReason: reason,
+    };
   }
 }

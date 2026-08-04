@@ -178,6 +178,7 @@ export type TradeEventStatus =
   | 'RECEIVED'
   | 'NORMALIZED'
   | 'VALIDATED'
+  | 'READY'
   | 'DUPLICATE'
   | 'REJECTED';
 
@@ -190,6 +191,9 @@ export type TradeEventSource =
 
 export type TradeEventValidationKey =
   | 'shape_valid'
+  | 'mandatory_fields_present'
+  | 'supported_broker'
+  | 'supported_trade_status'
   | 'master_account_exists'
   | 'master_account_connected'
   | 'broker_session_healthy'
@@ -211,6 +215,24 @@ export interface TradeEventValidationResult {
   validatedAt: string;
 }
 
+export type TradeEventReadinessKey =
+  | 'validation_passed'
+  | 'has_enabled_followers';
+
+export interface TradeEventReadinessCheck {
+  key: TradeEventReadinessKey;
+  ok: boolean;
+  message: string;
+}
+
+export interface TradeEventReadinessResult {
+  ready: boolean;
+  checks: TradeEventReadinessCheck[];
+  errors: TradeEventReadinessCheck[];
+  reason: string | null;
+  assessedAt: string;
+}
+
 export interface TradeEvent {
   id: string;
   source: TradeEventSource;
@@ -225,6 +247,7 @@ export interface TradeEvent {
   side: 'BUY' | 'SELL';
   quantity: number;
   price: number | null;
+  rawStatus: string | null;
   status: TradeEventStatus;
   brokerTimestamp: string | null;
   receivedAt: string;
@@ -234,6 +257,7 @@ export interface TradeEvent {
 export interface TradeEventRecord {
   event: TradeEvent;
   validation: TradeEventValidationResult | null;
+  readiness: TradeEventReadinessResult | null;
   rejectionReason: string | null;
 }
 
@@ -503,6 +527,10 @@ export const api = {
       recent: (limit = 20) =>
         request<{ items: TradeEventRecord[] }>(
           `/admin/trade-events/recent?limit=${limit}`,
+        ),
+      ready: (limit = 20) =>
+        request<{ items: TradeEventRecord[] }>(
+          `/admin/trade-events/ready?limit=${limit}`,
         ),
       latest: () =>
         request<{ record: TradeEventRecord | null }>(

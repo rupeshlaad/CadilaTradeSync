@@ -527,6 +527,7 @@ const TRADE_EVENT_STATUS_VARIANTS: Record<
   RECEIVED: 'outline',
   NORMALIZED: 'secondary',
   VALIDATED: 'success',
+  READY: 'success',
   DUPLICATE: 'warning',
   REJECTED: 'destructive',
 };

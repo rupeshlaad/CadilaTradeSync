@@ -6,6 +6,7 @@ import { StrategyExecutionModule } from '../strategy-execution/strategy-executio
 
 import { TradeEventNormalizationService } from './trade-event-normalization.service';
 import { TradeEventValidationService } from './trade-event-validation.service';
+import { TradeEventReadinessService } from './trade-event-readiness.service';
 import { TradeEventIntakeService } from './trade-event-intake.service';
 import { TradeEventIntakeController } from './trade-event-intake.controller';
 
@@ -15,11 +16,13 @@ import { TradeEventIntakeController } from './trade-event-intake.controller';
   providers: [
     TradeEventNormalizationService,
     TradeEventValidationService,
+    TradeEventReadinessService,
     TradeEventIntakeService,
   ],
   exports: [
     TradeEventNormalizationService,
     TradeEventValidationService,
+    TradeEventReadinessService,
     TradeEventIntakeService,
   ],
 })
