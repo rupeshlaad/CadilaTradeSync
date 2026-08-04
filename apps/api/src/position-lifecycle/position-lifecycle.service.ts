@@ -73,6 +73,15 @@ export class PositionLifecycleService {
     context: {
       broker: Broker;
       tradingAccountId: string;
+      /**
+       * Optional trade-source label forwarded to CopyTradingService
+       * when the manager delegates a fresh COMPLETE_FILL. Defaults to
+       * `BROKER_POLL` for the master-watcher path; the manual-trading
+       * pipeline passes `MANUAL` so the same fan-out lands in the
+       * execution-history audit trail tagged as an admin-initiated
+       * trade.
+       */
+      tradeSource?: string;
     },
     rawOrder: unknown,
   ): Promise<LifecycleIngestOutcome> {
@@ -173,7 +182,11 @@ export class PositionLifecycleService {
     );
 
     // Dispatch the follower-side action for the accepted lifecycle event.
-    let followerSync = await this.dispatchFollowers(event, record);
+    let followerSync = await this.dispatchFollowers(
+      event,
+      record,
+      context.tradeSource,
+    );
 
     // Persist per-follower outcome as additional timeline entries so
     // the Trade Monitor detail page can render them without joining
@@ -238,6 +251,7 @@ export class PositionLifecycleService {
   private async dispatchFollowers(
     event: LifecycleEvent,
     position: ReturnType<PositionRegistryService['applyEvent']>,
+    tradeSource?: string,
   ) {
     switch (event.type) {
       case LifecycleEventType.COMPLETE_FILL:
@@ -261,6 +275,7 @@ export class PositionLifecycleService {
           timestamp: event.brokerUpdatedAt
             ? new Date(event.brokerUpdatedAt)
             : new Date(),
+          source: tradeSource,
         });
         // The recorder subscription in PositionRegistryService will
         // correlate follower broker order ids into this position

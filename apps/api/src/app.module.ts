@@ -23,6 +23,7 @@ import { StrategyExecutionModule } from './strategy-execution/strategy-execution
 import { TradeEventsModule } from './trade-events/trade-events.module';
 import { ExecutionHistoryModule } from './execution-history/execution-history.module';
 import { PositionLifecycleModule } from './position-lifecycle/position-lifecycle.module';
+import { ManualTradingModule } from './manual-trading/manual-trading.module';
 
 @Module({
   imports: [
@@ -53,6 +54,7 @@ import { PositionLifecycleModule } from './position-lifecycle/position-lifecycle
     TradeEventsModule,
     ExecutionHistoryModule,
     PositionLifecycleModule,
+    ManualTradingModule,
   ],
 })
 export class AppModule {}

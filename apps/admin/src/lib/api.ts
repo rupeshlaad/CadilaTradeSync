@@ -521,6 +521,106 @@ export interface PositionLifecycleListResponse {
   items: PositionLifecycleSummary[];
 }
 
+// ---------------------------------------------------------------------------
+// Sprint 5.4 — Manual Trade Execution.
+// Types mirror apps/api/src/manual-trading/manual-trade.types.ts
+// ---------------------------------------------------------------------------
+
+export type ManualTradeStatus =
+  | 'PENDING'
+  | 'ACCEPTED'
+  | 'REJECTED'
+  | 'EXECUTING_FOLLOWERS'
+  | 'COMPLETED'
+  | 'PARTIAL'
+  | 'FAILED';
+
+export type ManualTradeSide = 'BUY' | 'SELL';
+export type ManualTradeOrderType = 'MARKET' | 'LIMIT' | 'SL' | 'SL-M';
+export type ManualTradeProduct = 'CNC' | 'MIS' | 'NRML';
+export type ManualTradeValidity = 'DAY' | 'IOC';
+
+export type ManualTradeValidationKey =
+  | 'master_account_exists'
+  | 'master_account_connected'
+  | 'broker_session_healthy'
+  | 'strategy_active'
+  | 'strategy_belongs_to_master'
+  | 'strategy_has_enabled_followers'
+  | 'instrument_exists'
+  | 'broker_symbol_mapping_exists'
+  | 'required_fields_present';
+
+export interface ManualTradeValidationCheck {
+  key: ManualTradeValidationKey;
+  ok: boolean;
+  message: string;
+}
+
+export interface ManualTradeValidationResult {
+  ok: boolean;
+  checks: ManualTradeValidationCheck[];
+  errors: ManualTradeValidationCheck[];
+  validatedAt: string;
+}
+
+export interface ManualTradeFollowerOutcome {
+  followerId: string;
+  followerEmail: string;
+  broker: string;
+  status: 'PENDING' | 'EXECUTING' | 'SUCCESS' | 'FAILED' | 'SKIPPED';
+  failureType: string | null;
+  reason: string | null;
+  followerSymbol: string | null;
+  quantity: number | null;
+  brokerOrderId: string | null;
+}
+
+export interface ManualTradeRecord {
+  id: string;
+  masterAccountId: string;
+  masterAccountName: string | null;
+  strategyId: string;
+  strategyName: string | null;
+  broker: Broker;
+  exchange: string;
+  symbol: string;
+  side: ManualTradeSide;
+  orderType: ManualTradeOrderType;
+  quantity: number;
+  product: ManualTradeProduct;
+  price: number | null;
+  triggerPrice: number | null;
+  validity: ManualTradeValidity;
+  status: ManualTradeStatus;
+  brokerOrderId: string | null;
+  brokerResponse: unknown | null;
+  rejectionReason: string | null;
+  validation: ManualTradeValidationResult;
+  executionEventId: string | null;
+  followersFound: number;
+  followers: ManualTradeFollowerOutcome[];
+  successfulFollowers: number;
+  failedFollowers: number;
+  skippedFollowers: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PlaceManualTradePayload {
+  masterAccountId: string;
+  strategyId: string;
+  exchange: string;
+  symbol: string;
+  side: ManualTradeSide;
+  orderType: ManualTradeOrderType;
+  quantity: number;
+  product: ManualTradeProduct;
+  price?: number;
+  triggerPrice?: number;
+  validity?: ManualTradeValidity;
+}
+
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
 const TOKEN_KEY = 'cts_admin_access_token';
 
@@ -836,6 +936,22 @@ export const api = {
       position: (key: string) =>
         request<PositionLifecycleDetail>(
           `/admin/position-lifecycle/positions/${encodeURIComponent(key)}`,
+        ),
+    },
+
+    manualTrading: {
+      place: (payload: PlaceManualTradePayload) =>
+        request<ManualTradeRecord>(`/admin/manual-trading/place`, {
+          method: 'POST',
+          body: JSON.stringify(payload),
+        }),
+      recent: (limit = 20) =>
+        request<{ items: ManualTradeRecord[] }>(
+          `/admin/manual-trading/recent?limit=${limit}`,
+        ),
+      byId: (id: string) =>
+        request<ManualTradeRecord>(
+          `/admin/manual-trading/${encodeURIComponent(id)}`,
         ),
     },
   },
