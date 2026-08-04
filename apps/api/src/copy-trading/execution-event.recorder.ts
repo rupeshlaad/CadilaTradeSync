@@ -76,6 +76,7 @@ export class ExecutionEventRecorderService {
       masterAccountId: seed.masterAccountId,
       masterAccountNickname: seed.masterAccountNickname,
       broker: seed.broker,
+      masterBrokerOrderId: seed.orderId,
       symbol: seed.symbol,
       side: seed.side,
       quantity: seed.quantity,

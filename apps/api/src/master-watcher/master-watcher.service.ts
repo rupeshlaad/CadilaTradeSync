@@ -6,20 +6,17 @@ import {
 import { PrismaService } from '../prisma/prisma.module';
 import { EncryptionService } from '../encryption/encryption.service';
 import { ZerodhaAdapter } from '../brokers/zerodha/zerodha.adapter';
-import { CopyTradingService } from '../copy-trading/copy-trading.service';
+import { PositionLifecycleService } from '../position-lifecycle/position-lifecycle.service';
 import { AccountType, Broker } from '@prisma/client';
-import type { TradeEvent } from '../copy-trading/dto/trade-event.dto';
 
 @Injectable()
 export class MasterWatcherService implements OnModuleInit {
   private readonly logger = new Logger(MasterWatcherService.name);
 
-  private readonly seenOrders = new Map<string, Set<string>>();
-
   constructor(
     private readonly prisma: PrismaService,
     private readonly encryption: EncryptionService,
-    private readonly copyTrading: CopyTradingService,
+    private readonly lifecycle: PositionLifecycleService,
   ) {}
 
   onModuleInit() {
@@ -98,44 +95,19 @@ export class MasterWatcherService implements OnModuleInit {
       return;
     }
 
-    let cache = this.seenOrders.get(tradingAccountId);
-
-    if (!cache) {
-      cache = new Set<string>();
-      this.seenOrders.set(tradingAccountId, cache);
-    }
-
+    // Sprint 5.3 — every broker order (regardless of status) is
+    // forwarded to the position-lifecycle manager. The manager owns
+    // deduplication (via the position registry's signature gate),
+    // state-machine validation, and the fan-out decision:
+    //   - a fresh COMPLETE_FILL still triggers CopyTradingService,
+    //     preserving pre-lifecycle entry-trade behaviour.
+    //   - modifications, cancellations and exits go through the
+    //     synchronization engine and are audited in execution_history.
     for (const order of orders) {
-      // Only completed orders
-      if (order.status !== 'COMPLETE') {
-        continue;
-      }
-
-      // Ignore duplicates
-      if (cache.has(order.order_id)) {
-        continue;
-      }
-
-      cache.add(order.order_id);
-
-      this.logger.log(
-        `MASTER ORDER ${order.transaction_type} ${order.tradingsymbol}`,
+      await this.lifecycle.ingest(
+        { broker: Broker.ZERODHA, tradingAccountId },
+        order,
       );
-
-      await this.copyTrading.handleTrade({
-        broker: 'ZERODHA',
-        tradingAccountId,
-        orderId: order.order_id,
-        exchange: order.exchange,
-        symbol: order.tradingsymbol,
-        side: order.transaction_type,
-        quantity: order.quantity,
-        orderType: order.order_type,
-        product: order.product,
-        price: Number(order.average_price ?? order.price ?? 0),
-        status: order.status,
-        timestamp: new Date(order.exchange_timestamp ?? Date.now()),
-      });
     }
   }
 }

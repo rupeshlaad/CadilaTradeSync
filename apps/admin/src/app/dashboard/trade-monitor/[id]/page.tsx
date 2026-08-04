@@ -26,6 +26,8 @@ import {
   api,
   type ExecutionHistoryDetail,
   type ExecutionHistoryFollowerRow,
+  type PositionLifecycleDetail,
+  type PositionLifecycleState,
 } from '@/lib/api';
 
 // ---------------------------------------------------------------------------
@@ -92,6 +94,9 @@ export default function ExecutionDetailPage() {
   const id = params?.id ?? '';
 
   const [detail, setDetail] = useState<ExecutionHistoryDetail | null>(null);
+  const [lifecycle, setLifecycle] = useState<PositionLifecycleDetail | null>(
+    null,
+  );
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -102,6 +107,20 @@ export default function ExecutionDetailPage() {
     try {
       const d = await api.admin.executionHistory.byId(id);
       setDetail(d);
+
+      // Best-effort lifecycle lookup — a position may not be tracked
+      // (e.g. no broker order id, or the process was restarted). The
+      // controller falls back to a brokerOrderId lookup so the id we
+      // have from execution_history is enough when it exists.
+      const followerBrokerOrderId =
+        d.followers.find((f) => !!f.brokerOrderId)?.brokerOrderId ?? null;
+      const lookupKey = followerBrokerOrderId ?? d.id;
+      try {
+        const l = await api.admin.positionLifecycle.position(lookupKey);
+        setLifecycle(l);
+      } catch {
+        setLifecycle(null);
+      }
     } catch (e: any) {
       setError(e?.message ?? 'Failed to load execution');
     } finally {
@@ -155,6 +174,8 @@ export default function ExecutionDetailPage() {
       ) : (
         <div className="space-y-6">
           <SummaryStrip detail={detail} />
+
+          {lifecycle && <PositionLifecycleCard lifecycle={lifecycle} />}
 
           <div className="grid gap-6 lg:grid-cols-3">
             <MasterTradeCard detail={detail} />
@@ -514,6 +535,167 @@ function Row({
         {value}
       </div>
     </div>
+  );
+}
+
+function lifecycleStateVariant(state: PositionLifecycleState): BadgeVariant {
+  switch (state) {
+    case 'OPEN':
+    case 'PENDING':
+      return 'success';
+    case 'PARTIALLY_FILLED':
+    case 'EXITING':
+      return 'warning';
+    case 'CANCELLED':
+    case 'REJECTED':
+      return 'destructive';
+    case 'CLOSED':
+      return 'muted';
+    default:
+      return 'outline';
+  }
+}
+
+function PositionLifecycleCard({
+  lifecycle,
+}: {
+  lifecycle: PositionLifecycleDetail;
+}) {
+  const timeline = [...lifecycle.timeline].sort((a, b) =>
+    a.at < b.at ? -1 : a.at > b.at ? 1 : 0,
+  );
+  return (
+    <Card data-testid="position-lifecycle-card">
+      <CardHeader>
+        <div className="flex items-start justify-between gap-4 flex-wrap">
+          <div>
+            <CardTitle className="text-base">Position Lifecycle</CardTitle>
+            <CardDescription>
+              Sprint 5.3 — synchronized master → follower lifecycle timeline
+            </CardDescription>
+          </div>
+          <div className="flex items-center gap-2">
+            <Badge
+              variant={lifecycleStateVariant(lifecycle.state)}
+              data-testid="position-lifecycle-state"
+            >
+              {lifecycle.state.replace(/_/g, ' ')}
+            </Badge>
+            <Badge variant="outline" className="font-mono text-[11px]">
+              {lifecycle.broker} · {lifecycle.brokerOrderId}
+            </Badge>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="grid gap-4 lg:grid-cols-2">
+          <div className="space-y-2 text-sm">
+            <Row label="Symbol" value={lifecycle.symbol} />
+            <Row label="Side" value={lifecycle.side} />
+            <Row
+              label="Quantity"
+              value={`${lifecycle.filledQuantity}/${lifecycle.quantity} filled · ${lifecycle.pendingQuantity} pending`}
+            />
+            <Row
+              label="Price / Trigger"
+              value={`${lifecycle.price ?? '—'} · ${
+                lifecycle.triggerPrice ?? '—'
+              }`}
+            />
+            <Row label="Order type" value={lifecycle.orderType ?? '—'} />
+            <Row label="Product" value={lifecycle.productType ?? '—'} />
+            <Row label="Opened" value={fmtTime(lifecycle.createdAt)} />
+            <Row label="Updated" value={fmtTime(lifecycle.updatedAt)} />
+            {lifecycle.closedAt && (
+              <Row label="Closed" value={fmtTime(lifecycle.closedAt)} />
+            )}
+            <Row
+              label="Followers tracked"
+              value={String(lifecycle.followerCount)}
+            />
+          </div>
+
+          <div>
+            <div className="text-xs uppercase tracking-wide text-muted-foreground mb-2">
+              Follower orders
+            </div>
+            {lifecycle.followers.length === 0 ? (
+              <div className="text-sm text-muted-foreground">
+                No follower orders have been linked to this position yet.
+              </div>
+            ) : (
+              <div className="divide-y rounded-md border">
+                {lifecycle.followers.map((f) => (
+                  <div
+                    key={`${f.followerAccountId}-${f.brokerOrderId}`}
+                    className="p-3 space-y-1 text-xs"
+                    data-testid={`lifecycle-follower-${f.followerAccountId}`}
+                  >
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                      <div className="font-medium text-sm">
+                        {f.followerEmail ?? f.followerAccountId}
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <Badge variant="outline">{f.broker}</Badge>
+                        <Badge
+                          variant={f.lastActionOk ? 'success' : 'destructive'}
+                        >
+                          {f.lastAction}
+                        </Badge>
+                      </div>
+                    </div>
+                    <div className="text-muted-foreground">
+                      order id{' '}
+                      <span className="font-mono">{f.brokerOrderId}</span>
+                      {f.followerSymbol && (
+                        <>
+                          {' · '}mapped{' '}
+                          <span className="font-mono">{f.followerSymbol}</span>
+                        </>
+                      )}
+                      {f.quantity !== null && <> · qty {f.quantity}</>}
+                    </div>
+                    <div className="text-muted-foreground">
+                      last {fmtTime(f.lastActionAt)}
+                      {f.lastActionMessage && <> · {f.lastActionMessage}</>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div>
+          <div className="text-xs uppercase tracking-wide text-muted-foreground mb-2">
+            Lifecycle timeline
+          </div>
+          {timeline.length === 0 ? (
+            <div className="text-sm text-muted-foreground">
+              No lifecycle events recorded.
+            </div>
+          ) : (
+            <ol
+              className="relative border-l pl-4 space-y-3"
+              data-testid="position-lifecycle-timeline"
+            >
+              {timeline.map((t, i) => (
+                <li key={`${t.at}-${i}`} className="ml-2">
+                  <div className="absolute -left-1.5 mt-1.5 h-3 w-3 rounded-full border bg-background" />
+                  <div className="text-xs uppercase tracking-wide text-muted-foreground">
+                    {t.kind.replace(/_/g, ' ')}
+                  </div>
+                  <div className="text-sm">{t.label}</div>
+                  <div className="text-[11px] text-muted-foreground">
+                    {fmtTime(t.at)}
+                  </div>
+                </li>
+              ))}
+            </ol>
+          )}
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 

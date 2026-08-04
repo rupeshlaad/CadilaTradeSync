@@ -59,11 +59,16 @@ export class FyersAdapter implements BrokerAdapter {
   }
 
   async modifyOrder(orderId: string, order: any) {
-    throw new Error('Not implemented');
+    // Fyers modify_order accepts a single payload that embeds the
+    // order id via `id`. Callers pass the id both as the first
+    // argument (matching the BrokerAdapter interface used by
+    // ZerodhaAdapter) and inside `order.id`; we accept either.
+    const payload = order?.id ? order : { ...order, id: orderId };
+    return this.fyers.modify_order(payload);
   }
 
   async cancelOrder(orderId: string) {
-    throw new Error('Not implemented');
+    return this.fyers.cancel_order({ id: orderId });
   }
 
   async getOrders() {
