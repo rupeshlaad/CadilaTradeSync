@@ -10,6 +10,15 @@ import {
   ManualTradeValidationResult,
 } from './manual-trade.types';
 import { PlaceManualTradeDto } from './manual-trade.dto';
+import {
+  InstrumentContext,
+  isOrderTypeAllowed,
+  isProductAllowed,
+  getAllowedOrderTypes,
+  getAllowedProducts,
+  supportsMarketProtection,
+  validateMarketProtection,
+} from './broker-rules';
 
 /**
  * Sprint 5.4 — Pre-flight validation for a manual trade request.
@@ -220,6 +229,7 @@ export class ManualTradeValidatorService {
     // 8) Instrument exists + 9) Broker symbol mapping exists
     let instrumentOk = false;
     let mappingOk = false;
+    let instrumentContext: InstrumentContext | null = null;
     if (master) {
       const mapping = await this.resolver.resolveByBrokerSymbol(
         master.broker,
@@ -241,6 +251,14 @@ export class ManualTradeValidatorService {
           ? `Broker symbol mapping present on ${master.broker}`
           : `No InstrumentBroker mapping for ${master.broker} / "${dto.symbol}" — run an instrument import first`,
       });
+      if (mapping) {
+        instrumentContext = {
+          broker: master.broker,
+          exchange: mapping.instrument.exchange,
+          segment: mapping.instrument.segment,
+          instrumentType: mapping.instrument.instrumentType,
+        };
+      }
     } else {
       checks.push({
         key: 'instrument_exists',
@@ -251,6 +269,68 @@ export class ManualTradeValidatorService {
         key: 'broker_symbol_mapping_exists',
         ok: false,
         message: 'Skipped — master account not found',
+      });
+    }
+
+    // 10) Broker-aware validity of product / order type / market
+    //     protection. Sprint 5.4.2: prevent broker-rejected
+    //     combinations up-front whenever the instrument context is
+    //     known. When the mapping could not be resolved the checks
+    //     surface as "skipped" so the operator sees the failure at
+    //     the correct upstream stage.
+    if (instrumentContext && master) {
+      const productOk = isProductAllowed(instrumentContext, dto.product);
+      checks.push({
+        key: 'product_allowed_for_instrument',
+        ok: productOk,
+        message: productOk
+          ? `Product ${dto.product} is allowed on ${instrumentContext.segment} for ${master.broker}`
+          : `Product ${dto.product} is not accepted on ${instrumentContext.segment} — allowed: ${getAllowedProducts(instrumentContext).join(', ')}`,
+      });
+
+      const orderTypeOk = isOrderTypeAllowed(
+        instrumentContext,
+        dto.orderType,
+      );
+      checks.push({
+        key: 'order_type_allowed_for_instrument',
+        ok: orderTypeOk,
+        message: orderTypeOk
+          ? `Order type ${dto.orderType} is allowed on ${instrumentContext.segment} for ${master.broker}`
+          : `Order type ${dto.orderType} is not accepted on ${instrumentContext.segment} — allowed: ${getAllowedOrderTypes(instrumentContext).join(', ')}`,
+      });
+
+      const mpResult = validateMarketProtection(
+        instrumentContext,
+        dto.orderType,
+        dto.marketProtection,
+      );
+      const mpApplies =
+        supportsMarketProtection(master.broker) && dto.orderType === 'MARKET';
+      checks.push({
+        key: 'market_protection_valid',
+        ok: mpResult.ok,
+        message: mpResult.ok
+          ? mpApplies
+            ? `Market protection = ${dto.marketProtection ?? 'AUTO'}`
+            : 'N/A for this broker / order type'
+          : mpResult.message,
+      });
+    } else {
+      checks.push({
+        key: 'product_allowed_for_instrument',
+        ok: false,
+        message: 'Skipped — instrument mapping not resolved',
+      });
+      checks.push({
+        key: 'order_type_allowed_for_instrument',
+        ok: false,
+        message: 'Skipped — instrument mapping not resolved',
+      });
+      checks.push({
+        key: 'market_protection_valid',
+        ok: false,
+        message: 'Skipped — instrument mapping not resolved',
       });
     }
 

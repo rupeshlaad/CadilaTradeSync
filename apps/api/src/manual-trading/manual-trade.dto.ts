@@ -77,4 +77,13 @@ export class PlaceManualTradeDto {
   @IsOptional()
   @IsIn(['DAY', 'IOC'])
   validity?: 'DAY' | 'IOC';
+
+  /**
+   * Sprint 5.4.2 — Zerodha-only Market Protection selector for
+   * MARKET orders. Ignored (and rejected by the pre-flight
+   * validator) for any other broker/order-type combination.
+   */
+  @IsOptional()
+  @IsIn(['AUTO', 'P2', 'P5', 'P10', 'NONE'])
+  marketProtection?: 'AUTO' | 'P2' | 'P5' | 'P10' | 'NONE';
 }

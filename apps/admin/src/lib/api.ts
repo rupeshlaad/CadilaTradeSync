@@ -564,6 +564,8 @@ export type ManualTradeSide = 'BUY' | 'SELL';
 export type ManualTradeOrderType = 'MARKET' | 'LIMIT' | 'SL' | 'SL-M';
 export type ManualTradeProduct = 'CNC' | 'MIS' | 'NRML';
 export type ManualTradeValidity = 'DAY' | 'IOC';
+/** Sprint 5.4.2 — Zerodha MARKET-order Market-Protection selector. */
+export type ManualTradeMarketProtection = 'AUTO' | 'P2' | 'P5' | 'P10' | 'NONE';
 
 export type ManualTradeValidationKey =
   | 'master_account_exists'
@@ -574,7 +576,10 @@ export type ManualTradeValidationKey =
   | 'strategy_has_enabled_followers'
   | 'instrument_exists'
   | 'broker_symbol_mapping_exists'
-  | 'required_fields_present';
+  | 'required_fields_present'
+  | 'product_allowed_for_instrument'
+  | 'order_type_allowed_for_instrument'
+  | 'market_protection_valid';
 
 export interface ManualTradeValidationCheck {
   key: ManualTradeValidationKey;
@@ -617,6 +622,8 @@ export interface ManualTradeRecord {
   price: number | null;
   triggerPrice: number | null;
   validity: ManualTradeValidity;
+  /** Sprint 5.4.2 — Populated only for Zerodha MARKET orders. */
+  marketProtection: ManualTradeMarketProtection | null;
   status: ManualTradeStatus;
   brokerOrderId: string | null;
   brokerResponse: unknown | null;
@@ -648,6 +655,8 @@ export interface PlaceManualTradePayload {
   price?: number;
   triggerPrice?: number;
   validity?: ManualTradeValidity;
+  /** Sprint 5.4.2 — Zerodha MARKET orders only. */
+  marketProtection?: ManualTradeMarketProtection;
 }
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
