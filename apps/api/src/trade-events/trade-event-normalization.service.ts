@@ -90,6 +90,10 @@ export class TradeEventNormalizationService {
         : null;
 
     const brokerTimestamp = this.coerceIsoTimestamp(raw.brokerTimestamp);
+    const rawStatus =
+      raw.rawStatus === undefined || raw.rawStatus === null
+        ? null
+        : String(raw.rawStatus).trim() || null;
 
     // ---- best-effort resolution ------------------------------------------
     let instrumentId: string | null = null;
@@ -149,6 +153,7 @@ export class TradeEventNormalizationService {
       side,
       quantity,
       price,
+      rawStatus,
       status: TradeEventStatus.NORMALIZED,
       brokerTimestamp,
       receivedAt: new Date().toISOString(),

@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { ConnectionStatus } from '@prisma/client';
+import { Broker, ConnectionStatus } from '@prisma/client';
 
 import { PrismaService } from '../prisma/prisma.module';
 import { BrokerService } from '../brokers/broker.service';
@@ -11,6 +11,47 @@ import {
   TradeEventValidationCheck,
   TradeEventValidationResult,
 } from './trade-event';
+
+/**
+ * Brokers that CTS currently supports as MASTER accounts. Kept in sync
+ * with the broker adapters wired into AppModule (ZERODHA, FYERS,
+ * SHOONYA). Extending this list is a broker-integration concern and is
+ * intentionally decoupled from the Broker Prisma enum which also
+ * carries brokers that only exist as future placeholders.
+ */
+export const SUPPORTED_MASTER_BROKERS: ReadonlySet<Broker> = new Set([
+  Broker.ZERODHA,
+  Broker.FYERS,
+  Broker.SHOONYA,
+]);
+
+/**
+ * Broker-side terminal statuses that indicate an actually-executed
+ * trade. Everything else (OPEN, TRIGGER_PENDING, CANCELLED, REJECTED,
+ * PARTIAL_FILLED, ...) is not eligible for downstream copy execution
+ * from the perspective of this foundation.
+ *
+ * Comparison is case-insensitive. Numeric statuses from Fyers (e.g.
+ * "2" = Filled) are also accepted.
+ */
+export const SUPPORTED_TRADE_STATUSES: ReadonlySet<string> = new Set([
+  'COMPLETE',
+  'COMPLETED',
+  'FILLED',
+  'EXECUTED',
+  'TRADED',
+  '2', // Fyers: filled
+]);
+
+export interface TradeEventValidationOptions {
+  /**
+   * Hint from the intake pipeline: was this event a duplicate of a
+   * recently-seen (broker, orderId, executionId) triple? Surfaced as
+   * the `not_duplicate` validation check so the admin monitor renders
+   * a consistent structured result even for de-duplicated events.
+   */
+  wasDuplicate?: boolean;
+}
 
 /**
  * Runs the pre-execution checks that gate whether a normalized
@@ -30,10 +71,69 @@ export class TradeEventValidationService {
     private readonly execution: StrategyExecutionService,
   ) {}
 
-  async validate(event: TradeEvent): Promise<TradeEventValidationResult> {
+  async validate(
+    event: TradeEvent,
+    opts: TradeEventValidationOptions = {},
+  ): Promise<TradeEventValidationResult> {
     const checks: TradeEventValidationCheck[] = [];
 
-    // 1) Master account exists
+    // 1) Mandatory fields present. Normalization already rejects most
+    //    shape errors, but surfacing this explicitly gives the admin
+    //    UI a stable slot in the pipeline view and defends against a
+    //    caller that constructs a TradeEvent directly (e.g. a future
+    //    manual entry path) instead of going through normalization.
+    const missing: string[] = [];
+    if (!event.masterAccountId) missing.push('masterAccountId');
+    if (!event.brokerOrderId) missing.push('brokerOrderId');
+    if (!event.brokerSymbol) missing.push('brokerSymbol');
+    if (!event.side) missing.push('side');
+    if (!(event.quantity > 0)) missing.push('quantity');
+    checks.push({
+      key: 'mandatory_fields_present',
+      ok: missing.length === 0,
+      message:
+        missing.length === 0
+          ? 'All mandatory trade fields are present'
+          : `Missing mandatory field(s): ${missing.join(', ')}`,
+    });
+
+    // 2) Supported broker. Rejects events for brokers that have no
+    //    adapter wired into CTS yet, before we start hitting Prisma /
+    //    session health for a broker we can't act on downstream.
+    const brokerSupported = SUPPORTED_MASTER_BROKERS.has(event.broker);
+    checks.push({
+      key: 'supported_broker',
+      ok: brokerSupported,
+      message: brokerSupported
+        ? `Broker ${event.broker} is supported as a master`
+        : `Broker ${event.broker} is not supported as a master (no adapter wired)`,
+    });
+
+    // 3) Supported trade status. Optional — if the source listener did
+    //    not forward a status the check is a no-op pass, preserving
+    //    backward compatibility with existing broker integrations that
+    //    already pre-filter to COMPLETE before calling into the intake
+    //    service (see MasterWatcherService).
+    if (event.rawStatus === null) {
+      checks.push({
+        key: 'supported_trade_status',
+        ok: true,
+        message: 'No broker-side status forwarded — check skipped',
+      });
+    } else {
+      const statusOk = SUPPORTED_TRADE_STATUSES.has(
+        event.rawStatus.toUpperCase(),
+      );
+      checks.push({
+        key: 'supported_trade_status',
+        ok: statusOk,
+        message: statusOk
+          ? `Broker-side status "${event.rawStatus}" is a supported terminal status`
+          : `Broker-side status "${event.rawStatus}" is not a supported terminal status`,
+      });
+    }
+
+    // 4) Master account exists
     const account = await this.prisma.tradingAccount.findUnique({
       where: { id: event.masterAccountId },
     });
@@ -45,7 +145,7 @@ export class TradeEventValidationService {
         : `Master account ${event.masterAccountId} not found`,
     });
 
-    // 2) Master account connected — enabled + accountType MASTER + broker match
+    // 5) Master account connected — enabled + accountType MASTER + broker match
     if (account) {
       const connected =
         account.enabled === true &&
@@ -66,7 +166,7 @@ export class TradeEventValidationService {
       });
     }
 
-    // 3) Broker session healthy
+    // 6) Broker session healthy
     if (account) {
       try {
         const health = await this.brokerService.getSessionHealth(account.id);
@@ -98,7 +198,7 @@ export class TradeEventValidationService {
       });
     }
 
-    // 4) Strategy exists (resolved during normalization)
+    // 7) Strategy exists (resolved during normalization)
     let strategyRow: { id: string; enabled: boolean; status: string } | null = null;
     if (event.strategyId) {
       strategyRow = await this.prisma.strategy.findUnique({
@@ -116,7 +216,7 @@ export class TradeEventValidationService {
         : 'No strategy is linked to the master account for this trade',
     });
 
-    // 5) Strategy RUNNING — resolved via the in-memory execution engine.
+    // 8) Strategy RUNNING — resolved via the in-memory execution engine.
     //    A strategy is "running" for the purposes of accepting trade events
     //    only when the execution state machine says RUNNING. PAUSED /
     //    READY / STOPPED / ERROR all fail this check by design — the
@@ -140,7 +240,7 @@ export class TradeEventValidationService {
       });
     }
 
-    // 6) Instrument mapping available
+    // 9) Instrument mapping available
     //    Normalization already attempts to attach instrumentId; if it
     //    is null, either the broker's universe hasn't been imported or
     //    the symbol simply doesn't exist. Either way the pipeline
@@ -152,6 +252,19 @@ export class TradeEventValidationService {
       message: mappingOk
         ? `Instrument mapping resolved (${event.contractKey ?? event.instrumentId})`
         : `No InstrumentBroker mapping for ${event.broker} ${event.brokerSymbol}`,
+    });
+
+    // 10) Duplicate detection. The intake service dedupes on
+    //     (broker, orderId, executionId) and passes the outcome in via
+    //     opts.wasDuplicate so this check reflects the pipeline-level
+    //     decision without validation itself keeping state.
+    const notDup = !opts.wasDuplicate;
+    checks.push({
+      key: 'not_duplicate',
+      ok: notDup,
+      message: notDup
+        ? 'Event is not a duplicate of a recently seen broker event'
+        : 'Duplicate of a recently seen (broker, orderId, executionId) event',
     });
 
     const errors = checks.filter((c) => !c.ok);

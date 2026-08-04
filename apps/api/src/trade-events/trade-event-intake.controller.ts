@@ -32,6 +32,14 @@ export class TradeEventIntakeController {
     };
   }
 
+  @Get('ready')
+  ready(@Query('limit') limit?: string) {
+    const n = limit ? Number(limit) : 20;
+    return {
+      items: this.intake.getReadyRecent(Number.isFinite(n) ? n : 20),
+    };
+  }
+
   @Get('latest')
   latest() {
     return { record: this.intake.getLatest() };
