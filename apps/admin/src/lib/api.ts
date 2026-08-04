@@ -268,6 +268,86 @@ export interface TradeEventPipelineSummary {
   latest: TradeEventRecord | null;
 }
 
+// ---------------------------------------------------------------------------
+// Execution events — real copy-trading fan-out telemetry recorded by
+// CopyTradingService. This is the single source of truth for the admin
+// Trade Monitor page. Types mirror apps/api/src/copy-trading/execution-event.ts.
+// ---------------------------------------------------------------------------
+
+export type ExecutionFollowerStatus =
+  | 'PENDING'
+  | 'EXECUTING'
+  | 'SUCCESS'
+  | 'FAILED'
+  | 'SKIPPED';
+
+export type ExecutionFailureType =
+  | 'ORDER_REJECTED'
+  | 'IP_WHITELIST'
+  | 'INSTRUMENT_NOT_FOUND'
+  | 'TOKEN_EXPIRED'
+  | 'BROKER_ERROR'
+  | 'VALIDATION_FAILED'
+  | 'BROKER_UNSUPPORTED'
+  | 'NO_BROKER_SESSION'
+  | 'SYMBOL_MAPPING_MISSING'
+  | 'UNKNOWN';
+
+export type ExecutionEventOutcome =
+  | 'NO_ACTIVE_STRATEGY'
+  | 'NO_ENABLED_FOLLOWERS'
+  | 'FANNED_OUT'
+  | 'ERROR';
+
+export interface FollowerExecution {
+  id: string;
+  followerId: string;
+  followerName: string;
+  followerEmail: string;
+  followerAccountId: string;
+  broker: string;
+  status: ExecutionFollowerStatus;
+  failureType: ExecutionFailureType | null;
+  reason: string | null;
+  brokerResponse: unknown | null;
+  followerSymbol: string | null;
+  quantity: number | null;
+  startedAt: string;
+  completedAt: string | null;
+}
+
+export interface ExecutionEvent {
+  id: string;
+  timestamp: string;
+  strategyId: string | null;
+  strategyName: string | null;
+  masterAccountId: string;
+  masterAccountNickname: string | null;
+  broker: string;
+  symbol: string;
+  side: 'BUY' | 'SELL';
+  quantity: number;
+  productType: string;
+  followersFound: number;
+  followers: FollowerExecution[];
+  outcome: ExecutionEventOutcome;
+  errorReason: string | null;
+}
+
+export interface ExecutionEventSummary {
+  totalRecorded: number;
+  bufferSize: number;
+  bufferCapacity: number;
+  today: {
+    events: number;
+    successfulOrders: number;
+    failedOrders: number;
+    pendingOrders: number;
+    followersExecuted: number;
+  };
+  latest: ExecutionEvent | null;
+}
+
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
 const TOKEN_KEY = 'cts_admin_access_token';
 
@@ -535,6 +615,19 @@ export const api = {
       latest: () =>
         request<{ record: TradeEventRecord | null }>(
           `/admin/trade-events/latest`,
+        ),
+    },
+
+    executionEvents: {
+      summary: () =>
+        request<ExecutionEventSummary>(`/admin/execution-events/summary`),
+      recent: (limit = 50) =>
+        request<{ items: ExecutionEvent[] }>(
+          `/admin/execution-events/recent?limit=${limit}`,
+        ),
+      byId: (id: string) =>
+        request<{ event: ExecutionEvent | null }>(
+          `/admin/execution-events/${encodeURIComponent(id)}`,
         ),
     },
   },
