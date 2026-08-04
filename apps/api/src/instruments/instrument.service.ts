@@ -186,12 +186,47 @@ export class InstrumentService {
       ],
     };
 
-    const rows = await this.prisma.instrumentBroker.findMany({
+    // Sprint 5.4.5 — Priority fetch: rows whose brokerSymbol starts
+    // with the query (family candidates) are pulled first via the
+    // (broker, brokerSymbol) unique index, guaranteeing they never
+    // get truncated out of the candidate pool on high-fanout
+    // substring queries (e.g. "NIFTY" also matches 60k BANKNIFTY /
+    // FINNIFTY / NIFTYBEES rows that sort alphabetically ahead of
+    // the real NIFTY chain).
+    const familyPool = /^\d+$/.test(raw)
+      ? []
+      : await this.prisma.instrumentBroker.findMany({
+          where: {
+            broker: opts.broker,
+            OR: [
+              { brokerSymbol: { startsWith: raw, mode: 'insensitive' } },
+              {
+                instrument: {
+                  is: { underlying: { equals: raw, mode: 'insensitive' } },
+                },
+              },
+            ],
+          },
+          include: { instrument: true },
+          orderBy: [{ brokerSymbol: 'asc' }],
+          take: poolSize,
+        });
+
+    const substringPool = await this.prisma.instrumentBroker.findMany({
       where,
       include: { instrument: true },
       orderBy: [{ brokerSymbol: 'asc' }],
       take: poolSize,
     });
+
+    // Merge & dedupe (family pool first so its ordering wins on ties).
+    const seen = new Set<string>();
+    const rows: typeof substringPool = [];
+    for (const r of [...familyPool, ...substringPool]) {
+      if (seen.has(r.id)) continue;
+      seen.add(r.id);
+      rows.push(r);
+    }
 
     const needle = raw.toLowerCase();
     const numericNeedle = /^\d+$/.test(raw) ? Number(raw) : null;
@@ -205,13 +240,25 @@ export class InstrumentService {
         displayName,
         rank: rankInstrumentMatch(needle, row, displayName),
         family: classifyInstrumentFamily(row.instrument),
+        // Sprint 5.4.5 — Whether this row belongs to the *query*'s
+        // instrument family. See isQueryFamilyMember for the rule.
+        queryFamily: isQueryFamilyMember(needle, row),
       };
     });
 
     const ranked = enriched
       .filter((r) => r.rank < RANK_NO_MATCH)
       .sort((a, b) => {
-        // 1) Primary: relevance rank.
+        // 0) Sprint 5.4.5 — All query-family members rank ahead of
+        //    every non-family row, regardless of the 9-tier
+        //    substring rank. This is what makes typing "NIFTY"
+        //    return NIFTY rows before BANKNIFTY / FINNIFTY /
+        //    NIFTYBEES et al., and typing "RELIANCE" keep the
+        //    RELIANCE chain contiguous at the top.
+        if (a.queryFamily !== b.queryFamily) {
+          return a.queryFamily ? -1 : 1;
+        }
+        // 1) Primary: 9-tier relevance rank from Sprint 5.4.4.
         if (a.rank !== b.rank) return a.rank - b.rank;
         // 2) Secondary: family (Index → Equity → Future → CE → PE → other).
         if (a.family !== b.family) return a.family - b.family;
@@ -280,6 +327,76 @@ export interface ManualInstrumentSearchRow {
   expiry: string | null;
   strike: number | null;
   optionType: string | null;
+}
+
+/**
+ * Sprint 5.4.5 — Family-aware match test.
+ *
+ * Returns true iff the row belongs to the query's *instrument
+ * family* — the set of every symbol whose brokerSymbol begins with
+ * the query as a whole "word".
+ *
+ * "Whole word" is defined by a character-class boundary: the first
+ * character after the matched prefix (if any) must be in a different
+ * character class than the last character of the query
+ * (alpha ⇄ digit). End-of-string counts as a boundary too. This lets
+ * a purely lexical rule capture Indian broker naming conventions
+ * without hard-coding any family name:
+ *
+ *   query   brokerSymbol             boundary?           family?
+ *   ------  -----------------------  ------------------  --------
+ *   NIFTY   NIFTY26DECFUT            'Y'(α) → '2'(digit)  YES
+ *   NIFTY   NIFTY26DEC26000CE        'Y'(α) → '2'(digit)  YES
+ *   NIFTY   NIFTYBEES                'Y'(α) → 'B'(α)      NO   ← ETF
+ *   NIFTY   BANKNIFTY26DECFUT        does not start with  NO
+ *   NIFTY   FINNIFTY26DECFUT         does not start with  NO
+ *   NIFTY   AXISNIFTYNAV             does not start with  NO
+ *   RELI…   RELIANCE (equity)        end-of-string        YES
+ *   RELI…   RELIANCE26DEC1500CE      'E'(α) → '2'(digit)  YES
+ *   NIFTY26 NIFTY26DEC26000CE        '6'(digit) → 'D'(α)  YES
+ *   26000   NIFTY26DEC26000CE        never starts with    NO
+ *
+ * Rows whose underlying alone equals the query are also treated as
+ * family members — a rare but useful safety net (e.g. a broker whose
+ * cash-equity brokerSymbol has been mangled but whose underlying
+ * still says "RELIANCE").
+ *
+ * Numeric-only queries (`26000`) never form a family — every match
+ * falls through to the 9-tier substring rank + strike-distance
+ * tiebreaker.
+ */
+function isQueryFamilyMember(
+  needle: string,
+  row: { brokerSymbol: string; instrument: { underlying: string } },
+): boolean {
+  if (!needle) return false;
+  // Numeric queries cannot address a family.
+  if (/^\d+$/.test(needle)) return false;
+
+  const brokerSym = row.brokerSymbol.toLowerCase();
+  if (brokerSym === needle) return true;
+  if (brokerSym.startsWith(needle)) {
+    const boundaryAt = needle.length;
+    const before = needle.charAt(needle.length - 1);
+    const after = brokerSym.charAt(boundaryAt);
+    // End-of-string counts as a boundary; else require a
+    // character-class transition (alpha ⇄ non-alpha) at the split.
+    if (after === '' || charClass(before) !== charClass(after)) {
+      return true;
+    }
+  }
+  // Safety net: exact underlying match qualifies even when the
+  // broker symbol has been mangled by the importer.
+  if (row.instrument.underlying.toLowerCase() === needle) return true;
+  return false;
+}
+
+type CharClass = 'alpha' | 'digit' | 'other';
+function charClass(ch: string): CharClass {
+  if (ch >= 'a' && ch <= 'z') return 'alpha';
+  if (ch >= 'A' && ch <= 'Z') return 'alpha';
+  if (ch >= '0' && ch <= '9') return 'digit';
+  return 'other';
 }
 
 // ---------------------------------------------------------------------------
