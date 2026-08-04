@@ -29,6 +29,11 @@ export class StrategiesController {
     return this.service.get(req.user.sub, id);
   }
 
+  @Get(':id/summary')
+  summary(@Req() req: any, @Param('id') id: string) {
+    return this.service.getSummary(req.user.sub, id);
+  }
+
   @Patch(':id')
   update(@Req() req: any, @Param('id') id: string, @Body() dto: UpdateStrategyDto) {
     return this.service.update(req.user.sub, id, dto);

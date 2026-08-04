@@ -9,7 +9,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { Users } from 'lucide-react';
+import { StrategyMarketplaceCard } from '@cts/ui';
 import { BROKER_LABELS, type StrategyDto, type TradingAccountDto } from '@cts/shared';
 
 export default function MarketplacePage() {
@@ -81,27 +81,23 @@ export default function MarketplacePage() {
       ) : (
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
           {rows.map((s) => (
-            <Card key={s.id}>
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <CardTitle className="text-lg">{s.strategyName}</CardTitle>
-                  <Badge variant={s.status === 'ACTIVE' ? 'success' : 'muted'}>{s.status}</Badge>
-                </div>
-                <CardDescription>
-                  {s.tradingAccount ? BROKER_LABELS[s.tradingAccount.broker] : ''} · base qty {s.baseQuantity}
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                <p className="text-sm text-muted-foreground line-clamp-3">{s.description ?? 'No description.'}</p>
-                <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                  <Users className="h-3.5 w-3.5" />
-                  <span>{s.followerCount ?? 0}{s.maxFollowers > 0 && ` / ${s.maxFollowers}`} followers</span>
-                </div>
-                <Button className="w-full" disabled={accounts.length === 0} onClick={() => openSubscribe(s)}>
+            <StrategyMarketplaceCard
+              key={s.id}
+              strategy={s}
+              /* Sprint 6.0 — risk/performance placeholders. Populated in a future sprint. */
+              riskLevel={null}
+              overallReturn={null}
+              detailHref={`/dashboard/marketplace/${s.id}`}
+              actionSlot={
+                <Button
+                  disabled={accounts.length === 0}
+                  onClick={() => openSubscribe(s)}
+                  data-testid={`marketplace-subscribe-btn-${s.id}`}
+                >
                   {accounts.length === 0 ? 'Add trading account first' : 'Subscribe'}
                 </Button>
-              </CardContent>
-            </Card>
+              }
+            />
           ))}
         </div>
       )}

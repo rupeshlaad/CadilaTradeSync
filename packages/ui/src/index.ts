@@ -1,2 +1,2 @@
-// Reserved for future shared shadcn/ui component exports across web + admin.
-export {};
+// Sprint 6.0 — Shared Strategy Intelligence Dashboard components.
+export * from './strategy/strategy-intelligence';

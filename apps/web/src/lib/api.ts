@@ -73,6 +73,11 @@ export const api = {
     list: () => request<StrategyDto[]>('/strategies'),
     marketplace: () => request<StrategyDto[]>('/strategies/marketplace'),
     get: (id: string) => request<StrategyDto>(`/strategies/${id}`),
+    // Sprint 6.0 — Strategy Intelligence summary (presentation-only).
+    summary: (id: string) =>
+      request<import('@cts/shared').StrategySummaryDto>(
+        `/strategies/${encodeURIComponent(id)}/summary`,
+      ),
     create: (payload: CreateStrategyPayload) =>
       request<StrategyDto>('/strategies', { method: 'POST', body: JSON.stringify(payload) }),
     update: (id: string, payload: UpdateStrategyPayload) =>

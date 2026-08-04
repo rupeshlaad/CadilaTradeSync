@@ -21,6 +21,11 @@ export class AdminStrategiesController {
     return this.strategies.listAllForAdmin();
   }
 
+  @Get(':id/summary')
+  summary(@Param('id') id: string) {
+    return this.strategies.adminGetSummary(id);
+  }
+
   @Post()
   create(@Body() dto: any) {
     return this.strategies.adminCreate(dto);

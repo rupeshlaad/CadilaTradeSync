@@ -23,6 +23,9 @@ importers:
       '@cts/shared':
         specifier: workspace:*
         version: link:../../packages/shared
+      '@cts/ui':
+        specifier: workspace:*
+        version: link:../../packages/ui
       '@radix-ui/react-avatar':
         specifier: ^1.1.1
         version: 1.2.6(@types/react-dom@18.3.7(@types/react@18.3.31))(@types/react@18.3.31)(react-dom@19.0.0-rc-66855b96-20241106(react@19.0.0-rc-66855b96-20241106))(react@19.0.0-rc-66855b96-20241106)
@@ -214,6 +217,9 @@ importers:
       '@cts/shared':
         specifier: workspace:*
         version: link:../../packages/shared
+      '@cts/ui':
+        specifier: workspace:*
+        version: link:../../packages/ui
       '@radix-ui/react-avatar':
         specifier: ^1.1.1
         version: 1.2.6(@types/react-dom@18.3.7(@types/react@18.3.31))(@types/react@18.3.31)(react-dom@19.0.0-rc-66855b96-20241106(react@19.0.0-rc-66855b96-20241106))(react@19.0.0-rc-66855b96-20241106)
@@ -320,7 +326,17 @@ importers:
         version: 5.9.3
 
   packages/ui:
+    dependencies:
+      '@cts/shared':
+        specifier: workspace:*
+        version: link:../shared
+      react:
+        specifier: '*'
+        version: 19.2.8
     devDependencies:
+      '@types/react':
+        specifier: ^18.3.12
+        version: 18.3.31
       typescript:
         specifier: ^5.6.3
         version: 5.9.3
@@ -3725,6 +3741,10 @@ packages:
 
   react@19.0.0-rc-66855b96-20241106:
     resolution: {integrity: sha512-klH7xkT71SxRCx4hb1hly5FJB21Hz0ACyxbXYAECEqssUjtJeFUAaI2U1DgJAzkGEnvEm3DkxuBchMC/9K4ipg==}
+    engines: {node: '>=0.10.0'}
+
+  react@19.2.8:
+    resolution: {integrity: sha512-PWaYA1L/q9u2u7xYQi+Y3L3Yfnie7XyLeaJICV1MGD6LprsBxcAqGjYyr0eY3p+QdsA+x/Irkt4Qif8D63+Sbw==}
     engines: {node: '>=0.10.0'}
 
   read-cache@1.0.0:
@@ -8231,6 +8251,8 @@ snapshots:
       '@types/react': 18.3.31
 
   react@19.0.0-rc-66855b96-20241106: {}
+
+  react@19.2.8: {}
 
   read-cache@1.0.0:
     dependencies:

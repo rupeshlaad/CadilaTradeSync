@@ -151,6 +151,117 @@ export class StrategiesService {
     return { ok: true };
   }
 
+  // ---------------------------------------------------------------------------
+  // Sprint 6.0 — Strategy Intelligence Summary (presentation-only).
+  //
+  // Aggregates static profile fields + existing DB counts into a single
+  // presentation payload consumed by the shared Strategy Intelligence
+  // layout. Ownership / visibility rules mirror `get()` so a marketplace
+  // caller can view PUBLIC strategies without owning them.
+  //
+  // Performance and risk fields are intentionally null in Phase 1 —
+  // historical import and live analytics ship in future sprints; the
+  // shared UI renders "Not Available" / "Data will be available after
+  // performance import." based on these nulls.
+  // ---------------------------------------------------------------------------
+  async getSummary(
+    userId: string | null,
+    id: string,
+    opts: { admin?: boolean } = {},
+  ) {
+    const row = await this.prisma.strategy.findUnique({
+      where: { id },
+      include: {
+        tradingAccount: {
+          select: {
+            id: true,
+            userId: true,
+            broker: true,
+            accountType: true,
+            enabled: true,
+            connectionStatus: true,
+          },
+        },
+        _count: { select: { followers: true } },
+      },
+    });
+    if (!row) throw new NotFoundException('Strategy not found');
+
+    if (!opts.admin) {
+      const isOwner = userId != null && row.tradingAccount.userId === userId;
+      if (row.visibility !== Visibility.PUBLIC && !isOwner) {
+        throw new ForbiddenException();
+      }
+    }
+
+    const [activeSubscribers, activeFollowers] = await Promise.all([
+      this.prisma.subscription.count({
+        where: { strategyId: id, status: 'ACTIVE' },
+      }),
+      this.prisma.follower.count({
+        where: { strategyId: id, enabled: true },
+      }),
+    ]);
+
+    // "Active master accounts" reflects whether the backing MASTER
+    // trading account is currently enabled and connected. Uses only
+    // existing DB fields — no live probing.
+    const activeMasterAccounts =
+      row.tradingAccount.accountType === AccountType.MASTER &&
+      row.tradingAccount.enabled &&
+      row.tradingAccount.connectionStatus === 'CONNECTED'
+        ? 1
+        : 0;
+
+    return {
+      profile: {
+        id: row.id,
+        strategyName: row.strategyName,
+        strategyCode: buildStrategyCode(row.id),
+        description: row.description,
+        status: row.status,
+        visibility: row.visibility,
+        // Risk level is not tracked on the Strategy row yet — kept
+        // null so the UI shows "Not Available" without fabricating.
+        riskLevel: null,
+        supportedBrokers: [row.tradingAccount.broker],
+        // Supported markets are not tracked on the row either.
+        supportedMarkets: [],
+        createdAt: row.createdAt.toISOString(),
+        updatedAt: row.updatedAt.toISOString(),
+      },
+      overview: {
+        activeSubscribers,
+        activeMasterAccounts,
+        activeFollowers,
+        currentStatus: row.status,
+      },
+      performance: {
+        todayReturn: null,
+        weeklyReturn: null,
+        monthlyReturn: null,
+        overallReturn: null,
+        winRate: null,
+        totalTrades: null,
+        capitalManaged: null,
+        lastUpdated: null,
+      },
+      risk: {
+        riskLevel: null,
+        maxDrawdown: null,
+        volatility: null,
+        notes: [],
+      },
+      recentActivity: {
+        items: [],
+      },
+    };
+  }
+
+  async adminGetSummary(id: string) {
+    return this.getSummary(null, id, { admin: true });
+  }
+
   async listAllForAdmin() {
     const rows = await this.prisma.strategy.findMany({
       orderBy: { createdAt: 'desc' },
@@ -267,4 +378,15 @@ export class StrategiesService {
       success: true,
     };
   }
+}
+
+/**
+ * Sprint 6.0 — Human-friendly strategy code derived from the uuid.
+ * Deterministic + prefixless so the UI can reference "STR-XXXXXXXX"
+ * without a schema change. Not meant to be unique-checked; only
+ * presentation.
+ */
+function buildStrategyCode(id: string): string {
+  const compact = id.replace(/-/g, '').toUpperCase();
+  return `STR-${compact.slice(0, 8)}`;
 }

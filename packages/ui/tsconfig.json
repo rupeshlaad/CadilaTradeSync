@@ -1,9 +1,16 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
+    "lib": ["dom", "dom.iterable", "esnext"],
     "jsx": "preserve",
     "outDir": "./dist",
-    "rootDir": "./src"
+    "rootDir": "./src",
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "declaration": false,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true
   },
   "include": ["src"]
 }
