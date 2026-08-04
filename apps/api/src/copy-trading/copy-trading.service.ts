@@ -45,7 +45,9 @@ export class CopyTradingService {
       symbol: event.symbol,
       side: event.side,
       quantity: event.quantity,
+      price: event.price ?? null,
       productType: event.product,
+      tradeSource: 'BROKER_POLL',
       orderId: event.orderId ?? null,
       timestamp: event.timestamp,
     });

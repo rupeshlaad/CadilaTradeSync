@@ -348,6 +348,110 @@ export interface ExecutionEventSummary {
   latest: ExecutionEvent | null;
 }
 
+// ---------------------------------------------------------------------------
+// Sprint 5.2 — permanent execution audit persistence.
+// Types mirror apps/api/src/execution-history/execution-history.service.ts
+// ---------------------------------------------------------------------------
+
+export interface ExecutionHistoryRow {
+  id: string;
+  timestamp: string;
+  strategyId: string | null;
+  strategyName: string | null;
+  masterAccountId: string;
+  masterAccountName: string | null;
+  masterBroker: string;
+  masterSymbol: string;
+  masterExchange: string | null;
+  masterSegment: string | null;
+  masterSide: 'BUY' | 'SELL' | string;
+  masterQuantity: number;
+  masterPrice: number | null;
+  orderType: string | null;
+  productType: string | null;
+  tradeSource: string | null;
+  status: string;
+  totalFollowers: number;
+  successfulFollowers: number;
+  failedFollowers: number;
+  skippedFollowers: number;
+  processingTimeMs: number | null;
+  createdAt: string;
+}
+
+export interface ExecutionHistoryFollowerRow {
+  id: string;
+  executionHistoryId: string;
+  followerId: string | null;
+  followerEmail: string | null;
+  broker: string;
+  brokerOrderId: string | null;
+  status: string;
+  failureType: string | null;
+  failureReason: string | null;
+  rawBrokerResponse: unknown | null;
+  followerSymbol: string | null;
+  executedQuantity: number | null;
+  executedPrice: number | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  createdAt: string;
+}
+
+export interface ExecutionHistoryTimelineEntry {
+  at: string;
+  kind: string;
+  label: string;
+}
+
+export interface ExecutionHistoryDetail extends ExecutionHistoryRow {
+  followers: ExecutionHistoryFollowerRow[];
+  timeline: ExecutionHistoryTimelineEntry[];
+}
+
+export interface ExecutionHistoryListResponse {
+  items: ExecutionHistoryRow[];
+  pagination: {
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+  };
+}
+
+export interface ExecutionHistorySummary {
+  today: {
+    trades: number;
+    successful: number;
+    failed: number;
+    partial: number;
+    noStrategy: number;
+    noFollowers: number;
+    errors: number;
+    successPercent: number;
+    failurePercent: number;
+    followersExecuted: number;
+    avgProcessingTimeMs: number | null;
+  };
+  topFailureReasons: Array<{
+    failureType: string;
+    count: number;
+  }>;
+}
+
+export interface ExecutionHistoryListQuery {
+  page?: number;
+  limit?: number;
+  strategy?: string;
+  broker?: string;
+  symbol?: string;
+  status?: string;
+  dateFrom?: string;
+  dateTo?: string;
+  search?: string;
+  sort?: string;
+}
+
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
 const TOKEN_KEY = 'cts_admin_access_token';
 
@@ -628,6 +732,28 @@ export const api = {
       byId: (id: string) =>
         request<{ event: ExecutionEvent | null }>(
           `/admin/execution-events/${encodeURIComponent(id)}`,
+        ),
+    },
+
+    executionHistory: {
+      summary: () =>
+        request<ExecutionHistorySummary>(`/admin/execution-history/summary`),
+      list: (query: ExecutionHistoryListQuery = {}) => {
+        const params = new URLSearchParams();
+        const q = query as Record<string, unknown>;
+        for (const key of Object.keys(q)) {
+          const v = q[key];
+          if (v === undefined || v === null || v === '') continue;
+          params.set(key, String(v));
+        }
+        const qs = params.toString();
+        return request<ExecutionHistoryListResponse>(
+          `/admin/execution-history${qs ? `?${qs}` : ''}`,
+        );
+      },
+      byId: (id: string) =>
+        request<ExecutionHistoryDetail>(
+          `/admin/execution-history/${encodeURIComponent(id)}`,
         ),
     },
   },
