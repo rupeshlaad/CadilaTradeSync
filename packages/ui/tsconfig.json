@@ -2,15 +2,17 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "lib": ["dom", "dom.iterable", "esnext"],
-    "jsx": "preserve",
+    "jsx": "react-jsx",
     "outDir": "./dist",
     "rootDir": "./src",
-    "module": "esnext",
-    "moduleResolution": "bundler",
-    "declaration": false,
-    "noEmit": true,
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "declaration": true,
+    "declarationMap": false,
+    "sourceMap": false,
     "skipLibCheck": true,
-    "esModuleInterop": true
+    "esModuleInterop": true,
+    "target": "ES2020"
   },
   "include": ["src"]
 }
