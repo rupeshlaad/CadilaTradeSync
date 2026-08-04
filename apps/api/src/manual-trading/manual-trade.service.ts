@@ -25,6 +25,10 @@ import {
   ManualTradeRecord,
   ManualTradeStatus,
 } from './manual-trade.types';
+import {
+  marketProtectionPercent,
+  supportsMarketProtection,
+} from './broker-rules';
 
 const BUFFER_CAPACITY = 100;
 const MANUAL_TRADE_SOURCE = 'MANUAL';
@@ -100,6 +104,12 @@ export class ManualTradeService implements OnModuleInit {
       price: dto.price ?? null,
       triggerPrice: dto.triggerPrice ?? null,
       validity: dto.validity ?? 'DAY',
+      marketProtection:
+        validation.resolvedMaster &&
+        supportsMarketProtection(validation.resolvedMaster.broker) &&
+        dto.orderType === 'MARKET'
+          ? dto.marketProtection ?? 'AUTO'
+          : null,
       status: ManualTradeStatus.PENDING,
       brokerOrderId: null,
       brokerResponse: null,
@@ -524,6 +534,16 @@ function buildZerodhaOrder(dto: PlaceManualTradeDto) {
     (dto.orderType === 'SL' || dto.orderType === 'SL-M')
   ) {
     order.trigger_price = dto.triggerPrice;
+  }
+  // Sprint 5.4.2 — Zerodha Market Protection. `AUTO` (or omitted)
+  // means "let Kite use its default" and is expressed by NOT sending
+  // the field. Every other selector serialises to an explicit
+  // percentage (0 for NONE, 2/5/10 for the fixed steps).
+  if (dto.orderType === 'MARKET' && dto.marketProtection) {
+    const pct = marketProtectionPercent(dto.marketProtection);
+    if (pct !== null) {
+      order.market_protection = pct;
+    }
   }
   return order;
 }

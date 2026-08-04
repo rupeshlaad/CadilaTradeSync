@@ -27,6 +27,7 @@ import {
 import {
   api,
   type ManualInstrumentSearchRow,
+  type ManualTradeMarketProtection,
   type ManualTradeOrderType,
   type ManualTradeProduct,
   type ManualTradeRecord,
@@ -38,6 +39,17 @@ import {
 } from '@/lib/api';
 import type { Broker, StrategyDto, TradingAccountDto } from '@cts/shared';
 import { InstrumentSearch } from './instrument-search';
+import {
+  MARKET_PROTECTION_OPTIONS,
+  getAllowedOrderTypes,
+  getAllowedProducts,
+  getDefaultProduct,
+  isOrderTypeAllowed,
+  isProductAllowed,
+  supportsMarketProtection,
+  toInstrumentContext,
+  type InstrumentContext,
+} from '@/lib/broker-rules';
 
 // ---------------------------------------------------------------------------
 
@@ -57,11 +69,11 @@ const ORDER_TYPES: { value: ManualTradeOrderType; label: string }[] = [
   { value: 'SL-M', label: 'SL-M' },
 ];
 
-const PRODUCTS: { value: ManualTradeProduct; label: string }[] = [
-  { value: 'MIS', label: 'MIS (Intraday)' },
-  { value: 'CNC', label: 'CNC (Delivery)' },
-  { value: 'NRML', label: 'NRML (Normal)' },
-];
+const PRODUCT_LABELS: Record<ManualTradeProduct, string> = {
+  MIS: 'MIS (Intraday)',
+  CNC: 'CNC (Delivery)',
+  NRML: 'NRML (Normal)',
+};
 
 const VALIDITIES: { value: ManualTradeValidity; label: string }[] = [
   { value: 'DAY', label: 'DAY' },
@@ -82,6 +94,8 @@ interface FormState {
   price: string;
   triggerPrice: string;
   validity: ManualTradeValidity;
+  /** Sprint 5.4.2 — Zerodha MARKET orders only. */
+  marketProtection: ManualTradeMarketProtection;
 }
 
 const INITIAL_FORM: FormState = {
@@ -96,6 +110,7 @@ const INITIAL_FORM: FormState = {
   price: '',
   triggerPrice: '',
   validity: 'DAY',
+  marketProtection: 'AUTO',
 };
 
 function statusVariant(status: ManualTradeStatus): BadgeVariant {
@@ -213,9 +228,38 @@ export default function ManualTradingPage() {
   const needsPrice = form.orderType === 'LIMIT' || form.orderType === 'SL';
   const needsTrigger = form.orderType === 'SL' || form.orderType === 'SL-M';
 
+  // Sprint 5.4.2 — Instrument context feeds every broker-aware rule:
+  // default product, allowed products / order types, and whether
+  // Market Protection is applicable.
+  const instrumentContext: InstrumentContext | null = useMemo(() => {
+    if (!masterBroker || !selectedInstrument) return null;
+    return toInstrumentContext(masterBroker, selectedInstrument);
+  }, [masterBroker, selectedInstrument]);
+
+  const allowedProducts = useMemo<ManualTradeProduct[]>(
+    () => (instrumentContext ? getAllowedProducts(instrumentContext) : ['CNC', 'MIS', 'NRML']),
+    [instrumentContext],
+  );
+  const allowedOrderTypes = useMemo<ManualTradeOrderType[]>(
+    () => (instrumentContext ? getAllowedOrderTypes(instrumentContext) : ORDER_TYPES.map((o) => o.value)),
+    [instrumentContext],
+  );
+  const marketProtectionApplies =
+    supportsMarketProtection(masterBroker) && form.orderType === 'MARKET';
+
+  const productAllowed = instrumentContext
+    ? isProductAllowed(instrumentContext, form.product)
+    : true;
+  const orderTypeAllowed = instrumentContext
+    ? isOrderTypeAllowed(instrumentContext, form.orderType)
+    : true;
+
   // Sprint 5.4.1 — Place Order is only enabled when the operator has
   // picked an instrument via the broker-scoped autocomplete. Free-text
   // symbols never satisfy this invariant.
+  // Sprint 5.4.2 — additionally require a broker-valid product /
+  // order-type combination so we never submit a broker-guaranteed
+  // rejection.
   const canSubmit =
     !submitting &&
     !!form.masterAccountId &&
@@ -226,6 +270,8 @@ export default function ManualTradingPage() {
     selectedInstrument.brokerSymbol === form.symbol &&
     !!form.quantity &&
     Number(form.quantity) > 0 &&
+    productAllowed &&
+    orderTypeAllowed &&
     (!needsPrice || (!!form.price && Number(form.price) > 0)) &&
     (!needsTrigger || (!!form.triggerPrice && Number(form.triggerPrice) > 0));
 
@@ -249,16 +295,43 @@ export default function ManualTradingPage() {
   const handleInstrumentSelect = useCallback(
     (row: ManualInstrumentSearchRow) => {
       setSelectedInstrument(row);
-      setForm((prev) => ({
-        ...prev,
-        symbol: row.brokerSymbol,
-        exchange: row.exchange,
-      }));
+      setForm((prev) => {
+        // Sprint 5.4.2 — Smart defaults based on the instrument's
+        // broker + segment. If the operator already flipped the
+        // product manually to something the new instrument allows,
+        // preserve it; otherwise snap to the recommended default.
+        const ctx = masterBroker
+          ? toInstrumentContext(masterBroker, row)
+          : null;
+        const allowed = ctx
+          ? getAllowedProducts(ctx)
+          : (['CNC', 'MIS', 'NRML'] as ManualTradeProduct[]);
+        const nextProduct: ManualTradeProduct = allowed.includes(prev.product)
+          ? prev.product
+          : ctx
+          ? getDefaultProduct(ctx)
+          : allowed[0] ?? prev.product;
+        const orderTypesAllowed = ctx
+          ? getAllowedOrderTypes(ctx)
+          : ORDER_TYPES.map((o) => o.value);
+        const nextOrderType: ManualTradeOrderType = orderTypesAllowed.includes(
+          prev.orderType,
+        )
+          ? prev.orderType
+          : orderTypesAllowed[0] ?? prev.orderType;
+        return {
+          ...prev,
+          symbol: row.brokerSymbol,
+          exchange: row.exchange,
+          product: nextProduct,
+          orderType: nextOrderType,
+        };
+      });
       // Clear stale validation banners from a previous submission.
       setValidationErrors(null);
       setPlacementError(null);
     },
-    [],
+    [masterBroker],
   );
 
   const handleInstrumentClear = useCallback(() => {
@@ -294,6 +367,11 @@ export default function ManualTradingPage() {
       };
       if (needsPrice) payload.price = Number(form.price);
       if (needsTrigger) payload.triggerPrice = Number(form.triggerPrice);
+      // Sprint 5.4.2 — Only send Market Protection when it applies
+      // (Zerodha + MARKET). The server also enforces this.
+      if (marketProtectionApplies) {
+        payload.marketProtection = form.marketProtection;
+      }
 
       const res = await api.admin.manualTrading.place(payload);
       setLastResult(res);
@@ -390,6 +468,11 @@ export default function ManualTradingPage() {
             selectedInstrument={selectedInstrument}
             onInstrumentSelect={handleInstrumentSelect}
             onInstrumentClear={handleInstrumentClear}
+            allowedProducts={allowedProducts}
+            allowedOrderTypes={allowedOrderTypes}
+            marketProtectionApplies={marketProtectionApplies}
+            productAllowed={productAllowed}
+            orderTypeAllowed={orderTypeAllowed}
           />
 
           <RecentOrdersTable rows={recent} />
@@ -429,6 +512,11 @@ function OrderEntryPanel({
   selectedInstrument,
   onInstrumentSelect,
   onInstrumentClear,
+  allowedProducts,
+  allowedOrderTypes,
+  marketProtectionApplies,
+  productAllowed,
+  orderTypeAllowed,
 }: {
   form: FormState;
   setForm: (patch: FormState) => void;
@@ -446,6 +534,11 @@ function OrderEntryPanel({
   selectedInstrument: ManualInstrumentSearchRow | null;
   onInstrumentSelect: (row: ManualInstrumentSearchRow) => void;
   onInstrumentClear: () => void;
+  allowedProducts: ManualTradeProduct[];
+  allowedOrderTypes: ManualTradeOrderType[];
+  marketProtectionApplies: boolean;
+  productAllowed: boolean;
+  orderTypeAllowed: boolean;
 }) {
   const patch = (delta: Partial<FormState>) => setForm({ ...form, ...delta });
 
@@ -643,12 +736,33 @@ function OrderEntryPanel({
               }
               data-testid="field-order-type"
             >
-              {ORDER_TYPES.map((o) => (
-                <option key={o.value} value={o.value}>
-                  {o.label}
-                </option>
-              ))}
+              {ORDER_TYPES.filter((o) => allowedOrderTypes.includes(o.value)).map(
+                (o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ),
+              )}
             </Select>
+            {!orderTypeAllowed && (
+              <div
+                className="text-[11px] text-destructive mt-1"
+                data-testid="order-type-invalid-warning"
+              >
+                {form.orderType} is not accepted on{' '}
+                {selectedInstrument?.segment ?? 'this segment'} for{' '}
+                {masterBroker}. Allowed: {allowedOrderTypes.join(', ')}
+              </div>
+            )}
+            {masterBroker === 'ZERODHA' && form.orderType === 'MARKET' && (
+              <div
+                className="text-[11px] text-muted-foreground mt-1"
+                data-testid="market-protection-hint"
+              >
+                Zerodha applies market protection to MARKET orders — select a
+                cap below.
+              </div>
+            )}
           </Field>
 
           <Field label="Quantity">
@@ -671,12 +785,22 @@ function OrderEntryPanel({
               }
               data-testid="field-product"
             >
-              {PRODUCTS.map((p) => (
-                <option key={p.value} value={p.value}>
-                  {p.label}
+              {allowedProducts.map((p) => (
+                <option key={p} value={p}>
+                  {PRODUCT_LABELS[p]}
                 </option>
               ))}
             </Select>
+            {selectedInstrument && (
+              <div
+                className="text-[11px] text-muted-foreground mt-1"
+                data-testid="product-hint"
+              >
+                {productAllowed
+                  ? `Recommended for ${selectedInstrument.segment}: ${allowedProducts[0]}`
+                  : `${form.product} not accepted on ${selectedInstrument.segment}. Allowed: ${allowedProducts.join(', ')}`}
+              </div>
+            )}
           </Field>
 
           <Field label={needsPrice ? 'Price (required)' : 'Price'}>
@@ -687,7 +811,7 @@ function OrderEntryPanel({
               placeholder="Limit / SL price"
               value={form.price}
               onChange={(e) => patch({ price: e.target.value })}
-              disabled={!needsPrice && form.orderType !== 'SL-M' ? false : false}
+              disabled={!needsPrice}
               data-testid="field-price"
             />
           </Field>
@@ -702,6 +826,7 @@ function OrderEntryPanel({
               placeholder="Stop-loss trigger"
               value={form.triggerPrice}
               onChange={(e) => patch({ triggerPrice: e.target.value })}
+              disabled={!needsTrigger}
               data-testid="field-trigger-price"
             />
           </Field>
@@ -721,6 +846,30 @@ function OrderEntryPanel({
               ))}
             </Select>
           </Field>
+
+          {marketProtectionApplies && (
+            <Field label="Market Protection">
+              <Select
+                value={form.marketProtection}
+                onChange={(e) =>
+                  patch({
+                    marketProtection: e.target
+                      .value as ManualTradeMarketProtection,
+                  })
+                }
+                data-testid="field-market-protection"
+              >
+                {MARKET_PROTECTION_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </Select>
+              <div className="text-[11px] text-muted-foreground mt-1">
+                Zerodha caps how far a MARKET order can slip from LTP.
+              </div>
+            </Field>
+          )}
         </div>
 
         <div className="flex items-center gap-3 pt-2 border-t">
@@ -852,6 +1001,11 @@ function ExecutionStatusPanel({
               <Cell label="Price">{result.price ?? '—'}</Cell>
               <Cell label="Trigger">{result.triggerPrice ?? '—'}</Cell>
               <Cell label="Validity">{result.validity}</Cell>
+              {result.marketProtection && (
+                <Cell label="Market Protection">
+                  {result.marketProtection}
+                </Cell>
+              )}
               <Cell label="Timestamp">{fmtTime(result.updatedAt)}</Cell>
               {result.failureStage && (
                 <Cell label="Failure Stage">

@@ -45,6 +45,13 @@ export type ManualTradeOrderType = 'MARKET' | 'LIMIT' | 'SL' | 'SL-M';
 /** Order validities supported by the manual trade form. */
 export type ManualTradeValidity = 'DAY' | 'IOC';
 
+/**
+ * Sprint 5.4.2 — Zerodha-only Market Protection selector for MARKET
+ * orders. Values map to KiteConnect's `market_protection` percentage
+ * (see broker-rules.ts :: marketProtectionPercent).
+ */
+export type ManualTradeMarketProtection = 'AUTO' | 'P2' | 'P5' | 'P10' | 'NONE';
+
 /** Transaction sides supported by the manual trade form. */
 export type ManualTradeSide = 'BUY' | 'SELL';
 
@@ -62,7 +69,10 @@ export type ManualTradeValidationKey =
   | 'strategy_has_enabled_followers'
   | 'instrument_exists'
   | 'broker_symbol_mapping_exists'
-  | 'required_fields_present';
+  | 'required_fields_present'
+  | 'product_allowed_for_instrument'
+  | 'order_type_allowed_for_instrument'
+  | 'market_protection_valid';
 
 export interface ManualTradeValidationCheck {
   key: ManualTradeValidationKey;
@@ -118,6 +128,8 @@ export interface ManualTradeRecord {
   price: number | null;
   triggerPrice: number | null;
   validity: ManualTradeValidity;
+  /** Sprint 5.4.2 — Zerodha MARKET orders only; null otherwise. */
+  marketProtection: ManualTradeMarketProtection | null;
 
   status: ManualTradeStatus;
 
