@@ -547,6 +547,49 @@ export interface PositionLifecycleListResponse {
 }
 
 // ---------------------------------------------------------------------------
+// Sprint 5.5.1 — Order Actions (Modify / Cancel / Exit).
+// Types mirror apps/api/src/order-actions/order-actions.types.ts
+// ---------------------------------------------------------------------------
+
+export type OrderActionType = 'MODIFY' | 'CANCEL' | 'EXIT';
+
+export interface OrderActionFollowerSync {
+  followerAccountId: string;
+  followerEmail: string | null;
+  brokerOrderId: string | null;
+  ok: boolean;
+  action: OrderActionType;
+  reason: string | null;
+  brokerResponse: unknown | null;
+}
+
+export interface OrderActionResult {
+  action: OrderActionType;
+  key: string;
+  accepted: boolean;
+  previousState: PositionLifecycleState | null;
+  nextState: PositionLifecycleState | null;
+  reason: string | null;
+  brokerResponse: unknown;
+  followerSync: OrderActionFollowerSync[];
+}
+
+export interface ModifyOrderPayload {
+  quantity?: number;
+  price?: number;
+  triggerPrice?: number;
+  orderType?: 'MARKET' | 'LIMIT' | 'SL' | 'SL-M';
+}
+
+export interface CancelOrderPayload {
+  reason?: string;
+}
+
+export interface ExitOrderPayload {
+  reason?: string;
+}
+
+// ---------------------------------------------------------------------------
 // Sprint 5.4 — Manual Trade Execution.
 // Types mirror apps/api/src/manual-trading/manual-trade.types.ts
 // ---------------------------------------------------------------------------
@@ -1007,6 +1050,33 @@ export const api = {
       byId: (id: string) =>
         request<ManualTradeRecord>(
           `/admin/manual-trading/${encodeURIComponent(id)}`,
+        ),
+    },
+
+    orderActions: {
+      modify: (key: string, payload: ModifyOrderPayload) =>
+        request<OrderActionResult>(
+          `/admin/orders/${encodeURIComponent(key)}/modify`,
+          {
+            method: 'POST',
+            body: JSON.stringify(payload),
+          },
+        ),
+      cancel: (key: string, payload: CancelOrderPayload = {}) =>
+        request<OrderActionResult>(
+          `/admin/orders/${encodeURIComponent(key)}/cancel`,
+          {
+            method: 'POST',
+            body: JSON.stringify(payload),
+          },
+        ),
+      exit: (key: string, payload: ExitOrderPayload = {}) =>
+        request<OrderActionResult>(
+          `/admin/orders/${encodeURIComponent(key)}/exit`,
+          {
+            method: 'POST',
+            body: JSON.stringify(payload),
+          },
         ),
     },
   },
