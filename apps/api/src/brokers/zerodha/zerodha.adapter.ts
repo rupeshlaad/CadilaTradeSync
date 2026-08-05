@@ -127,4 +127,34 @@ export class ZerodhaAdapter implements BrokerAdapter {
   async getTrades() {
    return this.kite.getTrades();
   }
+
+  // Sprint 6.1.6 — standardized surface (Kite exposes the full trading API).
+  async getFunds() {
+    return this.kite.getMargins();
+  }
+  async getPortfolio() {
+    return this.kite.getHoldings();
+  }
+  async getExchanges(): Promise<string[] | null> {
+    const p: any = await this.kite.getProfile();
+    return Array.isArray(p.exchanges) ? p.exchanges : null;
+  }
+  async getProducts(): Promise<string[] | null> {
+    const p: any = await this.kite.getProfile();
+    return Array.isArray(p.products) ? p.products : null;
+  }
+  async logout() {
+    // Kite exposes invalidate_access_token via REST but the Node SDK does not
+    // wrap a logout; tokens simply expire daily.
+    return {
+      supported: false as const,
+      reason: 'Kite Connect Node SDK does not expose a logout/invalidate call.',
+    };
+  }
+  async refreshSession() {
+    return {
+      supported: false as const,
+      reason: 'Kite Connect requires a fresh daily login; no token refresh flow.',
+    };
+  }
 }

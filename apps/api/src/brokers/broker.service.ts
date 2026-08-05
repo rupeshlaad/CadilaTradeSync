@@ -98,7 +98,7 @@ export class BrokerService {
     return { account, session };
   }
 
-  private buildAdapter(broker: Broker, accessToken: string): AnyAdapter {
+  private buildAdapter(broker: Broker, accessToken: string, userId?: string): AnyAdapter {
     switch (broker) {
       case Broker.FYERS: {
         const adapter = new FyersAdapter();
@@ -108,6 +108,8 @@ export class BrokerService {
       case Broker.SHOONYA: {
         const adapter = new ShoonyaAdapter();
         adapter.setSessionToken(accessToken);
+        // Sprint 6.1.6 — Noren data endpoints require uid/actid.
+        if (userId) adapter.setUserId(userId);
         return adapter;
       }
       case Broker.ZERODHA:
@@ -205,64 +207,99 @@ export class BrokerService {
 
   /**
    * Extract a normalized funds/margin snapshot from a broker margins payload.
-   * Values are read straight from the broker response — never fabricated.
-   * Returns null when the broker does not expose margins.
+   * Broker-aware (Zerodha / Fyers / Shoonya envelopes differ) but values are
+   * read straight from the broker response — never fabricated. Returns null
+   * when the broker did not return usable margins.
    */
-  private normalizeFunds(margins: any):
-    | Array<{
-        segment: string;
-        available: number | null;
-        used: number | null;
-        net: number | null;
-        availableCash: number | null;
-        usedMargin: number | null;
-        availableMargin: number | null;
-        openingBalance: number | null;
-        collateral: number | null;
-      }>
-    | null {
-    if (!margins || typeof margins !== 'object') return null;
-    const toNum = (v: any): number | null => {
-      if (v === null || v === undefined || v === '') return null;
-      const n = typeof v === 'number' ? v : Number(v);
-      return Number.isFinite(n) ? n : null;
+  private normalizeFunds(broker: Broker, margins: any) {
+    if (broker === Broker.FYERS) return this.normalizeFyersFunds(margins);
+    if (broker === Broker.SHOONYA) return this.normalizeShoonyaFunds(margins);
+    return this.normalizeZerodhaFunds(margins);
+  }
+
+  private fund(
+    segment: string,
+    v: Partial<{
+      availableCash: any;
+      usedMargin: any;
+      availableMargin: any;
+      openingBalance: any;
+      collateral: any;
+      net: any;
+    }>,
+  ) {
+    const availableMargin = this.num(v.availableMargin);
+    const net = this.num(v.net) ?? availableMargin;
+    return {
+      segment,
+      available: availableMargin ?? this.num(v.availableCash) ?? net,
+      used: this.num(v.usedMargin),
+      net,
+      availableCash: this.num(v.availableCash),
+      usedMargin: this.num(v.usedMargin),
+      availableMargin,
+      openingBalance: this.num(v.openingBalance),
+      collateral: this.num(v.collateral),
     };
-    const out: Array<{
-      segment: string;
-      available: number | null;
-      used: number | null;
-      net: number | null;
-      availableCash: number | null;
-      usedMargin: number | null;
-      availableMargin: number | null;
-      openingBalance: number | null;
-      collateral: number | null;
-    }> = [];
+  }
+
+  private normalizeZerodhaFunds(margins: any) {
+    if (!margins || typeof margins !== 'object') return null;
+    const out: ReturnType<BrokerService['fund']>[] = [];
     for (const key of Object.keys(margins)) {
       const row = margins[key];
       if (!row || typeof row !== 'object') continue;
-      const availableCash = row?.available?.cash;
-      const openingBalance = row?.available?.opening_balance;
-      const collateral = row?.available?.collateral;
-      const availableMargin = row?.available?.live_balance ?? row?.net;
-      const usedMargin =
-        row?.utilised?.debits ?? row?.utilised?.total ?? row?.used;
-      const net = row?.net ?? row?.available?.live_balance;
-      const available =
-        availableMargin ?? row?.available?.cash ?? row?.net ?? row?.available;
-      out.push({
-        segment: key,
-        available: toNum(available),
-        used: toNum(usedMargin),
-        net: toNum(net),
-        availableCash: toNum(availableCash),
-        usedMargin: toNum(usedMargin),
-        availableMargin: toNum(availableMargin),
-        openingBalance: toNum(openingBalance),
-        collateral: toNum(collateral),
-      });
+      out.push(
+        this.fund(key, {
+          availableCash: row?.available?.cash,
+          openingBalance: row?.available?.opening_balance,
+          collateral: row?.available?.collateral,
+          availableMargin: row?.available?.live_balance ?? row?.net,
+          usedMargin: row?.utilised?.debits ?? row?.utilised?.total,
+          net: row?.net,
+        }),
+      );
     }
     return out.length > 0 ? out : null;
+  }
+
+  private normalizeFyersFunds(margins: any) {
+    // Fyers get_funds → { fund_limit: [{ id, title, equityAmount, commodityAmount }] }
+    const list = Array.isArray(margins?.fund_limit) ? margins.fund_limit : null;
+    if (!list) return null;
+    const byTitle = (t: RegExp) =>
+      list.find((r: any) => t.test(String(r?.title ?? '')))?.equityAmount;
+    return [
+      this.fund('EQUITY', {
+        availableCash: byTitle(/available balance|cash/i),
+        usedMargin: byTitle(/utili[sz]ed/i),
+        availableMargin: byTitle(/available balance/i),
+        openingBalance: byTitle(/opening/i),
+        collateral: byTitle(/collateral/i),
+        net: byTitle(/available balance/i),
+      }),
+    ];
+  }
+
+  private normalizeShoonyaFunds(margins: any) {
+    // Shoonya Limits → { cash, marginused, payin, brkcollamt, ... }
+    if (!margins || typeof margins !== 'object') return null;
+    const cash = this.num(margins.cash);
+    const used = this.num(margins.marginused);
+    const collateral = this.num(margins.brkcollamt) ?? this.num(margins.collateral);
+    if (cash === null && used === null && collateral === null) return null;
+    const availableMargin =
+      cash !== null || used !== null ? (cash ?? 0) - (used ?? 0) : null;
+    return [
+      this.fund('EQUITY', {
+        availableCash: cash,
+        usedMargin: used,
+        availableMargin,
+        openingBalance: margins.payin,
+        collateral,
+        net: availableMargin,
+      }),
+    ];
   }
 
   // -------------------------------------------------------------------------
@@ -433,6 +470,7 @@ export class BrokerService {
     const adapter = this.buildAdapter(
       account.broker,
       this.encryption.decrypt(session.encryptedAccessToken),
+      session.userId ?? account.clientId,
     );
 
     const [
@@ -518,7 +556,7 @@ export class BrokerService {
       positions: positions.data,
       orders: orders.data,
       trades: trades.data,
-      funds: this.normalizeFunds(margins.data),
+      funds: this.normalizeFunds(account.broker, margins.data),
       errors: {
         profile: profile.error,
         margins: margins.error,
@@ -693,9 +731,46 @@ export class BrokerService {
     return Number.isFinite(n) ? n : null;
   }
 
-  private normalizeHoldings(raw: any) {
-    if (!Array.isArray(raw)) return null;
-    return raw.map((h: any) => {
+  /** Pull the row array out of each broker's envelope (broker-aware). */
+  private toArray(broker: Broker, raw: any, keys: string[]): any[] | null {
+    if (Array.isArray(raw)) return raw;
+    if (raw && typeof raw === 'object') {
+      for (const k of keys) {
+        if (Array.isArray(raw[k])) return raw[k];
+      }
+    }
+    return null;
+  }
+
+  private normalizeHoldings(broker: Broker, raw: any) {
+    const list = this.toArray(broker, raw, ['holdings']);
+    if (!list) return null;
+    return list.map((h: any) => {
+      if (broker === Broker.FYERS) {
+        const qty = this.num(h?.quantity ?? h?.remainingQuantity);
+        return {
+          symbol: h?.symbol ?? '—',
+          exchange: h?.exchange != null ? String(h.exchange) : null,
+          quantity: qty,
+          averagePrice: this.num(h?.costPrice),
+          ltp: this.num(h?.ltp),
+          currentValue: this.num(h?.marketVal),
+          pnl: this.num(h?.pl),
+        };
+      }
+      if (broker === Broker.SHOONYA) {
+        const t = Array.isArray(h?.exch_tsym) ? h.exch_tsym[0] : {};
+        const qty = this.num(h?.holdqty ?? h?.npoadqty ?? h?.dpqty);
+        return {
+          symbol: t?.tsym ?? '—',
+          exchange: t?.exch ?? null,
+          quantity: qty,
+          averagePrice: this.num(h?.upldprc),
+          ltp: null, // Shoonya holdings do not carry LTP; requires a quote call.
+          currentValue: null,
+          pnl: null,
+        };
+      }
       const qty = this.num(h?.quantity ?? h?.opening_quantity);
       const ltp = this.num(h?.last_price);
       return {
@@ -711,45 +786,121 @@ export class BrokerService {
     });
   }
 
-  private normalizePositions(raw: any) {
-    const list = Array.isArray(raw) ? raw : Array.isArray(raw?.net) ? raw.net : null;
+  private normalizePositions(broker: Broker, raw: any) {
+    const list = this.toArray(broker, raw, ['net', 'netPositions']);
     if (!list) return null;
-    return list.map((p: any) => ({
-      symbol: p?.tradingsymbol ?? p?.symbol ?? '—',
-      exchange: p?.exchange ?? null,
-      product: p?.product ?? null,
-      quantity: this.num(p?.quantity),
-      averagePrice: this.num(p?.average_price),
-      ltp: this.num(p?.last_price),
-      pnl: this.num(p?.pnl),
-    }));
+    return list.map((p: any) => {
+      if (broker === Broker.FYERS) {
+        return {
+          symbol: p?.symbol ?? '—',
+          exchange: p?.exchange != null ? String(p.exchange) : null,
+          product: p?.productType ?? null,
+          quantity: this.num(p?.netQty),
+          averagePrice: this.num(p?.netAvg ?? p?.avgPrice),
+          ltp: this.num(p?.ltp),
+          pnl: this.num(p?.pl),
+        };
+      }
+      if (broker === Broker.SHOONYA) {
+        return {
+          symbol: p?.tsym ?? '—',
+          exchange: p?.exch ?? null,
+          product: p?.prd ?? null,
+          quantity: this.num(p?.netqty),
+          averagePrice: this.num(p?.netavgprc ?? p?.daybuyavgprc),
+          ltp: this.num(p?.lp),
+          pnl: this.num(p?.rpnl ?? p?.urmtom),
+        };
+      }
+      return {
+        symbol: p?.tradingsymbol ?? p?.symbol ?? '—',
+        exchange: p?.exchange ?? null,
+        product: p?.product ?? null,
+        quantity: this.num(p?.quantity),
+        averagePrice: this.num(p?.average_price),
+        ltp: this.num(p?.last_price),
+        pnl: this.num(p?.pnl),
+      };
+    });
   }
 
-  private normalizeOrders(raw: any) {
-    if (!Array.isArray(raw)) return null;
-    return raw.map((o: any) => ({
-      orderId: o?.order_id ?? o?.id ?? '—',
-      symbol: o?.tradingsymbol ?? o?.symbol ?? '—',
-      side: o?.transaction_type ?? o?.side ?? null,
-      quantity: this.num(o?.quantity),
-      price: this.num(o?.price ?? o?.average_price),
-      status: o?.status ?? null,
-      orderType: o?.order_type ?? null,
-      time: o?.order_timestamp ?? o?.exchange_timestamp ?? null,
-    }));
+  private normalizeOrders(broker: Broker, raw: any) {
+    const list = this.toArray(broker, raw, ['orderBook']);
+    if (!list) return null;
+    return list.map((o: any) => {
+      if (broker === Broker.FYERS) {
+        return {
+          orderId: o?.id ?? '—',
+          symbol: o?.symbol ?? '—',
+          side: o?.side === 1 ? 'BUY' : o?.side === -1 ? 'SELL' : null,
+          quantity: this.num(o?.qty),
+          price: this.num(o?.limitPrice ?? o?.tradedPrice),
+          status: o?.status != null ? String(o.status) : null,
+          orderType: o?.type != null ? String(o.type) : null,
+          time: o?.orderDateTime ?? null,
+        };
+      }
+      if (broker === Broker.SHOONYA) {
+        return {
+          orderId: o?.norenordno ?? '—',
+          symbol: o?.tsym ?? '—',
+          side: o?.trantype === 'B' ? 'BUY' : o?.trantype === 'S' ? 'SELL' : null,
+          quantity: this.num(o?.qty),
+          price: this.num(o?.prc),
+          status: o?.status ?? null,
+          orderType: o?.prctyp ?? null,
+          time: o?.norentm ?? null,
+        };
+      }
+      return {
+        orderId: o?.order_id ?? o?.id ?? '—',
+        symbol: o?.tradingsymbol ?? o?.symbol ?? '—',
+        side: o?.transaction_type ?? o?.side ?? null,
+        quantity: this.num(o?.quantity),
+        price: this.num(o?.price ?? o?.average_price),
+        status: o?.status ?? null,
+        orderType: o?.order_type ?? null,
+        time: o?.order_timestamp ?? o?.exchange_timestamp ?? null,
+      };
+    });
   }
 
-  private normalizeTrades(raw: any) {
-    if (!Array.isArray(raw)) return null;
-    return raw.map((t: any) => ({
-      tradeId: t?.trade_id ?? t?.id ?? '—',
-      orderId: t?.order_id ?? null,
-      symbol: t?.tradingsymbol ?? t?.symbol ?? '—',
-      side: t?.transaction_type ?? t?.side ?? null,
-      quantity: this.num(t?.quantity),
-      price: this.num(t?.average_price ?? t?.price),
-      time: t?.fill_timestamp ?? t?.exchange_timestamp ?? null,
-    }));
+  private normalizeTrades(broker: Broker, raw: any) {
+    const list = this.toArray(broker, raw, ['tradeBook']);
+    if (!list) return null;
+    return list.map((t: any) => {
+      if (broker === Broker.FYERS) {
+        return {
+          tradeId: t?.id ?? t?.orderNumber ?? '—',
+          orderId: t?.orderNumber ?? null,
+          symbol: t?.symbol ?? '—',
+          side: t?.side === 1 ? 'BUY' : t?.side === -1 ? 'SELL' : null,
+          quantity: this.num(t?.tradedQty ?? t?.qty),
+          price: this.num(t?.tradePrice),
+          time: t?.orderDateTime ?? null,
+        };
+      }
+      if (broker === Broker.SHOONYA) {
+        return {
+          tradeId: t?.flid ?? t?.norenordno ?? '—',
+          orderId: t?.norenordno ?? null,
+          symbol: t?.tsym ?? '—',
+          side: t?.trantype === 'B' ? 'BUY' : t?.trantype === 'S' ? 'SELL' : null,
+          quantity: this.num(t?.flqty ?? t?.qty),
+          price: this.num(t?.flprc ?? t?.prc),
+          time: t?.fltm ?? t?.norentm ?? null,
+        };
+      }
+      return {
+        tradeId: t?.trade_id ?? t?.id ?? '—',
+        orderId: t?.order_id ?? null,
+        symbol: t?.tradingsymbol ?? t?.symbol ?? '—',
+        side: t?.transaction_type ?? t?.side ?? null,
+        quantity: this.num(t?.quantity),
+        price: this.num(t?.average_price ?? t?.price),
+        time: t?.fill_timestamp ?? t?.exchange_timestamp ?? null,
+      };
+    });
   }
 
   private buildLiveProfile(profile: any, caps: BrokerCapabilities, profileOk: boolean) {
@@ -806,12 +957,12 @@ export class BrokerService {
     const health: any = dash.health;
     const profileOk = dash.errors.profile === null && profile !== null;
 
-    const holdings = capabilities.holdings ? this.normalizeHoldings(dash.holdings) : null;
+    const holdings = capabilities.holdings ? this.normalizeHoldings(account.broker, dash.holdings) : null;
     const positions = capabilities.positions
-      ? this.normalizePositions(dash.positions)
+      ? this.normalizePositions(account.broker, dash.positions)
       : null;
-    const orders = capabilities.orders ? this.normalizeOrders(dash.orders) : null;
-    const trades = capabilities.trades ? this.normalizeTrades(dash.trades) : null;
+    const orders = capabilities.orders ? this.normalizeOrders(account.broker, dash.orders) : null;
+    const trades = capabilities.trades ? this.normalizeTrades(account.broker, dash.trades) : null;
 
     return {
       broker: account.broker,
@@ -874,6 +1025,7 @@ export class BrokerService {
     const adapter = this.buildAdapter(
       account.broker,
       this.encryption.decrypt(session.encryptedAccessToken),
+      session.userId ?? account.clientId,
     );
     const settled = await Promise.allSettled([
       this.safeCall(adapter, methodMap[section]),
@@ -884,11 +1036,11 @@ export class BrokerService {
     }
 
     let data: any = s.data;
-    if (section === 'funds') data = this.normalizeFunds(s.data);
-    else if (section === 'holdings') data = this.normalizeHoldings(s.data);
-    else if (section === 'positions') data = this.normalizePositions(s.data);
-    else if (section === 'orders') data = this.normalizeOrders(s.data);
-    else if (section === 'trades') data = this.normalizeTrades(s.data);
+    if (section === 'funds') data = this.normalizeFunds(account.broker, s.data);
+    else if (section === 'holdings') data = this.normalizeHoldings(account.broker, s.data);
+    else if (section === 'positions') data = this.normalizePositions(account.broker, s.data);
+    else if (section === 'orders') data = this.normalizeOrders(account.broker, s.data);
+    else if (section === 'trades') data = this.normalizeTrades(account.broker, s.data);
     else if (section === 'profile')
       data = this.buildLiveProfile(s.data, capabilities, true);
 
