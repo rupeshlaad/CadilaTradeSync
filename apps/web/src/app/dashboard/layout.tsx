@@ -21,6 +21,12 @@ const NAV = [
   { href: '/dashboard', label: 'Overview', icon: LayoutDashboard },
 
   {
+    href: '/dashboard/broker-accounts',
+    label: 'Broker Accounts',
+    icon: Landmark,
+  },
+
+  {
     href: '/dashboard/trading-accounts',
     label: 'Trading Accounts',
     icon: Landmark,

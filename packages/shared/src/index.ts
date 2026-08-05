@@ -301,3 +301,44 @@ export interface StrategySummaryDto {
   risk: StrategyRiskDto;
   recentActivity: StrategyRecentActivityDto;
 }
+
+// ---------------------------------------------------------------------------
+// Sprint 6.1 — Follower Onboarding & Dashboard header DTOs
+// ---------------------------------------------------------------------------
+
+export interface FollowerOnboardingStep {
+  key: 'PROFILE' | 'BROKER' | 'RISK' | 'STRATEGY' | 'READY';
+  label: string;
+  complete: boolean;
+}
+
+export interface FollowerOnboardingStatusDto {
+  steps: FollowerOnboardingStep[];
+  completedCount: number;
+  totalCount: number;
+  readyForTrading: boolean;
+}
+
+export interface FollowerDashboardSummaryDto {
+  userName: string | null;
+  userEmail: string | null;
+  totalBrokers: number;
+  connectedBrokers: number;
+  activeStrategies: number;
+  activeSubscriptions: number;
+  lastSync: string | null;
+}
+
+/**
+ * Sprint 6.1 — Broker connection state visualised by the shared
+ * BrokerConnectionBadge. Superset of the current backend
+ * `ConnectionStatus` enum so the UI can also render ephemeral
+ * "RECONNECTING" transitions the frontend tracks locally during the
+ * OAuth roundtrip.
+ */
+export type BrokerConnectionState =
+  | 'CONNECTED'
+  | 'EXPIRED'
+  | 'DISCONNECTED'
+  | 'RECONNECTING'
+  | 'ERROR';
