@@ -18,6 +18,7 @@ import { MasterWatcherModule } from './master-watcher/master-watcher.module';
 import { InstrumentModule } from './instruments/instrument.module';
 import { AdminDbModule } from './admin-db/admin-db.module';
 import { ShoonyaModule } from './brokers/shoonya/shoonya.module';
+import { ICICIDirectModule } from './brokers/icici/icici.module';
 import { BrokersModule } from './brokers/brokers.module';
 import { StrategyExecutionModule } from './strategy-execution/strategy-execution.module';
 import { TradeEventsModule } from './trade-events/trade-events.module';
@@ -48,6 +49,7 @@ import { FollowerModule } from './follower/follower.module';
     ZerodhaModule,
     FyersModule,
     ShoonyaModule,
+    ICICIDirectModule,
     MasterWatcherModule,
     InstrumentModule,
     AdminDbModule,

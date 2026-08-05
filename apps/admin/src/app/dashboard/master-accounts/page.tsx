@@ -242,6 +242,8 @@ export default function MasterAccountsPage() {
                                 ? 'fyers'
                                 : r.broker === 'SHOONYA'
                                 ? 'shoonya'
+                                : r.broker === 'ICICI_DIRECT'
+                                ? 'icici'
                                 : 'zerodha';
                             window.location.href =
                               `${api}/brokers/${brokerPath}/login?tradingAccountId=${r.id}&returnTo=${returnTo}`;

@@ -299,6 +299,9 @@ export default function BrokerAccountsPage() {
       case Broker.SHOONYA:
         window.location.href = `${apiBaseUrl}/brokers/shoonya/login?${q}`;
         break;
+      case Broker.ICICI_DIRECT:
+        window.location.href = `${apiBaseUrl}/brokers/icici/login?${q}`;
+        break;
       default:
         setBanner({ kind: 'error', message: 'Broker not supported yet.' });
     }

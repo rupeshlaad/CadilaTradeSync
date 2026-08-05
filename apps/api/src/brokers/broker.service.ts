@@ -4,6 +4,7 @@ import { EncryptionService } from '../encryption/encryption.service';
 import { ZerodhaAdapter } from './zerodha/zerodha.adapter';
 import { FyersAdapter } from './fyers/fyers.adapter';
 import { ShoonyaAdapter } from './shoonya/shoonya.adapter';
+import { ICICIDirectAdapter } from './icici/icici.adapter';
 import { Broker, BrokerSession, ConnectionStatus, TradingAccount } from '@prisma/client';
 import type {
   BrokerCapabilities,
@@ -25,7 +26,11 @@ import type {
  * from the persisted TradingAccount + BrokerSession rows — never fabricated.
  */
 
-type AnyAdapter = ZerodhaAdapter | FyersAdapter | ShoonyaAdapter;
+type AnyAdapter =
+  | ZerodhaAdapter
+  | FyersAdapter
+  | ShoonyaAdapter
+  | ICICIDirectAdapter;
 
 interface SettledSection<T> {
   data: T | null;
@@ -98,7 +103,12 @@ export class BrokerService {
     return { account, session };
   }
 
-  private buildAdapter(broker: Broker, accessToken: string, userId?: string): AnyAdapter {
+  private buildAdapter(
+    broker: Broker,
+    accessToken: string,
+    userId?: string,
+    creds?: { apiKey?: string; apiSecret?: string },
+  ): AnyAdapter {
     switch (broker) {
       case Broker.FYERS: {
         const adapter = new FyersAdapter();
@@ -112,6 +122,16 @@ export class BrokerService {
         if (userId) adapter.setUserId(userId);
         return adapter;
       }
+      case Broker.ICICI_DIRECT: {
+        // Sprint 6.2.0 — Breeze keys are per-account (not env-based). The raw
+        // API session token is stored as the access token; api key + secret
+        // are needed for the per-request checksum headers.
+        const adapter = new ICICIDirectAdapter();
+        adapter.setCredentials(creds?.apiKey ?? '', creds?.apiSecret ?? '');
+        adapter.setSessionToken(accessToken);
+        if (userId) adapter.setUserId(userId);
+        return adapter;
+      }
       case Broker.ZERODHA:
       default: {
         const adapter = new ZerodhaAdapter();
@@ -119,6 +139,26 @@ export class BrokerService {
         return adapter;
       }
     }
+  }
+
+  /**
+   * Sprint 6.2.0 — ICICI Direct needs the account's api key + secret (for the
+   * Breeze checksum headers) in addition to the session token. Returns
+   * undefined for every other broker so their adapter construction is
+   * unchanged.
+   */
+  private iciciCreds(
+    account: TradingAccount,
+  ): { apiKey?: string; apiSecret?: string } | undefined {
+    if (account.broker !== Broker.ICICI_DIRECT) return undefined;
+    return {
+      apiKey: account.encryptedApiKey
+        ? this.encryption.decrypt(account.encryptedApiKey)
+        : undefined,
+      apiSecret: account.encryptedApiSecret
+        ? this.encryption.decrypt(account.encryptedApiSecret)
+        : undefined,
+    };
   }
 
   /**
@@ -133,6 +173,8 @@ export class BrokerService {
         return FyersAdapter.capabilities;
       case Broker.SHOONYA:
         return ShoonyaAdapter.capabilities;
+      case Broker.ICICI_DIRECT:
+        return ICICIDirectAdapter.capabilities;
       case Broker.ZERODHA:
         return ZerodhaAdapter.capabilities;
       default:
@@ -214,7 +256,33 @@ export class BrokerService {
   private normalizeFunds(broker: Broker, margins: any) {
     if (broker === Broker.FYERS) return this.normalizeFyersFunds(margins);
     if (broker === Broker.SHOONYA) return this.normalizeShoonyaFunds(margins);
+    if (broker === Broker.ICICI_DIRECT) return this.normalizeICICIFunds(margins);
     return this.normalizeZerodhaFunds(margins);
+  }
+
+  private normalizeICICIFunds(margins: any) {
+    // Breeze `funds` Success → { total_bank_balance, unallocated_balance,
+    // allocated_equity, allocated_fno, block_by_trade_balance, ... }.
+    if (!margins || typeof margins !== 'object') return null;
+    const availableCash = this.num(margins.total_bank_balance);
+    const unallocated = this.num(margins.unallocated_balance);
+    const used = this.num(
+      margins.block_by_trade_balance ??
+        margins.block_by_trade_equity ??
+        margins.block_by_trade_fno,
+    );
+    const availableMargin = unallocated ?? availableCash;
+    if (availableCash === null && unallocated === null && used === null) {
+      return null;
+    }
+    return [
+      this.fund('EQUITY', {
+        availableCash,
+        usedMargin: used,
+        availableMargin,
+        net: availableMargin,
+      }),
+    ];
   }
 
   private fund(
@@ -471,6 +539,7 @@ export class BrokerService {
       account.broker,
       this.encryption.decrypt(session.encryptedAccessToken),
       session.userId ?? account.clientId,
+      this.iciciCreds(account),
     );
 
     const [
@@ -666,6 +735,8 @@ export class BrokerService {
         return FyersAdapter.features;
       case Broker.SHOONYA:
         return ShoonyaAdapter.features;
+      case Broker.ICICI_DIRECT:
+        return ICICIDirectAdapter.features;
       case Broker.ZERODHA:
         return ZerodhaAdapter.features;
       default:
@@ -691,6 +762,8 @@ export class BrokerService {
         return FyersAdapter.onboarding;
       case Broker.SHOONYA:
         return ShoonyaAdapter.onboarding;
+      case Broker.ICICI_DIRECT:
+        return ICICIDirectAdapter.onboarding;
       case Broker.ZERODHA:
         return ZerodhaAdapter.onboarding;
       default:
@@ -771,6 +844,19 @@ export class BrokerService {
           pnl: null,
         };
       }
+      if (broker === Broker.ICICI_DIRECT) {
+        // Breeze dematholdings carry no LTP/market-value/P&L (separate quotes
+        // endpoint required) — left null rather than fabricated.
+        return {
+          symbol: h?.stock_code ?? h?.stock_ISIN ?? '—',
+          exchange: h?.exchange_code ?? null,
+          quantity: this.num(h?.quantity ?? h?.demat_avail_quantity),
+          averagePrice: this.num(h?.average_cost_of_holdings ?? h?.average_cost),
+          ltp: null,
+          currentValue: null,
+          pnl: null,
+        };
+      }
       const qty = this.num(h?.quantity ?? h?.opening_quantity);
       const ltp = this.num(h?.last_price);
       return {
@@ -810,6 +896,17 @@ export class BrokerService {
           averagePrice: this.num(p?.netavgprc ?? p?.daybuyavgprc),
           ltp: this.num(p?.lp),
           pnl: this.num(p?.rpnl ?? p?.urmtom),
+        };
+      }
+      if (broker === Broker.ICICI_DIRECT) {
+        return {
+          symbol: p?.stock_code ?? '—',
+          exchange: p?.exchange_code ?? null,
+          product: p?.product_type ?? null,
+          quantity: this.num(p?.quantity),
+          averagePrice: this.num(p?.average_price),
+          ltp: this.num(p?.ltp),
+          pnl: this.num(p?.pnl),
         };
       }
       return {
@@ -852,6 +949,19 @@ export class BrokerService {
           time: o?.norentm ?? null,
         };
       }
+      if (broker === Broker.ICICI_DIRECT) {
+        const action = o?.action != null ? String(o.action).toUpperCase() : null;
+        return {
+          orderId: o?.order_id ?? '—',
+          symbol: o?.stock_code ?? '—',
+          side: action,
+          quantity: this.num(o?.quantity),
+          price: this.num(o?.price ?? o?.average_price),
+          status: o?.status ?? null,
+          orderType: o?.order_type ?? null,
+          time: o?.order_datetime ?? o?.order_date ?? null,
+        };
+      }
       return {
         orderId: o?.order_id ?? o?.id ?? '—',
         symbol: o?.tradingsymbol ?? o?.symbol ?? '—',
@@ -889,6 +999,18 @@ export class BrokerService {
           quantity: this.num(t?.flqty ?? t?.qty),
           price: this.num(t?.flprc ?? t?.prc),
           time: t?.fltm ?? t?.norentm ?? null,
+        };
+      }
+      if (broker === Broker.ICICI_DIRECT) {
+        const action = t?.action != null ? String(t.action).toUpperCase() : null;
+        return {
+          tradeId: t?.trade_id ?? t?.order_id ?? '—',
+          orderId: t?.order_id ?? null,
+          symbol: t?.stock_code ?? '—',
+          side: action,
+          quantity: this.num(t?.quantity),
+          price: this.num(t?.average_cost ?? t?.price ?? t?.traded_price),
+          time: t?.trade_date ?? t?.trade_datetime ?? null,
         };
       }
       return {
@@ -1026,6 +1148,7 @@ export class BrokerService {
       account.broker,
       this.encryption.decrypt(session.encryptedAccessToken),
       session.userId ?? account.clientId,
+      this.iciciCreds(account),
     );
     const settled = await Promise.allSettled([
       this.safeCall(adapter, methodMap[section]),
