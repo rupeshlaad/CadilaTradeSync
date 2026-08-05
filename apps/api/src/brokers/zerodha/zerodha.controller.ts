@@ -1,33 +1,22 @@
 import { Controller, Get, Query, Res } from '@nestjs/common';
 import { Response } from 'express';
+import { PrismaService } from '../../prisma/prisma.module';
 import { ZerodhaAdapter } from './zerodha.adapter';
 import { ZerodhaService } from './zerodha.service';
+import { buildBrokerCallbackRedirect } from '../broker-callback-redirect';
 
 const loginStore = new Map<string, string>();
-
-function getAdminBaseUrl(): string {
-  return (process.env.ADMIN_APP_URL ?? 'http://localhost:3001').replace(
-    /\/$/,
-    '',
-  );
-}
-
-function buildAdminUrl(path: string, params?: Record<string, string>): string {
-  const base = getAdminBaseUrl();
-  const url = new URL(`${base}${path.startsWith('/') ? path : `/${path}`}`);
-  if (params) {
-    for (const [k, v] of Object.entries(params)) {
-      if (v !== undefined && v !== null && v !== '') url.searchParams.set(k, v);
-    }
-  }
-  return url.toString();
-}
 
 @Controller('brokers/zerodha')
 export class ZerodhaController {
   private readonly adapter = new ZerodhaAdapter();
 
-  constructor(private readonly zerodhaService: ZerodhaService) {}
+  constructor(
+    private readonly zerodhaService: ZerodhaService,
+    // Sprint 6.1 — Prisma is required to route the OAuth redirect to
+    // the correct portal (Master → Admin app, Follower → Web app).
+    private readonly prisma: PrismaService,
+  ) {}
 
   @Get('login')
   login(
@@ -51,7 +40,8 @@ export class ZerodhaController {
     // Zerodha OAuth sometimes signals user-side failure via `status` param.
     if (status && status !== 'success') {
       return res.redirect(
-        buildAdminUrl('/dashboard/master-accounts', {
+        await buildBrokerCallbackRedirect(this.prisma, tradingAccountId, {
+          ok: false,
           error: `Broker login ${status}`,
         }),
       );
@@ -59,7 +49,8 @@ export class ZerodhaController {
 
     if (!requestToken) {
       return res.redirect(
-        buildAdminUrl('/dashboard/master-accounts', {
+        await buildBrokerCallbackRedirect(this.prisma, tradingAccountId, {
+          ok: false,
           error: 'Missing request token from broker',
         }),
       );
@@ -71,9 +62,10 @@ export class ZerodhaController {
 
       if (!tradingAccountId) {
         // Session was created upstream but we lost the reconnect context —
-        // still land the user in the admin app, not on a raw JSON page.
+        // still land the user in an app, never on a raw JSON page.
         return res.redirect(
-          buildAdminUrl('/dashboard/master-accounts', {
+          await buildBrokerCallbackRedirect(this.prisma, undefined, {
+            ok: false,
             error: 'Reconnect context missing. Please retry from the account.',
           }),
         );
@@ -88,17 +80,16 @@ export class ZerodhaController {
       );
 
       return res.redirect(
-        buildAdminUrl(
-          `/dashboard/master-accounts/${tradingAccountId}/dashboard`,
-          { connected: '1' },
-        ),
+        await buildBrokerCallbackRedirect(this.prisma, tradingAccountId, {
+          ok: true,
+        }),
       );
     } catch (err: any) {
-      // Never expose raw exception JSON to the browser.
       const msg =
         (err && (err.message || err.error_type)) || 'Broker authentication failed';
       return res.redirect(
-        buildAdminUrl('/dashboard/master-accounts', {
+        await buildBrokerCallbackRedirect(this.prisma, tradingAccountId, {
+          ok: false,
           error: String(msg),
         }),
       );

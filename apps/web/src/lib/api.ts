@@ -66,7 +66,35 @@ export const api = {
     remove: (id: string) => request<{ ok: true }>(`/trading-accounts/${id}`, { method: 'DELETE' }),
     enable: (id: string) => request<TradingAccountDto>(`/trading-accounts/${id}/enable`, { method: 'POST' }),
     disable: (id: string) => request<TradingAccountDto>(`/trading-accounts/${id}/disable`, { method: 'POST' }),
+    // Sprint 6.1 — broker session lifecycle for follower trading accounts.
+    disconnect: (id: string) =>
+      request<{ ok: boolean; broker: string; connectionStatus: string }>(
+        `/trading-accounts/${id}/disconnect`,
+        { method: 'POST' },
+      ),
+    sessionHealth: (id: string) =>
+      request<{
+        broker: string;
+        connectionStatus: string;
+        loginTime: string | null;
+        lastHeartbeat: string | null;
+        sessionActive: boolean;
+        tokenExpired: boolean | null;
+      }>(`/trading-accounts/${id}/session-health`),
   },
+
+  // ---------- Follower Onboarding & Dashboard header (Sprint 6.1) ----------
+  follower: {
+    onboardingStatus: () =>
+      request<import('@cts/shared').FollowerOnboardingStatusDto>(
+        '/follower/onboarding-status',
+      ),
+    dashboardSummary: () =>
+      request<import('@cts/shared').FollowerDashboardSummaryDto>(
+        '/follower/dashboard-summary',
+      ),
+  },
+
 
   // ---------- Strategies ----------
   strategies: {

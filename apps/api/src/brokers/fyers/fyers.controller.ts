@@ -1,7 +1,9 @@
 import { Controller, Get, Query, Res } from '@nestjs/common';
 import { Response } from 'express';
+import { PrismaService } from '../../prisma/prisma.module';
 import { FyersAdapter } from './fyers.adapter';
 import { FyersService } from './fyers.service';
+import { buildBrokerCallbackRedirect } from '../broker-callback-redirect';
 
 const loginStore = new Map<string, string>();
 
@@ -11,6 +13,9 @@ export class FyersController {
 
   constructor(
     private readonly fyersService: FyersService,
+    // Sprint 6.1 — Prisma is required to route the OAuth redirect to
+    // the correct portal after successful authentication.
+    private readonly prisma: PrismaService,
   ) {}
 
   @Get('login')
@@ -26,29 +31,64 @@ export class FyersController {
   @Get('callback')
   async callback(
     @Query('auth_code') authCode: string,
+    @Query('s') statusParam: string | undefined,
+    @Res() res: Response,
   ) {
-    const session = await this.adapter.exchangeToken(authCode);
-
-    const profile = await this.adapter.getProfile();
-
     const tradingAccountId = loginStore.get('current');
 
-    if (!tradingAccountId) {
-      throw new Error('Trading Account not found.');
+    if (statusParam && statusParam !== 'ok') {
+      return res.redirect(
+        await buildBrokerCallbackRedirect(this.prisma, tradingAccountId, {
+          ok: false,
+          error: `Broker login ${statusParam}`,
+        }),
+      );
     }
 
-    loginStore.delete('current');
+    if (!authCode) {
+      return res.redirect(
+        await buildBrokerCallbackRedirect(this.prisma, tradingAccountId, {
+          ok: false,
+          error: 'Missing auth code from broker',
+        }),
+      );
+    }
 
-    await this.fyersService.saveSession(
-      tradingAccountId,
-      session,
-      profile,
-    );
+    try {
+      const session = await this.adapter.exchangeToken(authCode);
+      const profile = await this.adapter.getProfile();
 
-    return {
-      success: true,
-      profile,
-      accessToken: session.access_token,
-    };
+      if (!tradingAccountId) {
+        return res.redirect(
+          await buildBrokerCallbackRedirect(this.prisma, undefined, {
+            ok: false,
+            error: 'Reconnect context missing. Please retry from the account.',
+          }),
+        );
+      }
+
+      loginStore.delete('current');
+
+      await this.fyersService.saveSession(tradingAccountId, session, profile);
+
+      // Sprint 6.1 — replace the previous raw JSON response with a
+      // redirect back to the correct portal so the user never lands
+      // on the broker's callback URL.
+      return res.redirect(
+        await buildBrokerCallbackRedirect(this.prisma, tradingAccountId, {
+          ok: true,
+        }),
+      );
+    } catch (err: any) {
+      const msg =
+        (err && (err.message || err.error_type)) ||
+        'Broker authentication failed';
+      return res.redirect(
+        await buildBrokerCallbackRedirect(this.prisma, tradingAccountId, {
+          ok: false,
+          error: String(msg),
+        }),
+      );
+    }
   }
 }
