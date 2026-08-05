@@ -5,6 +5,7 @@ import type {
   BrokerConnectionState,
   BrokerSessionHealthState,
   BrokerTokenStatus,
+  BrokerCapabilities,
   BrokerFundsSummaryDto,
   FollowerDashboardSummaryDto,
   FollowerOnboardingStatusDto,
@@ -92,7 +93,11 @@ export interface BrokerAccountCardData {
   tokenStatus?: BrokerTokenStatus | null;
   /** Sprint 6.1.2 — Broker-reported account holder name. */
   accountHolder?: string | null;
-  /** Optional details section — accountHolder / exchange / product / connection / refresh. */
+  /** Sprint 6.1.3 — Connection (last login) time, from backend. */
+  connectionTime?: string | null;
+  /** Sprint 6.1.3 — Broker-declared data capabilities. */
+  capabilities?: BrokerCapabilities | null;
+  /** Optional details section — exchanges / products / margin / funds. */
   details?: BrokerAccountDetails | null;
 }
 
@@ -104,11 +109,8 @@ export interface BrokerSessionHealth {
 }
 
 export interface BrokerAccountDetails {
-  accountHolder?: string | null;
   exchanges?: string[] | null;
   products?: string[] | null;
-  connectionTime?: string | null;
-  lastRefresh?: string | null;
   /** Sprint 6.1.2 — Funds summary from the broker (null when unsupported). */
   funds?: BrokerFundsSummaryDto[] | null;
   /** Sprint 6.1.2 — whether the broker exposed a margin/funds payload. */
@@ -128,6 +130,23 @@ function fmtMoney(v: number | null | undefined): string {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   });
+}
+
+const NOT_SUPPORTED = 'Not Supported by Broker';
+
+/**
+ * Sprint 6.1.3 — Render a broker-metadata value honestly:
+ *   - capability false        → "Not Supported by Broker"
+ *   - capability true, value   → the value
+ *   - capability true, no data → "—"
+ * Never fabricates.
+ */
+function metaValue(
+  supported: boolean | null | undefined,
+  value: string | null | undefined,
+): string {
+  if (supported === false) return NOT_SUPPORTED;
+  return value && value.length > 0 ? value : '—';
 }
 
 export interface BrokerAccountCardProps {
@@ -231,7 +250,7 @@ export function BrokerAccountCard({
             Account Holder
           </div>
           <div data-testid={`broker-account-${account.id}-account-holder`}>
-            {account.accountHolder ?? account.details?.accountHolder ?? '—'}
+            {account.accountHolder ?? '—'}
           </div>
         </div>
         <div>
@@ -256,6 +275,14 @@ export function BrokerAccountCard({
           </div>
           <div data-testid={`broker-account-${account.id}-last-sync`}>
             {fmtTime(account.lastHeartbeat)}
+          </div>
+        </div>
+        <div>
+          <div className="text-[11px] uppercase tracking-wide text-muted-foreground">
+            Connection Time
+          </div>
+          <div data-testid={`broker-account-${account.id}-connection-time`}>
+            {fmtTime(account.connectionTime ?? account.lastLogin)}
           </div>
         </div>
         <div>
@@ -317,46 +344,36 @@ export function BrokerAccountCard({
           data-testid={`broker-account-card-${account.id}-details`}
         >
           <DetailRow
-            label="Account holder"
-            value={
-              account.accountHolder ?? account.details.accountHolder ?? '—'
-            }
-          />
-          <DetailRow
             label="Exchanges"
-            value={
+            value={metaValue(
+              account.capabilities?.exchanges,
               account.details.exchanges && account.details.exchanges.length > 0
                 ? account.details.exchanges.join(', ')
-                : '—'
-            }
+                : null,
+            )}
           />
           <DetailRow
             label="Products"
-            value={
+            value={metaValue(
+              account.capabilities?.products,
               account.details.products && account.details.products.length > 0
                 ? account.details.products.join(', ')
-                : '—'
-            }
-          />
-          <DetailRow
-            label="Connection time"
-            value={fmtTime(account.details.connectionTime)}
-          />
-          <DetailRow
-            label="Last refresh"
-            value={fmtTime(account.details.lastRefresh)}
+                : null,
+            )}
           />
           <DetailRow
             label="Margin"
             value={
-              account.details.marginAvailable
+              account.capabilities?.margin === false
+                ? NOT_SUPPORTED
+                : account.details.marginAvailable
                 ? 'Available'
-                : account.details.marginAvailable === false
-                ? 'Not supported'
                 : '—'
             }
           />
-          {account.details.funds && account.details.funds.length > 0 && (
+          {account.capabilities?.funds === false ? (
+            <DetailRow label="Funds" value={NOT_SUPPORTED} />
+          ) : account.details.funds && account.details.funds.length > 0 ? (
             <div
               className="col-span-2 md:col-span-3"
               data-testid={`broker-account-${account.id}-funds`}
@@ -380,6 +397,8 @@ export function BrokerAccountCard({
                 ))}
               </div>
             </div>
+          ) : (
+            <DetailRow label="Funds" value="—" />
           )}
         </div>
       )}

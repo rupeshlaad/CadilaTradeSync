@@ -4,12 +4,8 @@ import { EncryptionService } from '../encryption/encryption.service';
 import { ZerodhaAdapter } from './zerodha/zerodha.adapter';
 import { FyersAdapter } from './fyers/fyers.adapter';
 import { ShoonyaAdapter } from './shoonya/shoonya.adapter';
-import {
-  Broker,
-  BrokerSession,
-  ConnectionStatus,
-  TradingAccount,
-} from '@prisma/client';
+import { Broker, BrokerSession, ConnectionStatus, TradingAccount } from '@prisma/client';
+import type { BrokerCapabilities } from './broker.interface';
 
 /**
  * Sprint 6.1.2 — Follower Broker Lifecycle Stabilization.
@@ -116,6 +112,36 @@ export class BrokerService {
         adapter.setAccessToken(accessToken);
         return adapter;
       }
+    }
+  }
+
+  /**
+   * Sprint 6.1.3 — Static broker-data capabilities, read straight from the
+   * adapter classes (no instantiation → no env dependency). The single place
+   * every module (broker cards today; Holdings / Positions / Orders / Trades /
+   * Portfolio / Live P&L tomorrow) can ask "does this broker expose X?".
+   */
+  capabilitiesFor(broker: Broker): BrokerCapabilities {
+    switch (broker) {
+      case Broker.FYERS:
+        return FyersAdapter.capabilities;
+      case Broker.SHOONYA:
+        return ShoonyaAdapter.capabilities;
+      case Broker.ZERODHA:
+        return ZerodhaAdapter.capabilities;
+      default:
+        // Unknown brokers advertise nothing until an adapter is wired.
+        return {
+          profile: false,
+          exchanges: false,
+          products: false,
+          funds: false,
+          margin: false,
+          holdings: false,
+          positions: false,
+          orders: false,
+          trades: false,
+        };
     }
   }
 
@@ -490,15 +516,35 @@ export class BrokerService {
   }
 
   /**
-   * Sprint 6.1.2 — Compact broker-account verification used by the Follower
-   * Broker Accounts cards. Reuses the same live adapter probe as
-   * getDashboard() but returns only identity + entitlement + funds so the UI
-   * can confirm the connection without rendering the full trading dashboard.
+   * Sprint 6.1.2 / 6.1.3 — Compact broker-account verification used by the
+   * Follower Broker Accounts cards. Reuses the same live adapter probe as
+   * getDashboard() (Master/Follower parity — one backend service) and layers
+   * the broker's declared capabilities on top so the UI can render
+   * "Not Supported by Broker" instead of a fabricated/empty value.
    */
   async getBrokerInfo(accountId: string) {
+    const { account } = await this.loadContext(accountId);
+    const capabilities = this.capabilitiesFor(account.broker);
+
     const dash = await this.getDashboard(accountId);
     const profile: any = dash.profile;
     const health: any = dash.health;
+
+    const profileOk = dash.errors.profile === null && profile !== null;
+    const marginOk = dash.errors.margins === null && dash.margins !== null;
+
+    // Only surface a value when the broker supports it AND the probe returned
+    // data. Everything else is left null so the UI can decide between
+    // "Not Supported by Broker" (capability = false) and "—" (no data yet).
+    const exchanges =
+      capabilities.exchanges && Array.isArray(profile?.exchanges)
+        ? profile.exchanges
+        : null;
+    const products =
+      capabilities.products && Array.isArray(profile?.products)
+        ? profile.products
+        : null;
+    const funds = capabilities.funds ? dash.funds : null;
 
     return {
       broker: health.broker,
@@ -510,11 +556,14 @@ export class BrokerService {
       sessionHealthState: health.sessionHealthState,
       tokenStatus: health.tokenStatus,
       loginTime: health.loginTime,
+      connectionTime: health.loginTime,
       lastSync: health.lastHeartbeat,
-      exchanges: Array.isArray(profile?.exchanges) ? profile.exchanges : null,
-      products: Array.isArray(profile?.products) ? profile.products : null,
-      funds: dash.funds,
-      marginAvailable: dash.margins !== null && dash.errors.margins === null,
+      capabilities,
+      profileAvailable: profileOk,
+      exchanges,
+      products,
+      funds,
+      marginAvailable: capabilities.margin && marginOk,
       error: dash.errors.profile,
     };
   }

@@ -412,6 +412,24 @@ export interface BrokerFundsSummaryDto {
 }
 
 /**
+ * Sprint 6.1.3 — Declares which broker-data capabilities an adapter actually
+ * implements, so the UI can render "Not Supported by Broker" instead of a
+ * fabricated or ambiguous empty value. Reusable by future Holdings /
+ * Positions / Orders / Trades / Portfolio / Live P&L modules.
+ */
+export interface BrokerCapabilities {
+  profile: boolean;
+  exchanges: boolean;
+  products: boolean;
+  funds: boolean;
+  margin: boolean;
+  holdings: boolean;
+  positions: boolean;
+  orders: boolean;
+  trades: boolean;
+}
+
+/**
  * Response of GET /trading-accounts/:id/broker-info (follower live verify).
  * Retrieves broker account information through the existing broker adapter
  * immediately after OAuth so the follower can confirm CTS is truly linked.
@@ -426,7 +444,12 @@ export interface BrokerVerifyInfoDto {
   sessionHealthState: BrokerSessionHealthState;
   tokenStatus: BrokerTokenStatus;
   loginTime: string | null;
+  connectionTime: string | null;
   lastSync: string | null;
+  /** Broker-declared data capabilities (single source for "Not Supported"). */
+  capabilities: BrokerCapabilities;
+  /** True when the live profile probe returned data. */
+  profileAvailable: boolean;
   exchanges: string[] | null;
   products: string[] | null;
   funds: BrokerFundsSummaryDto[] | null;
