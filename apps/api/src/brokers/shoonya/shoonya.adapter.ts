@@ -84,18 +84,37 @@ export class ShoonyaAdapter implements BrokerAdapter {
     throw new Error('Shoonya does not support OAuth token exchange.');
   }
 
-  /** Core Noren POST helper: jData + jKey, form-encoded. */
+  /**
+   * Core Noren POST helper. Every authenticated endpoint uses
+   * `jData=<raw json>&jKey=<susertoken>` with an explicit
+   * application/x-www-form-urlencoded content type — matching the official
+   * NorenApi client exactly (jData is NOT url-encoded).
+   */
   private async post(path: string, jData: Record<string, any>): Promise<any> {
     const body = `jData=${JSON.stringify(jData)}&jKey=${this.sessionToken}`;
     const { data } = await axios.post(`${this.baseUrl}/${path}`, body, {
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     });
-    if (data && data.stat && data.stat !== 'Ok' && !Array.isArray(data)) {
-      throw new Error(data.emsg || `Shoonya error on ${path}`);
+    if (Array.isArray(data)) return data;
+    if (data && data.stat && data.stat !== 'Ok') {
+      const emsg = String(data.emsg ?? '');
+      // Noren returns Not_ok + "no data"/"no record" for genuinely empty
+      // books — treat that as an empty result, not an error (no fabrication).
+      if (/no data|no record|not found|no.*position|no.*holding/i.test(emsg)) {
+        return [];
+      }
+      throw new Error(emsg || `Shoonya error on ${path}`);
     }
     return data;
   }
 
+  /**
+   * Noren QuickAuth login. `pwd` must be SHA-256(password), `appkey` must be
+   * SHA-256("{uid}|{api_secret}"), `factor2` is the current TOTP — the caller
+   * (ShoonyaService) computes these. Body is raw `jData=<json>` (no jKey yet).
+   * On success the susertoken + uid/actid are cached on the adapter so the
+   * immediately-following profile/data calls succeed.
+   */
   async login(payload: {
     uid: string;
     pwd: string;
@@ -103,25 +122,27 @@ export class ShoonyaAdapter implements BrokerAdapter {
     vc: string;
     appkey: string;
   }) {
-    const body = new URLSearchParams();
-    body.append(
-      'jData',
-      JSON.stringify({
-        source: 'API',
-        apkversion: '1.0.0',
-        uid: payload.uid,
-        pwd: payload.pwd,
-        factor2: payload.factor2,
-        vc: payload.vc,
-        appkey: payload.appkey,
-        imei: 'CTS_SERVER',
-      }),
-    );
-    const response = await axios.post(
-      `${this.baseUrl}/QuickAuth`,
-      body.toString(),
-    );
-    return response.data;
+    const jData = {
+      source: 'API',
+      apkversion: '1.0.0',
+      uid: payload.uid,
+      pwd: payload.pwd,
+      factor2: payload.factor2,
+      vc: payload.vc,
+      appkey: payload.appkey,
+      imei: 'CTS_SERVER',
+    };
+    const body = `jData=${JSON.stringify(jData)}`;
+    const { data } = await axios.post(`${this.baseUrl}/QuickAuth`, body, {
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    });
+    if (!data || data.stat !== 'Ok' || !data.susertoken) {
+      throw new Error(data?.emsg || 'Shoonya login failed');
+    }
+    // Persist session state so getProfile()/data calls work on this instance.
+    this.sessionToken = data.susertoken;
+    this.setUserId(data.actid ?? payload.uid);
+    return data;
   }
 
   async getProfile(): Promise<BrokerProfile> {
