@@ -1,5 +1,11 @@
 import axios from 'axios';
-import { BrokerAdapter, BrokerCapabilities, BrokerProfile } from '../broker.interface';
+import {
+  BrokerAdapter,
+  BrokerCapabilities,
+  BrokerFeatureSupport,
+  BrokerOnboardingRequirements,
+  BrokerProfile,
+} from '../broker.interface';
 
 export class ShoonyaAdapter implements BrokerAdapter {
   /**
@@ -16,6 +22,40 @@ export class ShoonyaAdapter implements BrokerAdapter {
     positions: false,
     orders: false,
     trades: false,
+  };
+
+  /** Sprint 6.1.5 — operational feature support. */
+  static readonly features: BrokerFeatureSupport = {
+    supportsProfile: true,
+    supportsFunds: false,
+    supportsMargins: false,
+    supportsHoldings: false,
+    supportsPositions: false,
+    supportsOrders: false,
+    supportsTrades: false,
+    supportsPortfolio: false,
+    supportsAutoLogin: true,
+    supportsLogout: false,
+    supportsSessionRefresh: false,
+  };
+
+  /**
+   * Sprint 6.1.5 — onboarding requirements. Shoonya uses direct login
+   * (API key + user id + password + TOTP + vendor code), not OAuth.
+   */
+  static readonly onboarding: BrokerOnboardingRequirements = {
+    requiresOAuth: false,
+    requiresApiKey: true,
+    requiresSecret: false,
+    requiresPassword: true,
+    requiresPIN: false,
+    requiresTOTP: true,
+    requiresStaticIP: false,
+    requiresRedirect: false,
+    requiresVendorCode: true,
+    supportsAutoLogin: true,
+    supportsTokenRefresh: false,
+    supportsMFA: true,
   };
 
   private readonly baseUrl = 'https://api.shoonya.com/NorenWClientTP';

@@ -377,6 +377,150 @@ export const BROKER_SESSION_HEALTH_LABELS: Record<BrokerSessionHealthState, stri
 /** Access-token liveness classification for a broker session. */
 export type BrokerTokenStatus = 'VALID' | 'EXPIRED' | 'INVALID' | 'NONE';
 
+// ---------------------------------------------------------------------------
+// Sprint 6.1.5 — Capability-driven, SDK-driven operational broker dashboard.
+// ---------------------------------------------------------------------------
+
+export interface BrokerFeatureSupport {
+  supportsProfile: boolean;
+  supportsFunds: boolean;
+  supportsMargins: boolean;
+  supportsHoldings: boolean;
+  supportsPositions: boolean;
+  supportsOrders: boolean;
+  supportsTrades: boolean;
+  supportsPortfolio: boolean;
+  supportsAutoLogin: boolean;
+  supportsLogout: boolean;
+  supportsSessionRefresh: boolean;
+}
+
+export interface BrokerOnboardingRequirements {
+  requiresOAuth: boolean;
+  requiresApiKey: boolean;
+  requiresSecret: boolean;
+  requiresPassword: boolean;
+  requiresPIN: boolean;
+  requiresTOTP: boolean;
+  requiresStaticIP: boolean;
+  requiresRedirect: boolean;
+  requiresVendorCode: boolean;
+  supportsAutoLogin: boolean;
+  supportsTokenRefresh: boolean;
+  supportsMFA: boolean;
+}
+
+export interface BrokerCatalogEntry {
+  broker: Broker;
+  capabilities: BrokerCapabilities;
+  features: BrokerFeatureSupport;
+  onboarding: BrokerOnboardingRequirements;
+}
+
+export interface BrokerHoldingRow {
+  symbol: string;
+  exchange: string | null;
+  quantity: number | null;
+  averagePrice: number | null;
+  ltp: number | null;
+  currentValue: number | null;
+  pnl: number | null;
+}
+
+export interface BrokerPositionRow {
+  symbol: string;
+  exchange: string | null;
+  product: string | null;
+  quantity: number | null;
+  averagePrice: number | null;
+  ltp: number | null;
+  pnl: number | null;
+}
+
+export interface BrokerOrderRow {
+  orderId: string;
+  symbol: string;
+  side: string | null;
+  quantity: number | null;
+  price: number | null;
+  status: string | null;
+  orderType: string | null;
+  time: string | null;
+}
+
+export interface BrokerTradeRow {
+  tradeId: string;
+  orderId: string | null;
+  symbol: string;
+  side: string | null;
+  quantity: number | null;
+  price: number | null;
+  time: string | null;
+}
+
+export interface BrokerPortfolioSummary {
+  instruments: number;
+  totalValue: number | null;
+  totalPnl: number | null;
+}
+
+export interface BrokerDashboardHealth {
+  connected: boolean;
+  connectionStatus: ConnectionStatus;
+  sessionHealthState: BrokerSessionHealthState;
+  tokenStatus: BrokerTokenStatus;
+  broker: Broker;
+  clientId: string;
+  accountHolder: string | null;
+  brokerUserId: string | null;
+  loginTime: string | null;
+  lastHeartbeat: string | null;
+  sessionActive: boolean;
+  tokenExpired: boolean | null;
+}
+
+export interface BrokerDashboardErrors {
+  profile: string | null;
+  margins: string | null;
+  holdings: string | null;
+  positions: string | null;
+  orders: string | null;
+  trades: string | null;
+}
+
+/** Full SDK-driven broker dashboard (GET /trading-accounts/:id/dashboard). */
+export interface BrokerDashboardDto {
+  broker: Broker;
+  clientId: string;
+  capabilities: BrokerCapabilities;
+  features: BrokerFeatureSupport;
+  health: BrokerDashboardHealth;
+  profile: BrokerLiveProfileDto;
+  funds: BrokerFundsSummaryDto[] | null;
+  holdings: BrokerHoldingRow[] | null;
+  positions: BrokerPositionRow[] | null;
+  orders: BrokerOrderRow[] | null;
+  trades: BrokerTradeRow[] | null;
+  portfolio: BrokerPortfolioSummary | null;
+  errors: BrokerDashboardErrors;
+}
+
+export type BrokerDashboardSection =
+  | 'profile'
+  | 'funds'
+  | 'holdings'
+  | 'positions'
+  | 'orders'
+  | 'trades';
+
+/** Granular section refresh (GET /trading-accounts/:id/section/:section). */
+export interface BrokerSectionResponse<T = unknown> {
+  section: BrokerDashboardSection;
+  supported: boolean;
+  data: T | null;
+  error: string | null;
+}
+
 /**
  * Response of GET /trading-accounts/:id/session-health (follower) and
  * GET /admin/master-accounts/:id/session-health (master). Cheap, clock-based

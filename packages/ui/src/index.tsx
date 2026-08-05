@@ -3,3 +3,4 @@
 //              components (Follower Portal + Master Portal reuse).
 export * from './strategy/strategy-intelligence';
 export * from './follower/broker-and-onboarding';
+export * from './follower/broker-dashboard';

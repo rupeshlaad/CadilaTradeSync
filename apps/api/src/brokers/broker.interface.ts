@@ -33,6 +33,44 @@ export interface BrokerCapabilities {
   trades: boolean;
 }
 
+/**
+ * Sprint 6.1.5 — Operational feature support declared by each adapter and
+ * consumed for capability-driven dashboard rendering (never keyed on broker
+ * name in the UI).
+ */
+export interface BrokerFeatureSupport {
+  supportsProfile: boolean;
+  supportsFunds: boolean;
+  supportsMargins: boolean;
+  supportsHoldings: boolean;
+  supportsPositions: boolean;
+  supportsOrders: boolean;
+  supportsTrades: boolean;
+  supportsPortfolio: boolean;
+  supportsAutoLogin: boolean;
+  supportsLogout: boolean;
+  supportsSessionRefresh: boolean;
+}
+
+/**
+ * Sprint 6.1.5 — Onboarding requirements declared by each adapter. Drives the
+ * dynamic connect form (no broker-specific UI duplication).
+ */
+export interface BrokerOnboardingRequirements {
+  requiresOAuth: boolean;
+  requiresApiKey: boolean;
+  requiresSecret: boolean;
+  requiresPassword: boolean;
+  requiresPIN: boolean;
+  requiresTOTP: boolean;
+  requiresStaticIP: boolean;
+  requiresRedirect: boolean;
+  requiresVendorCode: boolean;
+  supportsAutoLogin: boolean;
+  supportsTokenRefresh: boolean;
+  supportsMFA: boolean;
+}
+
 export interface BrokerAdapter {
   getLoginUrl(): string;
 
