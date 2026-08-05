@@ -45,14 +45,13 @@ export class ShoonyaService {
       account.encryptedVendorCode!,
     );
 
-    console.log({
+    // Note: never log plaintext credentials. Redacted diagnostics only.
+    console.log('Shoonya login attempt', {
       uid: account.clientId,
       vendorCode,
-      apiKey,
-      apiSecret,
-      passwordHash,
-      appKeyHash,
-      otp,
+      hasApiKey: !!apiKey,
+      hasAppKeyHash: !!appKeyHash,
+      hasTotp: !!otp,
     });
 
     let session: any;
@@ -68,8 +67,7 @@ export class ShoonyaService {
     } catch (err: any) {
       console.error('Shoonya Login Error:', {
         status: err.response?.status,
-        headers: err.response?.headers,
-        data: err.response?.data,
+        data: err.response?.data ?? err.message,
       });
 
       throw new BadRequestException({
@@ -80,7 +78,13 @@ export class ShoonyaService {
       });
     }
 
+    // adapter.login() has cached susertoken + uid/actid, so profile works.
     const profile = await adapter.getProfile();
+
+    // Noren sessions are invalidated daily; force re-login after ~06:00 IST
+    // (00:30 UTC). This lets the shared session-health engine detect expiry.
+    const expiresAt = nextShoonyaExpiry();
+    const now = new Date();
 
     await this.prisma.brokerSession.upsert({
       where: {
@@ -90,20 +94,20 @@ export class ShoonyaService {
         },
       },
       update: {
-        encryptedAccessToken: this.encryption.encrypt(
-          session.susertoken,
-        ),
+        encryptedAccessToken: this.encryption.encrypt(session.susertoken),
         userId: profile.userId,
         userName: profile.userName,
+        expiresAt,
+        loginTime: now,
       },
       create: {
         tradingAccountId,
         broker: 'SHOONYA',
-        encryptedAccessToken: this.encryption.encrypt(
-          session.susertoken,
-        ),
+        encryptedAccessToken: this.encryption.encrypt(session.susertoken),
         userId: profile.userId,
         userName: profile.userName,
+        expiresAt,
+        loginTime: now,
       },
     });
 
@@ -113,6 +117,7 @@ export class ShoonyaService {
       },
       data: {
         connectionStatus: 'CONNECTED',
+        lastHeartbeat: now,
       },
     });
 
@@ -121,4 +126,20 @@ export class ShoonyaService {
       profile,
     };
   }
+}
+
+/**
+ * Sprint 6.1.7 — Shoonya/Noren access tokens expire daily. Compute the next
+ * 06:00 IST (00:30 UTC) boundary so the shared BrokerSession lifecycle can
+ * mark the token EXPIRED and require a fresh TOTP login.
+ */
+function nextShoonyaExpiry(): Date {
+  const d = new Date();
+  const expiry = new Date(
+    Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 0, 30, 0),
+  );
+  if (expiry.getTime() <= d.getTime()) {
+    expiry.setUTCDate(expiry.getUTCDate() + 1);
+  }
+  return expiry;
 }
