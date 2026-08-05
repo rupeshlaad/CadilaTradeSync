@@ -73,13 +73,24 @@ export interface BrokerAccountCardData {
   connectionState: BrokerConnectionState;
   enabled: boolean;
   lastHeartbeat: string | null;
+  /** Sprint 6.1.1 — Last successful broker login timestamp. */
+  lastLogin: string | null;
   createdAt: string | null;
   hasApiKey: boolean;
   hasApiSecret: boolean;
   hasPassword: boolean;
   hasTotpSecret: boolean;
+  /** Sprint 6.1.1 — Session health snapshot for the badge row. */
+  sessionHealth?: BrokerSessionHealth | null;
   /** Optional details section — accountHolder / exchange / product / connection / refresh. */
   details?: BrokerAccountDetails | null;
+}
+
+export interface BrokerSessionHealth {
+  healthy: boolean;
+  sessionActive: boolean;
+  tokenExpired: boolean | null;
+  lastCheckedAt: string | null;
 }
 
 export interface BrokerAccountDetails {
@@ -185,9 +196,47 @@ export function BrokerAccountCard({
         </div>
         <div>
           <div className="text-[11px] uppercase tracking-wide text-muted-foreground">
+            Last Login
+          </div>
+          <div data-testid={`broker-account-${account.id}-last-login`}>
+            {fmtTime(account.lastLogin)}
+          </div>
+        </div>
+        <div>
+          <div className="text-[11px] uppercase tracking-wide text-muted-foreground">
             Last Sync
           </div>
-          <div>{fmtTime(account.lastHeartbeat)}</div>
+          <div data-testid={`broker-account-${account.id}-last-sync`}>
+            {fmtTime(account.lastHeartbeat)}
+          </div>
+        </div>
+        <div>
+          <div className="text-[11px] uppercase tracking-wide text-muted-foreground">
+            Session Health
+          </div>
+          <div
+            className="flex items-center gap-2"
+            data-testid={`broker-account-${account.id}-session-health`}
+          >
+            {account.sessionHealth ? (
+              <>
+                <span
+                  className={`inline-flex h-2.5 w-2.5 rounded-full ${
+                    account.sessionHealth.healthy
+                      ? 'bg-emerald-500'
+                      : 'bg-destructive'
+                  }`}
+                  aria-hidden
+                />
+                <span className="text-xs">
+                  {account.sessionHealth.healthy ? 'Healthy' : 'Attention'}
+                  {account.sessionHealth.tokenExpired ? ' · expired' : ''}
+                </span>
+              </>
+            ) : (
+              <span className="text-xs text-muted-foreground">—</span>
+            )}
+          </div>
         </div>
         <div>
           <div className="text-[11px] uppercase tracking-wide text-muted-foreground">

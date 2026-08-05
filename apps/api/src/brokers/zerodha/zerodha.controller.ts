@@ -1,11 +1,18 @@
-import { Controller, Get, Query, Res } from '@nestjs/common';
-import { Response } from 'express';
+import { Controller, Get, Query, Req, Res } from '@nestjs/common';
+import { Request, Response } from 'express';
+import { randomUUID } from 'crypto';
+
 import { PrismaService } from '../../prisma/prisma.module';
 import { ZerodhaAdapter } from './zerodha.adapter';
 import { ZerodhaService } from './zerodha.service';
 import { buildBrokerCallbackRedirect } from '../broker-callback-redirect';
-
-const loginStore = new Map<string, string>();
+import { putOAuthState, takeOAuthState } from '../oauth-state.store';
+import {
+  OAUTH_STATE_COOKIE,
+  clearOAuthStateCookie,
+  readCookie,
+  setOAuthStateCookie,
+} from '../oauth-cookie';
 
 @Controller('brokers/zerodha')
 export class ZerodhaController {
@@ -13,19 +20,29 @@ export class ZerodhaController {
 
   constructor(
     private readonly zerodhaService: ZerodhaService,
-    // Sprint 6.1 — Prisma is required to route the OAuth redirect to
-    // the correct portal (Master → Admin app, Follower → Web app).
     private readonly prisma: PrismaService,
   ) {}
 
+  /**
+   * Sprint 6.1.1 — Broker login initiator.
+   *
+   *   /brokers/zerodha/login?tradingAccountId=<id>&returnTo=<url>
+   *
+   * A random state id is stored server-side (with the trading
+   * account id and originating page URL) and shipped to the browser
+   * as an HttpOnly cookie so the /callback handler can resolve the
+   * flow without relying on a global slot. `returnTo` is validated
+   * for open-redirect safety by `buildBrokerCallbackRedirect`.
+   */
   @Get('login')
   login(
     @Query('tradingAccountId') tradingAccountId: string,
+    @Query('returnTo') returnTo: string | undefined,
     @Res() res: Response,
   ) {
-    // Preserve reconnect context via the existing in-memory store mechanism.
-    loginStore.set('current', tradingAccountId);
-
+    const stateId = randomUUID();
+    putOAuthState(stateId, { tradingAccountId, returnTo });
+    setOAuthStateCookie(res, stateId);
     return res.redirect(this.adapter.getLoginUrl());
   }
 
@@ -33,25 +50,45 @@ export class ZerodhaController {
   async callback(
     @Query('request_token') requestToken: string,
     @Query('status') status: string | undefined,
+    @Req() req: Request,
     @Res() res: Response,
   ) {
-    const tradingAccountId = loginStore.get('current');
+    const stateId = readCookie(req, OAUTH_STATE_COOKIE);
+    const entry = takeOAuthState(stateId);
+    clearOAuthStateCookie(res);
 
-    // Zerodha OAuth sometimes signals user-side failure via `status` param.
+    const tradingAccountId = entry?.tradingAccountId;
+    const returnTo = entry?.returnTo;
+
     if (status && status !== 'success') {
       return res.redirect(
-        await buildBrokerCallbackRedirect(this.prisma, tradingAccountId, {
-          ok: false,
-          error: `Broker login ${status}`,
+        await buildBrokerCallbackRedirect(this.prisma, {
+          tradingAccountId,
+          returnTo,
+          result: { ok: false, error: `Broker login ${status}` },
         }),
       );
     }
 
     if (!requestToken) {
       return res.redirect(
-        await buildBrokerCallbackRedirect(this.prisma, tradingAccountId, {
-          ok: false,
-          error: 'Missing request token from broker',
+        await buildBrokerCallbackRedirect(this.prisma, {
+          tradingAccountId,
+          returnTo,
+          result: { ok: false, error: 'Missing request token from broker' },
+        }),
+      );
+    }
+
+    if (!tradingAccountId) {
+      return res.redirect(
+        await buildBrokerCallbackRedirect(this.prisma, {
+          tradingAccountId: undefined,
+          returnTo,
+          result: {
+            ok: false,
+            error: 'Reconnect context missing. Please retry from the account.',
+          },
         }),
       );
     }
@@ -60,19 +97,6 @@ export class ZerodhaController {
       const session = await this.adapter.exchangeToken(requestToken);
       const profile = await this.adapter.getProfile();
 
-      if (!tradingAccountId) {
-        // Session was created upstream but we lost the reconnect context —
-        // still land the user in an app, never on a raw JSON page.
-        return res.redirect(
-          await buildBrokerCallbackRedirect(this.prisma, undefined, {
-            ok: false,
-            error: 'Reconnect context missing. Please retry from the account.',
-          }),
-        );
-      }
-
-      loginStore.delete('current');
-
       await this.zerodhaService.saveSession(
         tradingAccountId,
         session,
@@ -80,17 +104,21 @@ export class ZerodhaController {
       );
 
       return res.redirect(
-        await buildBrokerCallbackRedirect(this.prisma, tradingAccountId, {
-          ok: true,
+        await buildBrokerCallbackRedirect(this.prisma, {
+          tradingAccountId,
+          returnTo,
+          result: { ok: true },
         }),
       );
     } catch (err: any) {
       const msg =
-        (err && (err.message || err.error_type)) || 'Broker authentication failed';
+        (err && (err.message || err.error_type)) ||
+        'Broker authentication failed';
       return res.redirect(
-        await buildBrokerCallbackRedirect(this.prisma, tradingAccountId, {
-          ok: false,
-          error: String(msg),
+        await buildBrokerCallbackRedirect(this.prisma, {
+          tradingAccountId,
+          returnTo,
+          result: { ok: false, error: String(msg) },
         }),
       );
     }

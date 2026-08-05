@@ -3,19 +3,16 @@ import { AccountType } from '@prisma/client';
 import type { PrismaService } from '../prisma/prisma.module';
 
 /**
- * Sprint 6.1 — Shared broker OAuth callback redirect logic.
+ * Sprint 6.1 / 6.1.1 — Shared broker OAuth callback redirect logic.
  *
- * Reused by both the Zerodha and Fyers callback controllers so a
- * single implementation decides where the browser lands after broker
- * authentication:
- *
- *   - MASTER  trading accounts → Admin app (ADMIN_APP_URL, default 3001)
- *   - FOLLOWER trading accounts → Web  app (WEB_APP_URL,   default 3000)
- *
- * On success the destination is the account's landing page with a
- * `connected=1` query string. On failure the destination is the
- * portfolio's broker-accounts list with an `error=<message>` query
- * string so the UI can render a dismissable toast.
+ * Sprint 6.1 added portal-aware defaults (Master → Admin app,
+ * Follower → Web app). Sprint 6.1.1 adds `returnTo` support so
+ * that a Reconnect initiated from the Master Portal lands back on
+ * the *same page* the user came from, and a Reconnect initiated
+ * from the Follower Broker Accounts page lands back there. The
+ * `returnTo` value is validated against the configured base URLs
+ * (and relative paths are always allowed) so the redirect cannot
+ * be turned into an open-redirect vector.
  */
 
 export type BrokerCallbackResult =
@@ -38,17 +35,63 @@ function webAppBaseUrl(): string {
 }
 
 /**
- * Look up the trading account's role and return the destination URL
- * for a broker OAuth callback outcome. If the account cannot be
- * resolved we fall back to the ADMIN app landing page — matching the
- * legacy behaviour so an unknown OAuth roundtrip never leaves the
- * user on a raw JSON page.
+ * Compute a safe absolute redirect target from an untrusted `returnTo`.
+ * Rules:
+ *   - Relative paths (e.g. `/dashboard/master-accounts`) are always
+ *     accepted and joined onto the configured portal base URL.
+ *   - Absolute URLs are only accepted when their origin matches the
+ *     admin or web base URL (open-redirect guard).
+ *   - Anything else falls back to `null` and the caller uses the
+ *     portal-aware default landing page.
  */
+function coerceSafeReturnTo(
+  returnTo: string | undefined,
+  portalBase: string,
+): string | null {
+  if (!returnTo) return null;
+  const trimmed = returnTo.trim();
+  if (trimmed.length === 0) return null;
+  if (trimmed.startsWith('/') && !trimmed.startsWith('//')) {
+    return portalBase + trimmed;
+  }
+  try {
+    const parsed = new URL(trimmed);
+    const admin = new URL(adminAppBaseUrl());
+    const web = new URL(webAppBaseUrl());
+    if (
+      parsed.origin === admin.origin ||
+      parsed.origin === web.origin ||
+      parsed.origin === portalBase
+    ) {
+      return parsed.toString();
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+export interface BrokerCallbackRedirectOptions {
+  tradingAccountId?: string;
+  returnTo?: string;
+  result: BrokerCallbackResult;
+}
+
 export async function buildBrokerCallbackRedirect(
   prisma: PrismaService,
-  tradingAccountId: string | undefined,
-  result: BrokerCallbackResult,
+  optsOrTradingAccountId:
+    | BrokerCallbackRedirectOptions
+    | (string | undefined),
+  legacyResult?: BrokerCallbackResult,
 ): Promise<string> {
+  // Legacy signature: (prisma, tradingAccountId, result).
+  const opts: BrokerCallbackRedirectOptions =
+    typeof optsOrTradingAccountId === 'object' && optsOrTradingAccountId !== null
+      ? optsOrTradingAccountId
+      : { tradingAccountId: optsOrTradingAccountId, result: legacyResult! };
+
+  const { tradingAccountId, returnTo, result } = opts;
+
   let accountType: AccountType | null = null;
   if (tradingAccountId) {
     const acc = await prisma.tradingAccount.findUnique({
@@ -59,20 +102,24 @@ export async function buildBrokerCallbackRedirect(
   }
 
   const isFollower = accountType === AccountType.FOLLOWER;
-  const base = isFollower ? webAppBaseUrl() : adminAppBaseUrl();
+  const portalBase = isFollower ? webAppBaseUrl() : adminAppBaseUrl();
 
-  let path: string;
-  if (result.ok && tradingAccountId) {
-    path = isFollower
-      ? `/dashboard/broker-accounts`
-      : `/dashboard/master-accounts/${tradingAccountId}/dashboard`;
+  // 1) Preserve origin if provided and safe.
+  const safeReturnTo = coerceSafeReturnTo(returnTo, portalBase);
+
+  // 2) Fall back to portal-aware default landing pages.
+  let base: string;
+  if (safeReturnTo) {
+    base = safeReturnTo;
+  } else if (result.ok && tradingAccountId && !isFollower) {
+    base = `${portalBase}/dashboard/master-accounts/${tradingAccountId}/dashboard`;
+  } else if (isFollower) {
+    base = `${portalBase}/dashboard/broker-accounts`;
   } else {
-    path = isFollower
-      ? `/dashboard/broker-accounts`
-      : `/dashboard/master-accounts`;
+    base = `${portalBase}/dashboard/master-accounts`;
   }
 
-  const url = new URL(`${base}${path}`);
+  const url = new URL(base);
   if (result.ok) {
     url.searchParams.set('connected', '1');
     if (tradingAccountId) url.searchParams.set('accountId', tradingAccountId);

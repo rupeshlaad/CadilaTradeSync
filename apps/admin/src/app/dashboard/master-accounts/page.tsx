@@ -231,9 +231,22 @@ export default function MasterAccountsPage() {
                               process.env.NEXT_PUBLIC_API_URL ??
                               'http://localhost:4000';
 
+                            // Sprint 6.1.1 — preserve origin so the
+                            // callback returns to this master-accounts
+                            // page (not a broker JSON page).
+                            const returnTo = encodeURIComponent(
+                              '/dashboard/master-accounts',
+                            );
+                            const brokerPath =
+                              r.broker === 'FYERS'
+                                ? 'fyers'
+                                : r.broker === 'SHOONYA'
+                                ? 'shoonya'
+                                : 'zerodha';
                             window.location.href =
-                              `${api}/brokers/zerodha/login?tradingAccountId=${r.id}`;
+                              `${api}/brokers/${brokerPath}/login?tradingAccountId=${r.id}&returnTo=${returnTo}`;
                           }}
+                          data-testid={`master-accounts-connect-btn-${r.id}`}
                         >
                           {r.connectionStatus === 'CONNECTED'
                             ? 'Reconnect'
