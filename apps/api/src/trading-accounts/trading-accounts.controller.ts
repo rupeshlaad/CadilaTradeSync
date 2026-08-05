@@ -79,6 +79,18 @@ export class TradingAccountsController {
   }
 
   /**
+   * Sprint 6.1.2 — Live broker-account verification for a follower's trading
+   * account. Retrieves broker account information through the existing broker
+   * adapter (profile / entitlements / funds) so the follower can confirm CTS
+   * is truly linked immediately after OAuth. Reuses the shared BrokerService.
+   */
+  @Get(':id/broker-info')
+  async brokerInfo(@Req() req: any, @Param('id') id: string) {
+    await this.assertOwnedFollowerAccount(req.user.sub, id);
+    return this.brokerService.getBrokerInfo(id);
+  }
+
+  /**
    * Sprint 6.1 — Disconnect broker session for a follower's trading
    * account. Reuses BrokerService.disconnect (delete broker session
    * row, mark TradingAccount DISCONNECTED, clear heartbeat).

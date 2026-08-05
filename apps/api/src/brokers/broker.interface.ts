@@ -3,6 +3,9 @@ export interface BrokerProfile {
   userId: string;
   userName: string;
   email?: string;
+  /** Sprint 6.1.2 — optional broker-reported entitlements (null when unsupported). */
+  exchanges?: string[];
+  products?: string[];
 }
 
 export interface BrokerAdapter {

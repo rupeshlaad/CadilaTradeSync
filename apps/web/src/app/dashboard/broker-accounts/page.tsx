@@ -2,13 +2,15 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
-import Link from 'next/link';
 
 import {
   BrokerAccountCard,
   type BrokerAccountCardData,
 } from '@cts/ui';
-import type { BrokerConnectionState } from '@cts/shared';
+import type {
+  BrokerConnectionState,
+  BrokerVerifyInfoDto,
+} from '@cts/shared';
 import {
   BROKER_LABELS,
   Broker,
@@ -82,23 +84,34 @@ function mapConnectionState(v: string | null | undefined): BrokerConnectionState
 function toCardData(
   row: TradingAccountDto,
   health: FollowerHealthById | undefined,
+  info: BrokerVerifyInfoDto | undefined,
 ): BrokerAccountCardData {
+  // Sprint 6.1.2 — connection state is driven by the persisted backend
+  // session-health, never by frontend-only state. Falls back to the row's
+  // stored status only until the health probe resolves.
+  const connectionState = mapConnectionState(
+    health?.connectionStatus ?? (row.connectionStatus as any),
+  );
   const loginTime = health?.loginTime ?? null;
+  const accountHolder = info?.accountHolder ?? health?.accountHolder ?? null;
   return {
     id: row.id,
     broker: row.broker,
     brokerLabel: BROKER_LABELS[row.broker] ?? row.broker,
     nickname: row.nickname,
     clientId: row.clientId,
-    connectionState: mapConnectionState(row.connectionStatus as any),
+    connectionState,
     enabled: row.enabled,
-    lastHeartbeat: row.lastHeartbeat ?? health?.lastHeartbeat ?? null,
+    lastHeartbeat: info?.lastSync ?? row.lastHeartbeat ?? health?.lastHeartbeat ?? null,
     lastLogin: loginTime,
     createdAt: row.createdAt ?? null,
     hasApiKey: row.hasApiKey,
     hasApiSecret: row.hasApiSecret,
     hasPassword: row.hasPassword,
     hasTotpSecret: row.hasTotpSecret,
+    sessionHealthState: health?.sessionHealthState ?? null,
+    tokenStatus: health?.tokenStatus ?? null,
+    accountHolder,
     sessionHealth: health
       ? {
           healthy:
@@ -110,11 +123,13 @@ function toCardData(
         }
       : null,
     details: {
-      accountHolder: row.nickname,
-      exchanges: null,
-      products: null,
+      accountHolder,
+      exchanges: info?.exchanges ?? null,
+      products: info?.products ?? null,
       connectionTime: loginTime ?? row.updatedAt ?? null,
-      lastRefresh: row.lastHeartbeat ?? null,
+      lastRefresh: info?.lastSync ?? row.lastHeartbeat ?? null,
+      funds: info?.funds ?? null,
+      marginAvailable: info ? info.marginAvailable : null,
     },
   };
 }
@@ -131,6 +146,9 @@ export default function BrokerAccountsPage() {
   const [rows, setRows] = useState<TradingAccountDto[]>([]);
   const [healthByAccount, setHealthByAccount] = useState<
     Record<string, FollowerHealthById>
+  >({});
+  const [infoByAccount, setInfoByAccount] = useState<
+    Record<string, BrokerVerifyInfoDto>
   >({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -151,21 +169,31 @@ export default function BrokerAccountsPage() {
       const list = await api.tradingAccounts.list();
       setRows(list);
 
-      // Sprint 6.1.1 — fetch broker session health per account so the
-      // card can show Last Login + Session Health without an extra
-      // click. Failures per-account are silent — the card falls back
-      // to `—` for that field.
+      // Sprint 6.1.2 — connection state is the persisted backend session
+      // health, so both the Overview and this page read one source of truth.
+      // For connected accounts we additionally verify against the broker
+      // (profile / entitlements / funds) so the card can confirm the link.
       const healthMap: Record<string, FollowerHealthById> = {};
+      const infoMap: Record<string, BrokerVerifyInfoDto> = {};
       await Promise.all(
         list.map(async (row) => {
           try {
-            healthMap[row.id] = await api.tradingAccounts.sessionHealth(row.id);
+            const h = await api.tradingAccounts.sessionHealth(row.id);
+            healthMap[row.id] = h;
+            if (h.connectionStatus === 'CONNECTED') {
+              try {
+                infoMap[row.id] = await api.tradingAccounts.brokerInfo(row.id);
+              } catch {
+                /* live verify is best-effort; card still shows persisted state */
+              }
+            }
           } catch {
             /* ignore per-account errors */
           }
         }),
       );
       setHealthByAccount(healthMap);
+      setInfoByAccount(infoMap);
     } catch (e: any) {
       setError(e?.message ?? 'Failed to load broker accounts');
     } finally {
@@ -281,6 +309,28 @@ export default function BrokerAccountsPage() {
     }
   }
 
+  async function refreshSession(row: BrokerAccountCardData) {
+    // Sprint 6.1.2 — live broker verification through the shared adapter.
+    try {
+      const [h, info] = await Promise.all([
+        api.tradingAccounts.sessionHealth(row.id),
+        api.tradingAccounts.brokerInfo(row.id),
+      ]);
+      setHealthByAccount((prev) => ({ ...prev, [row.id]: h }));
+      setInfoByAccount((prev) => ({ ...prev, [row.id]: info }));
+      setBanner(
+        info.error
+          ? { kind: 'error', message: info.error }
+          : { kind: 'success', message: 'Broker session verified.' },
+      );
+    } catch (e: any) {
+      setBanner({
+        kind: 'error',
+        message: e?.message ?? 'Session verification failed',
+      });
+    }
+  }
+
   async function disconnectBroker(row: BrokerAccountCardData) {
     if (!confirm(`Disconnect ${row.brokerLabel} for ${row.nickname}?`)) return;
     try {
@@ -330,7 +380,9 @@ export default function BrokerAccountsPage() {
     });
   }
 
-  const cards = rows.map((r) => toCardData(r, healthByAccount[r.id]));
+  const cards = rows.map((r) =>
+    toCardData(r, healthByAccount[r.id], infoByAccount[r.id]),
+  );
   const connectedCount = cards.filter((c) => c.connectionState === 'CONNECTED').length;
 
   return (
@@ -406,14 +458,6 @@ export default function BrokerAccountsPage() {
               <Button className="mt-4" onClick={openCreate}>
                 <Plus className="h-4 w-4 mr-1" /> Add broker
               </Button>
-              <div className="mt-4 text-xs">
-                <Link
-                  href="/dashboard/trading-accounts"
-                  className="text-primary hover:underline"
-                >
-                  Legacy Trading Accounts →
-                </Link>
-              </div>
             </div>
           ) : (
             <div className="grid grid-cols-1 gap-4">
@@ -431,6 +475,7 @@ export default function BrokerAccountsPage() {
                   onRemove={removeAccount}
                   onToggleEnabled={toggleEnabled}
                   onRefreshHealth={refreshHealth}
+                  onRefreshSession={refreshSession}
                   showDetails={expanded.has(card.id)}
                   onToggleDetails={() => toggleDetails(card.id)}
                 />
