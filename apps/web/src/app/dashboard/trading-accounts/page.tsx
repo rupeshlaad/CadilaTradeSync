@@ -133,20 +133,21 @@ export default function TradingAccountsPage() {
       process.env.NEXT_PUBLIC_API_URL ??
       'http://localhost:4000';
 
+    // Sprint 6.1.1 — preserve origin so the callback returns here.
+    const returnTo = encodeURIComponent('/dashboard/trading-accounts');
+    const q = `tradingAccountId=${row.id}&returnTo=${returnTo}`;
+
     switch (row.broker) {
       case Broker.ZERODHA:
-        window.location.href =
-          `${apiUrl}/brokers/zerodha/login?tradingAccountId=${row.id}`;
+        window.location.href = `${apiUrl}/brokers/zerodha/login?${q}`;
         break;
 
       case Broker.FYERS:
-        window.location.href =
-          `${apiUrl}/brokers/fyers/login?tradingAccountId=${row.id}`;
+        window.location.href = `${apiUrl}/brokers/fyers/login?${q}`;
         break;
 
       case Broker.SHOONYA:
-        window.location.href =
-          `${apiUrl}/brokers/shoonya/login?tradingAccountId=${row.id}`;
+        window.location.href = `${apiUrl}/brokers/shoonya/login?${q}`;
         break;
 
       default:

@@ -1,11 +1,18 @@
-import { Controller, Get, Query, Res } from '@nestjs/common';
-import { Response } from 'express';
+import { Controller, Get, Query, Req, Res } from '@nestjs/common';
+import { Request, Response } from 'express';
+import { randomUUID } from 'crypto';
+
 import { PrismaService } from '../../prisma/prisma.module';
 import { FyersAdapter } from './fyers.adapter';
 import { FyersService } from './fyers.service';
 import { buildBrokerCallbackRedirect } from '../broker-callback-redirect';
-
-const loginStore = new Map<string, string>();
+import { putOAuthState, takeOAuthState } from '../oauth-state.store';
+import {
+  OAUTH_STATE_COOKIE,
+  clearOAuthStateCookie,
+  readCookie,
+  setOAuthStateCookie,
+} from '../oauth-cookie';
 
 @Controller('brokers/fyers')
 export class FyersController {
@@ -13,18 +20,18 @@ export class FyersController {
 
   constructor(
     private readonly fyersService: FyersService,
-    // Sprint 6.1 — Prisma is required to route the OAuth redirect to
-    // the correct portal after successful authentication.
     private readonly prisma: PrismaService,
   ) {}
 
   @Get('login')
   login(
     @Query('tradingAccountId') tradingAccountId: string,
+    @Query('returnTo') returnTo: string | undefined,
     @Res() res: Response,
   ) {
-    loginStore.set('current', tradingAccountId);
-
+    const stateId = randomUUID();
+    putOAuthState(stateId, { tradingAccountId, returnTo });
+    setOAuthStateCookie(res, stateId);
     return res.redirect(this.adapter.getLoginUrl());
   }
 
@@ -32,24 +39,45 @@ export class FyersController {
   async callback(
     @Query('auth_code') authCode: string,
     @Query('s') statusParam: string | undefined,
+    @Req() req: Request,
     @Res() res: Response,
   ) {
-    const tradingAccountId = loginStore.get('current');
+    const stateId = readCookie(req, OAUTH_STATE_COOKIE);
+    const entry = takeOAuthState(stateId);
+    clearOAuthStateCookie(res);
+
+    const tradingAccountId = entry?.tradingAccountId;
+    const returnTo = entry?.returnTo;
 
     if (statusParam && statusParam !== 'ok') {
       return res.redirect(
-        await buildBrokerCallbackRedirect(this.prisma, tradingAccountId, {
-          ok: false,
-          error: `Broker login ${statusParam}`,
+        await buildBrokerCallbackRedirect(this.prisma, {
+          tradingAccountId,
+          returnTo,
+          result: { ok: false, error: `Broker login ${statusParam}` },
         }),
       );
     }
 
     if (!authCode) {
       return res.redirect(
-        await buildBrokerCallbackRedirect(this.prisma, tradingAccountId, {
-          ok: false,
-          error: 'Missing auth code from broker',
+        await buildBrokerCallbackRedirect(this.prisma, {
+          tradingAccountId,
+          returnTo,
+          result: { ok: false, error: 'Missing auth code from broker' },
+        }),
+      );
+    }
+
+    if (!tradingAccountId) {
+      return res.redirect(
+        await buildBrokerCallbackRedirect(this.prisma, {
+          tradingAccountId: undefined,
+          returnTo,
+          result: {
+            ok: false,
+            error: 'Reconnect context missing. Please retry from the account.',
+          },
         }),
       );
     }
@@ -58,25 +86,13 @@ export class FyersController {
       const session = await this.adapter.exchangeToken(authCode);
       const profile = await this.adapter.getProfile();
 
-      if (!tradingAccountId) {
-        return res.redirect(
-          await buildBrokerCallbackRedirect(this.prisma, undefined, {
-            ok: false,
-            error: 'Reconnect context missing. Please retry from the account.',
-          }),
-        );
-      }
-
-      loginStore.delete('current');
-
       await this.fyersService.saveSession(tradingAccountId, session, profile);
 
-      // Sprint 6.1 — replace the previous raw JSON response with a
-      // redirect back to the correct portal so the user never lands
-      // on the broker's callback URL.
       return res.redirect(
-        await buildBrokerCallbackRedirect(this.prisma, tradingAccountId, {
-          ok: true,
+        await buildBrokerCallbackRedirect(this.prisma, {
+          tradingAccountId,
+          returnTo,
+          result: { ok: true },
         }),
       );
     } catch (err: any) {
@@ -84,9 +100,10 @@ export class FyersController {
         (err && (err.message || err.error_type)) ||
         'Broker authentication failed';
       return res.redirect(
-        await buildBrokerCallbackRedirect(this.prisma, tradingAccountId, {
-          ok: false,
-          error: String(msg),
+        await buildBrokerCallbackRedirect(this.prisma, {
+          tradingAccountId,
+          returnTo,
+          result: { ok: false, error: String(msg) },
         }),
       );
     }

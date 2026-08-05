@@ -79,7 +79,11 @@ function mapConnectionState(v: string | null | undefined): BrokerConnectionState
   }
 }
 
-function toCardData(row: TradingAccountDto): BrokerAccountCardData {
+function toCardData(
+  row: TradingAccountDto,
+  health: FollowerHealthById | undefined,
+): BrokerAccountCardData {
+  const loginTime = health?.loginTime ?? null;
   return {
     id: row.id,
     broker: row.broker,
@@ -88,21 +92,36 @@ function toCardData(row: TradingAccountDto): BrokerAccountCardData {
     clientId: row.clientId,
     connectionState: mapConnectionState(row.connectionStatus as any),
     enabled: row.enabled,
-    lastHeartbeat: row.lastHeartbeat ?? null,
+    lastHeartbeat: row.lastHeartbeat ?? health?.lastHeartbeat ?? null,
+    lastLogin: loginTime,
     createdAt: row.createdAt ?? null,
     hasApiKey: row.hasApiKey,
     hasApiSecret: row.hasApiSecret,
     hasPassword: row.hasPassword,
     hasTotpSecret: row.hasTotpSecret,
+    sessionHealth: health
+      ? {
+          healthy:
+            health.sessionActive === true &&
+            (health.tokenExpired === null || health.tokenExpired === false),
+          sessionActive: health.sessionActive,
+          tokenExpired: health.tokenExpired,
+          lastCheckedAt: new Date().toISOString(),
+        }
+      : null,
     details: {
       accountHolder: row.nickname,
       exchanges: null,
       products: null,
-      connectionTime: row.updatedAt ?? null,
+      connectionTime: loginTime ?? row.updatedAt ?? null,
       lastRefresh: row.lastHeartbeat ?? null,
     },
   };
 }
+
+type FollowerHealthById = Awaited<
+  ReturnType<typeof api.tradingAccounts.sessionHealth>
+>;
 
 export default function BrokerAccountsPage() {
   const searchParams = useSearchParams();
@@ -110,6 +129,9 @@ export default function BrokerAccountsPage() {
   const oauthError = searchParams?.get('error');
 
   const [rows, setRows] = useState<TradingAccountDto[]>([]);
+  const [healthByAccount, setHealthByAccount] = useState<
+    Record<string, FollowerHealthById>
+  >({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [banner, setBanner] = useState<
@@ -126,7 +148,24 @@ export default function BrokerAccountsPage() {
   const load = useCallback(async () => {
     try {
       setLoading(true);
-      setRows(await api.tradingAccounts.list());
+      const list = await api.tradingAccounts.list();
+      setRows(list);
+
+      // Sprint 6.1.1 — fetch broker session health per account so the
+      // card can show Last Login + Session Health without an extra
+      // click. Failures per-account are silent — the card falls back
+      // to `—` for that field.
+      const healthMap: Record<string, FollowerHealthById> = {};
+      await Promise.all(
+        list.map(async (row) => {
+          try {
+            healthMap[row.id] = await api.tradingAccounts.sessionHealth(row.id);
+          } catch {
+            /* ignore per-account errors */
+          }
+        }),
+      );
+      setHealthByAccount(healthMap);
     } catch (e: any) {
       setError(e?.message ?? 'Failed to load broker accounts');
     } finally {
@@ -210,18 +249,35 @@ export default function BrokerAccountsPage() {
   );
 
   function connectBroker(row: BrokerAccountCardData) {
+    // Sprint 6.1.1 — preserve origin. After OAuth completes the API
+    // callback redirects back to this exact page.
+    const returnTo = encodeURIComponent('/dashboard/broker-accounts');
+    const q = `tradingAccountId=${row.id}&returnTo=${returnTo}`;
     switch (row.broker) {
       case Broker.ZERODHA:
-        window.location.href = `${apiBaseUrl}/brokers/zerodha/login?tradingAccountId=${row.id}`;
+        window.location.href = `${apiBaseUrl}/brokers/zerodha/login?${q}`;
         break;
       case Broker.FYERS:
-        window.location.href = `${apiBaseUrl}/brokers/fyers/login?tradingAccountId=${row.id}`;
+        window.location.href = `${apiBaseUrl}/brokers/fyers/login?${q}`;
         break;
       case Broker.SHOONYA:
-        window.location.href = `${apiBaseUrl}/brokers/shoonya/login?tradingAccountId=${row.id}`;
+        window.location.href = `${apiBaseUrl}/brokers/shoonya/login?${q}`;
         break;
       default:
         setBanner({ kind: 'error', message: 'Broker not supported yet.' });
+    }
+  }
+
+  async function refreshHealth(row: BrokerAccountCardData) {
+    try {
+      const h = await api.tradingAccounts.sessionHealth(row.id);
+      setHealthByAccount((prev) => ({ ...prev, [row.id]: h }));
+      setBanner({ kind: 'success', message: 'Session health refreshed.' });
+    } catch (e: any) {
+      setBanner({
+        kind: 'error',
+        message: e?.message ?? 'Health probe failed',
+      });
     }
   }
 
@@ -235,18 +291,6 @@ export default function BrokerAccountsPage() {
       setBanner({
         kind: 'error',
         message: e?.message ?? 'Disconnect failed',
-      });
-    }
-  }
-
-  async function refreshHealth(row: BrokerAccountCardData) {
-    try {
-      await api.tradingAccounts.sessionHealth(row.id);
-      await load();
-    } catch (e: any) {
-      setBanner({
-        kind: 'error',
-        message: e?.message ?? 'Health probe failed',
       });
     }
   }
@@ -286,7 +330,7 @@ export default function BrokerAccountsPage() {
     });
   }
 
-  const cards = rows.map(toCardData);
+  const cards = rows.map((r) => toCardData(r, healthByAccount[r.id]));
   const connectedCount = cards.filter((c) => c.connectionState === 'CONNECTED').length;
 
   return (
