@@ -114,6 +114,7 @@ function toCardData(
     accountHolder,
     connectionTime: info?.connectionTime ?? loginTime,
     capabilities: info?.capabilities ?? null,
+    liveProfile: info?.liveProfile ?? null,
     sessionHealth: health
       ? {
           healthy:
@@ -330,11 +331,35 @@ export default function BrokerAccountsPage() {
     }
   }
 
+  async function refreshProfile(row: BrokerAccountCardData) {
+    // Sprint 6.1.4 — refresh the live broker profile / funds via the adapter.
+    try {
+      const info = await api.tradingAccounts.brokerInfo(row.id);
+      setInfoByAccount((prev) => ({ ...prev, [row.id]: info }));
+      setBanner(
+        info.error
+          ? { kind: 'error', message: info.error }
+          : { kind: 'success', message: 'Broker profile refreshed.' },
+      );
+    } catch (e: any) {
+      setBanner({
+        kind: 'error',
+        message: e?.message ?? 'Profile refresh failed',
+      });
+    }
+  }
+
   async function disconnectBroker(row: BrokerAccountCardData) {
     if (!confirm(`Disconnect ${row.brokerLabel} for ${row.nickname}?`)) return;
     try {
       await api.tradingAccounts.disconnect(row.id);
-      setBanner({ kind: 'success', message: 'Broker disconnected.' });
+      // Sprint 6.1.4 — no supported broker SDK exposes token revoke/logout,
+      // so we are explicit that only the CTS session was invalidated.
+      setBanner({
+        kind: 'success',
+        message:
+          'Disconnected from CTS. Broker authorization remains active.',
+      });
       await load();
     } catch (e: any) {
       setBanner({
@@ -475,6 +500,7 @@ export default function BrokerAccountsPage() {
                   onToggleEnabled={toggleEnabled}
                   onRefreshHealth={refreshHealth}
                   onRefreshSession={refreshSession}
+                  onRefreshProfile={refreshProfile}
                   showDetails={expanded.has(card.id)}
                   onToggleDetails={() => toggleDetails(card.id)}
                 />

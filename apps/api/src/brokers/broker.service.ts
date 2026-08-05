@@ -210,6 +210,11 @@ export class BrokerService {
         available: number | null;
         used: number | null;
         net: number | null;
+        availableCash: number | null;
+        usedMargin: number | null;
+        availableMargin: number | null;
+        openingBalance: number | null;
+        collateral: number | null;
       }>
     | null {
     if (!margins || typeof margins !== 'object') return null;
@@ -223,23 +228,34 @@ export class BrokerService {
       available: number | null;
       used: number | null;
       net: number | null;
+      availableCash: number | null;
+      usedMargin: number | null;
+      availableMargin: number | null;
+      openingBalance: number | null;
+      collateral: number | null;
     }> = [];
     for (const key of Object.keys(margins)) {
       const row = margins[key];
       if (!row || typeof row !== 'object') continue;
-      const available =
-        row?.available?.live_balance ??
-        row?.available?.cash ??
-        row?.net ??
-        row?.available;
-      const used =
-        row?.utilised?.debits ?? row?.utilised?.total ?? row?.used ?? row?.utilised;
+      const availableCash = row?.available?.cash;
+      const openingBalance = row?.available?.opening_balance;
+      const collateral = row?.available?.collateral;
+      const availableMargin = row?.available?.live_balance ?? row?.net;
+      const usedMargin =
+        row?.utilised?.debits ?? row?.utilised?.total ?? row?.used;
       const net = row?.net ?? row?.available?.live_balance;
+      const available =
+        availableMargin ?? row?.available?.cash ?? row?.net ?? row?.available;
       out.push({
         segment: key,
         available: toNum(available),
-        used: toNum(used),
+        used: toNum(usedMargin),
         net: toNum(net),
+        availableCash: toNum(availableCash),
+        usedMargin: toNum(usedMargin),
+        availableMargin: toNum(availableMargin),
+        openingBalance: toNum(openingBalance),
+        collateral: toNum(collateral),
       });
     }
     return out.length > 0 ? out : null;
@@ -546,6 +562,24 @@ export class BrokerService {
         : null;
     const funds = capabilities.funds ? dash.funds : null;
 
+    // Sprint 6.1.4 — live profile (only fields the SDK actually returned).
+    // Missing fields stay null → UI shows "Not provided by broker".
+    const liveProfile = {
+      userName: profile?.userName ?? null,
+      email: profile?.email ?? null,
+      mobile: profile?.mobile ?? null,
+      accountType: profile?.accountType ?? null,
+      rmsStatus: profile?.rmsStatus ?? null,
+      exchanges: capabilities.exchanges && Array.isArray(profile?.exchanges)
+        ? profile.exchanges
+        : null,
+      products: capabilities.products && Array.isArray(profile?.products)
+        ? profile.products
+        : null,
+      segments: Array.isArray(profile?.segments) ? profile.segments : null,
+      profileStatus: profile?.profileStatus ?? (profileOk ? 'ACTIVE' : null),
+    };
+
     return {
       broker: health.broker,
       clientId: health.clientId,
@@ -560,6 +594,7 @@ export class BrokerService {
       lastSync: health.lastHeartbeat,
       capabilities,
       profileAvailable: profileOk,
+      liveProfile,
       exchanges,
       products,
       funds,

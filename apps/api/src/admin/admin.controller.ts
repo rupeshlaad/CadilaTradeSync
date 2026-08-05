@@ -1,4 +1,4 @@
-import { Controller, Get, UseGuards } from '@nestjs/common';
+import { Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -40,6 +40,26 @@ export class AdminController {
   @Get('followers')
   listFollowers() {
     return this.followers.listAllForAdmin();
+  }
+
+  /**
+   * Sprint 6.1.4 — Complete operational overview for one follower USER
+   * (profile + all broker accounts w/ health + subscriptions + trading).
+   * Reuses FollowersService/BrokerService — no duplicated queries.
+   */
+  @Get('followers/:userId/overview')
+  followerOverview(@Param('userId') userId: string) {
+    return this.followers.getFollowerOverview(userId);
+  }
+
+  @Post('followers/:id/enable')
+  enableFollower(@Param('id') id: string) {
+    return this.followers.setEnabledByAdmin(id, true);
+  }
+
+  @Post('followers/:id/disable')
+  disableFollower(@Param('id') id: string) {
+    return this.followers.setEnabledByAdmin(id, false);
   }
 
   @Get('subscriptions')
