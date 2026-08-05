@@ -4,10 +4,12 @@ import { randomUUID } from 'crypto';
 
 import { PrismaService } from '../../prisma/prisma.module';
 import { EncryptionService } from '../../encryption/encryption.service';
+import { RedisService } from '../../redis/redis.module';
 import { ICICIDirectAdapter } from './icici.adapter';
 import { ICICIDirectService } from './icici.service';
 import { buildBrokerCallbackRedirect } from '../broker-callback-redirect';
 import { putOAuthState, takeOAuthState } from '../oauth-state.store';
+import { putICICIState, readICICIState } from './icici-oauth-state';
 import {
   OAUTH_STATE_COOKIE,
   clearOAuthStateCookie,
@@ -39,6 +41,7 @@ export class ICICIDirectController {
     private readonly iciciService: ICICIDirectService,
     private readonly prisma: PrismaService,
     private readonly encryption: EncryptionService,
+    private readonly redis: RedisService,
   ) {}
 
   @Get('login')
@@ -72,7 +75,10 @@ export class ICICIDirectController {
     adapter.setCredentials(apiKey, '');
 
     const stateId = randomUUID();
+    // Durable across restarts/replicas (Redis) + same-process fallback
+    // (in-memory) so the multi-minute Breeze login cannot lose the context.
     putOAuthState(stateId, { tradingAccountId, returnTo });
+    await putICICIState(this.redis?.client, stateId, { tradingAccountId, returnTo });
     // Sprint 6.2.0 Hotfix — Breeze returns via a cross-site POST, on which a
     // SameSite=Lax cookie is NOT sent. Use SameSite=None (Secure) so the OAuth
     // state cookie survives the POST callback and state validation works.
@@ -115,7 +121,13 @@ export class ICICIDirectController {
     res: Response,
   ) {
     const stateId = readCookie(req, OAUTH_STATE_COOKIE);
-    const entry = takeOAuthState(stateId);
+    // Resolve OAuth context: durable Redis first (survives restarts/replicas
+    // and the cross-site POST), then the in-memory store as a same-process
+    // fallback. Redis reads are non-destructive so a GET+POST double callback
+    // both resolve.
+    let entry: { tradingAccountId: string; returnTo?: string } | undefined =
+      await readICICIState(this.redis?.client, stateId);
+    if (!entry) entry = takeOAuthState(stateId);
     clearOAuthStateCookie(res, 'None');
 
     const tradingAccountId = entry?.tradingAccountId;
