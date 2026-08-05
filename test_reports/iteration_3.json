@@ -1,0 +1,32 @@
+{
+  "summary": "Hotfix verification for Sprint 6.1.4 packages/shared enum strip-only SyntaxError. Verified that @cts/shared now resolves to compiled dist JS and NestJS API bootstraps cleanly without the enum SyntaxError.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "verification_details": {
+    "require_resolve": "/app/packages/shared/dist/index.js (compiled JS, not .ts source) - PASS",
+    "enum_runtime_check": "node -e require('@cts/shared').Broker.ZERODHA => 'ZERODHA' - PASS",
+    "nest_bootstrap": "Nest started, AppModule + all ~35 modules initialized, routes mapped (/auth, /users, /health, /trading-accounts, /strategies, /followers, /subscriptions, /admin/*, /brokers/zerodha|fyers|shoonya, /instruments, etc.) - PASS",
+    "enum_syntaxerror_absent": "grep for ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX / strip-only / 'enum is not supported' / SyntaxError from shared => 0 matches - PASS",
+    "expected_downstream_errors_ignored": "ioredis ECONNREFUSED and Prisma DATABASE_URL errors are expected per environment note and unrelated to this hotfix"
+  },
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "packages/shared/package.json correctly mirrors @cts/ui pattern (main/types/exports -> ./dist).",
+    "Consider adding a CI check that fails if any workspace package's main points to a .ts file to prevent regression of this class of bug."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100%", "frontend": "N/A (skipped per request)"},
+  "seed_data_creation": "None",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Hotfix verified at module-load layer only. Postgres/Redis are intentionally not running in this pod; expected ioredis ECONNREFUSED and Prisma DATABASE_URL errors will appear AFTER Nest bootstrap and are NOT regressions.",
+  "rca of the issue": "Node's native TS support (strip-only, no code emit) cannot handle `enum` because enums require runtime object generation. @cts/shared package.json previously pointed main/types to ./src/index.ts (raw TS with enums), so importers would load .ts directly and Node would throw ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX. Fix: added tsc build emitting dist/index.js (with transpiled enums like `Broker[\"ZERODHA\"]=\"ZERODHA\"`) + dist/index.d.ts, and repointed main/types/exports to ./dist. Verified require.resolve returns compiled JS and Nest bootstraps without the SyntaxError."
+}
