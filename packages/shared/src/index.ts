@@ -342,3 +342,94 @@ export type BrokerConnectionState =
   | 'DISCONNECTED'
   | 'RECONNECTING'
   | 'ERROR';
+
+// ---------------------------------------------------------------------------
+// Sprint 6.1.2 — Follower Broker Lifecycle Stabilization
+//
+// One source of truth for broker session state. The backend derives all
+// of the fields below from the persisted TradingAccount + BrokerSession
+// rows (BrokerService), so refresh / logout / restart cannot desync the
+// UI from the database. No field is fabricated — anything the broker does
+// not expose is returned as null and rendered as "—" by the UI.
+// ---------------------------------------------------------------------------
+
+/**
+ * Session health lifecycle states. Derived from persisted broker session
+ * state (and, for the live verify probe, from the broker's own response).
+ */
+export type BrokerSessionHealthState =
+  | 'CONNECTED'
+  | 'EXPIRED'
+  | 'INVALID_TOKEN'
+  | 'REAUTHENTICATION_REQUIRED'
+  | 'NEVER_CONNECTED'
+  | 'DISCONNECTED';
+
+export const BROKER_SESSION_HEALTH_LABELS: Record<BrokerSessionHealthState, string> = {
+  CONNECTED: 'Connected',
+  EXPIRED: 'Expired',
+  INVALID_TOKEN: 'Invalid Token',
+  REAUTHENTICATION_REQUIRED: 'Reauthentication Required',
+  NEVER_CONNECTED: 'Never Connected',
+  DISCONNECTED: 'Disconnected',
+};
+
+/** Access-token liveness classification for a broker session. */
+export type BrokerTokenStatus = 'VALID' | 'EXPIRED' | 'INVALID' | 'NONE';
+
+/**
+ * Response of GET /trading-accounts/:id/session-health (follower) and
+ * GET /admin/master-accounts/:id/session-health (master). Cheap, clock-based
+ * probe that never round-trips to the broker.
+ */
+export interface BrokerSessionHealthDto {
+  broker: Broker;
+  clientId: string;
+  /** Broker-reported account holder name (from the last successful login). */
+  accountHolder: string | null;
+  /** Broker-reported user/client id (from the last successful login). */
+  brokerUserId: string | null;
+  connectionStatus: ConnectionStatus;
+  sessionHealthState: BrokerSessionHealthState;
+  tokenStatus: BrokerTokenStatus;
+  loginTime: string | null;
+  connectionTime: string | null;
+  lastHeartbeat: string | null;
+  expiresAt: string | null;
+  sessionActive: boolean;
+  tokenExpired: boolean | null;
+}
+
+/**
+ * Normalized funds/margin snapshot extracted (never fabricated) from the
+ * broker margins payload when the broker supports it.
+ */
+export interface BrokerFundsSummaryDto {
+  segment: string;
+  available: number | null;
+  used: number | null;
+  net: number | null;
+}
+
+/**
+ * Response of GET /trading-accounts/:id/broker-info (follower live verify).
+ * Retrieves broker account information through the existing broker adapter
+ * immediately after OAuth so the follower can confirm CTS is truly linked.
+ */
+export interface BrokerVerifyInfoDto {
+  broker: Broker;
+  clientId: string;
+  accountHolder: string | null;
+  brokerUserId: string | null;
+  email: string | null;
+  connectionStatus: ConnectionStatus;
+  sessionHealthState: BrokerSessionHealthState;
+  tokenStatus: BrokerTokenStatus;
+  loginTime: string | null;
+  lastSync: string | null;
+  exchanges: string[] | null;
+  products: string[] | null;
+  funds: BrokerFundsSummaryDto[] | null;
+  marginAvailable: boolean;
+  error: string | null;
+}

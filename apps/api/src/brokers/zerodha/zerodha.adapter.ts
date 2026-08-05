@@ -37,6 +37,8 @@ export class ZerodhaAdapter implements BrokerAdapter {
       userId: p.user_id,
       userName: p.user_name,
       email: p.email,
+      exchanges: Array.isArray(p.exchanges) ? p.exchanges : undefined,
+      products: Array.isArray(p.products) ? p.products : undefined,
     };
   }
 

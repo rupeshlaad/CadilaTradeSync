@@ -2,6 +2,8 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.module';
 import { EncryptionService } from '../encryption/encryption.service';
 import { ZerodhaAdapter } from './zerodha/zerodha.adapter';
+import { FyersAdapter } from './fyers/fyers.adapter';
+import { ShoonyaAdapter } from './shoonya/shoonya.adapter';
 import {
   Broker,
   BrokerSession,
@@ -9,11 +11,21 @@ import {
   TradingAccount,
 } from '@prisma/client';
 
-interface ZerodhaAdapterContext {
-  adapter: ZerodhaAdapter;
-  account: TradingAccount;
-  session: BrokerSession;
-}
+/**
+ * Sprint 6.1.2 — Follower Broker Lifecycle Stabilization.
+ *
+ * This service is the single broker-session engine shared by the Master
+ * (admin) portal and the Follower (web) portal. Previously every lookup was
+ * hardcoded to ZERODHA, which meant a Fyers/Shoonya session could never be
+ * found — the drift-correction then wrote DISCONNECTED back to the account
+ * on every refresh, which is exactly the "connection not persistent" bug.
+ *
+ * All lookups are now broker-aware (driven by `TradingAccount.broker`) and
+ * the correct adapter is selected per broker. Connection state always comes
+ * from the persisted TradingAccount + BrokerSession rows — never fabricated.
+ */
+
+type AnyAdapter = ZerodhaAdapter | FyersAdapter | ShoonyaAdapter;
 
 interface SettledSection<T> {
   data: T | null;
@@ -34,8 +46,6 @@ function settle<T>(r: PromiseSettledResult<T>): SettledSection<T> {
 /**
  * Heuristic: does this rejection look like an auth/token failure
  * (as opposed to a broker-availability / network failure)?
- * Kite typically raises `TokenException` with a message that includes
- * "Incorrect `api_key` or `access_token`" or "Token is invalid or has expired".
  */
 function isTokenError(err: any): boolean {
   if (!err) return false;
@@ -45,6 +55,16 @@ function isTokenError(err: any): boolean {
   return /token.*(invalid|expired)|(invalid|expired).*token|api_key/i.test(msg);
 }
 
+type SessionHealthState =
+  | 'CONNECTED'
+  | 'EXPIRED'
+  | 'INVALID_TOKEN'
+  | 'REAUTHENTICATION_REQUIRED'
+  | 'NEVER_CONNECTED'
+  | 'DISCONNECTED';
+
+type TokenStatus = 'VALID' | 'EXPIRED' | 'INVALID' | 'NONE';
+
 @Injectable()
 export class BrokerService {
   constructor(
@@ -52,74 +72,172 @@ export class BrokerService {
     private readonly encryption: EncryptionService,
   ) {}
 
-  private async getZerodhaAdapter(
-    accountId: string,
-  ): Promise<ZerodhaAdapterContext> {
-    const account = await this.prisma.tradingAccount.findUnique({
-      where: {
-        id: accountId,
-      },
-    });
+  // -------------------------------------------------------------------------
+  // Shared lookup + adapter selection
+  // -------------------------------------------------------------------------
 
-    if (!account) {
-      throw new NotFoundException('Trading account not found');
-    }
-
-    const session = await this.prisma.brokerSession.findUnique({
-      where: {
-        tradingAccountId_broker: {
-          tradingAccountId: accountId,
-          broker: Broker.ZERODHA,
-        },
-      },
-    });
-
-    if (!session) {
-      throw new NotFoundException('Broker session not found');
-    }
-
-    const adapter = new ZerodhaAdapter();
-
-    adapter.setAccessToken(
-      this.encryption.decrypt(session.encryptedAccessToken),
-    );
-
-    return { adapter, account, session };
-  }
-
-  /**
-   * Compute session/connection health without hitting the broker.
-   * Safe to call from a "Refresh Status" button.
-   */
-  async getSessionHealth(accountId: string) {
+  private async loadContext(accountId: string): Promise<{
+    account: TradingAccount;
+    session: BrokerSession | null;
+  }> {
     const account = await this.prisma.tradingAccount.findUnique({
       where: { id: accountId },
     });
     if (!account) {
       throw new NotFoundException('Trading account not found');
     }
-
+    // Broker-aware: use the account's own broker (not a hardcoded ZERODHA).
     const session = await this.prisma.brokerSession.findUnique({
       where: {
         tradingAccountId_broker: {
           tradingAccountId: accountId,
-          broker: Broker.ZERODHA,
+          broker: account.broker,
         },
       },
     });
+    return { account, session };
+  }
+
+  private buildAdapter(broker: Broker, accessToken: string): AnyAdapter {
+    switch (broker) {
+      case Broker.FYERS: {
+        const adapter = new FyersAdapter();
+        adapter.setAccessToken(accessToken);
+        return adapter;
+      }
+      case Broker.SHOONYA: {
+        const adapter = new ShoonyaAdapter();
+        adapter.setSessionToken(accessToken);
+        return adapter;
+      }
+      case Broker.ZERODHA:
+      default: {
+        const adapter = new ZerodhaAdapter();
+        adapter.setAccessToken(accessToken);
+        return adapter;
+      }
+    }
+  }
+
+  /**
+   * Invoke an optional adapter method safely. Fyers/Shoonya adapters do not
+   * implement every method (e.g. `getTrades`), which would otherwise throw a
+   * synchronous TypeError and escape Promise.allSettled. Returns a rejected
+   * promise for unsupported capabilities so the section renders "—" instead
+   * of crashing the whole dashboard.
+   */
+  private safeCall(adapter: any, method: string): Promise<any> {
+    const fn = adapter?.[method];
+    if (typeof fn !== 'function') {
+      return Promise.reject(new Error(`${method} not supported by broker`));
+    }
+    try {
+      return Promise.resolve(fn.call(adapter));
+    } catch (err) {
+      return Promise.reject(err);
+    }
+  }
+
+  private deriveTokenStatus(
+    session: BrokerSession | null,
+    tokenExpired: boolean | null,
+    status: ConnectionStatus,
+  ): TokenStatus {
+    if (!session) return 'NONE';
+    if (tokenExpired === true || status === ConnectionStatus.EXPIRED) {
+      return 'EXPIRED';
+    }
+    if (status === ConnectionStatus.ERROR) return 'INVALID';
+    return 'VALID';
+  }
+
+  private deriveHealthState(
+    account: TradingAccount,
+    session: BrokerSession | null,
+    status: ConnectionStatus,
+    tokenExpired: boolean | null,
+  ): SessionHealthState {
+    if (!session) {
+      // No session and the account has never produced a heartbeat → the
+      // broker was never connected. Otherwise it was disconnected.
+      if (status === ConnectionStatus.DISCONNECTED && !account.lastHeartbeat) {
+        return 'NEVER_CONNECTED';
+      }
+      return 'DISCONNECTED';
+    }
+    if (tokenExpired === true || status === ConnectionStatus.EXPIRED) {
+      return 'EXPIRED';
+    }
+    if (status === ConnectionStatus.ERROR) return 'REAUTHENTICATION_REQUIRED';
+    if (status === ConnectionStatus.CONNECTED) return 'CONNECTED';
+    return 'DISCONNECTED';
+  }
+
+  /**
+   * Extract a normalized funds/margin snapshot from a broker margins payload.
+   * Values are read straight from the broker response — never fabricated.
+   * Returns null when the broker does not expose margins.
+   */
+  private normalizeFunds(margins: any):
+    | Array<{
+        segment: string;
+        available: number | null;
+        used: number | null;
+        net: number | null;
+      }>
+    | null {
+    if (!margins || typeof margins !== 'object') return null;
+    const toNum = (v: any): number | null => {
+      if (v === null || v === undefined || v === '') return null;
+      const n = typeof v === 'number' ? v : Number(v);
+      return Number.isFinite(n) ? n : null;
+    };
+    const out: Array<{
+      segment: string;
+      available: number | null;
+      used: number | null;
+      net: number | null;
+    }> = [];
+    for (const key of Object.keys(margins)) {
+      const row = margins[key];
+      if (!row || typeof row !== 'object') continue;
+      const available =
+        row?.available?.live_balance ??
+        row?.available?.cash ??
+        row?.net ??
+        row?.available;
+      const used =
+        row?.utilised?.debits ?? row?.utilised?.total ?? row?.used ?? row?.utilised;
+      const net = row?.net ?? row?.available?.live_balance;
+      out.push({
+        segment: key,
+        available: toNum(available),
+        used: toNum(used),
+        net: toNum(net),
+      });
+    }
+    return out.length > 0 ? out : null;
+  }
+
+  // -------------------------------------------------------------------------
+  // Session health (cheap, clock-based — no broker round-trip)
+  // -------------------------------------------------------------------------
+
+  async getSessionHealth(accountId: string) {
+    const { account, session } = await this.loadContext(accountId);
 
     const now = Date.now();
     const tokenExpired = session?.expiresAt
       ? session.expiresAt.getTime() < now
       : null;
-    const sessionActive =
-      !!session && account.connectionStatus === ConnectionStatus.CONNECTED && tokenExpired !== true;
 
     let connectionStatus: ConnectionStatus = account.connectionStatus;
     if (!session) connectionStatus = ConnectionStatus.DISCONNECTED;
     else if (tokenExpired === true) connectionStatus = ConnectionStatus.EXPIRED;
 
-    // If the persisted status drifted from the observed one, correct it.
+    // Correct persisted drift only when we can prove it from persisted state
+    // (missing session, or a clock-expired token). We never downgrade a
+    // CONNECTED account just because a cheap probe cannot reach the broker.
     if (connectionStatus !== account.connectionStatus) {
       await this.prisma.tradingAccount.update({
         where: { id: accountId },
@@ -127,25 +245,41 @@ export class BrokerService {
       });
     }
 
+    const sessionActive =
+      !!session &&
+      connectionStatus === ConnectionStatus.CONNECTED &&
+      tokenExpired !== true;
+
+    const loginTime = session ? session.loginTime.toISOString() : null;
+
     return {
       broker: session?.broker ?? account.broker,
+      clientId: account.clientId,
+      accountHolder: session?.userName ?? null,
+      brokerUserId: session?.userId ?? null,
       connectionStatus,
-      loginTime: session ? session.loginTime.toISOString() : null,
+      sessionHealthState: this.deriveHealthState(
+        account,
+        session,
+        connectionStatus,
+        tokenExpired,
+      ),
+      tokenStatus: this.deriveTokenStatus(session, tokenExpired, connectionStatus),
+      loginTime,
+      connectionTime: loginTime,
       lastHeartbeat: account.lastHeartbeat
         ? account.lastHeartbeat.toISOString()
         : null,
+      expiresAt: session?.expiresAt ? session.expiresAt.toISOString() : null,
       sessionActive,
       tokenExpired,
     };
   }
 
-  /**
-   * Disconnect the broker for a trading account:
-   *  - delete broker session(s)
-   *  - set TradingAccount.connectionStatus = DISCONNECTED
-   *  - clear lastHeartbeat
-   *  - keep the TradingAccount itself intact
-   */
+  // -------------------------------------------------------------------------
+  // Disconnect — invalidate session, preserve the account & history
+  // -------------------------------------------------------------------------
+
   async disconnect(accountId: string) {
     const account = await this.prisma.tradingAccount.findUnique({
       where: { id: accountId },
@@ -154,9 +288,8 @@ export class BrokerService {
       throw new NotFoundException('Trading account not found');
     }
 
-    // deleteMany is idempotent — safe if the session is already gone.
-    // Scoping to the account's current broker is enough for now; the schema
-    // only allows one session per (account, broker) pair.
+    // Broker-agnostic + idempotent: removes the token so reconnect is required,
+    // while the TradingAccount (and all historical records) are preserved.
     await this.prisma.brokerSession.deleteMany({
       where: { tradingAccountId: accountId },
     });
@@ -176,22 +309,12 @@ export class BrokerService {
     };
   }
 
-  async getDashboard(accountId: string) {
-    const account = await this.prisma.tradingAccount.findUnique({
-      where: { id: accountId },
-    });
-    if (!account) {
-      throw new NotFoundException('Trading account not found');
-    }
+  // -------------------------------------------------------------------------
+  // Live dashboard / verify — actual broker validation via the adapter
+  // -------------------------------------------------------------------------
 
-    const session = await this.prisma.brokerSession.findUnique({
-      where: {
-        tradingAccountId_broker: {
-          tradingAccountId: accountId,
-          broker: Broker.ZERODHA,
-        },
-      },
-    });
+  async getDashboard(accountId: string) {
+    const { account, session } = await this.loadContext(accountId);
 
     const emptyErrors = {
       profile: null as string | null,
@@ -220,6 +343,7 @@ export class BrokerService {
         positions: null,
         orders: null,
         trades: null,
+        funds: null,
         errors: {
           ...emptyErrors,
           profile: 'No active broker session. Please connect the broker.',
@@ -227,7 +351,17 @@ export class BrokerService {
         health: {
           connected: false,
           connectionStatus: ConnectionStatus.DISCONNECTED,
+          sessionHealthState: this.deriveHealthState(
+            account,
+            null,
+            ConnectionStatus.DISCONNECTED,
+            null,
+          ),
+          tokenStatus: 'NONE' as TokenStatus,
           broker: account.broker,
+          clientId: account.clientId,
+          accountHolder: null,
+          brokerUserId: null,
           loginTime: null,
           lastHeartbeat: account.lastHeartbeat
             ? account.lastHeartbeat.toISOString()
@@ -238,9 +372,9 @@ export class BrokerService {
       };
     }
 
-    // ----- Session present: hit the broker -----
-    const adapter = new ZerodhaAdapter();
-    adapter.setAccessToken(
+    // ----- Session present: hit the broker with the correct adapter -----
+    const adapter = this.buildAdapter(
+      account.broker,
       this.encryption.decrypt(session.encryptedAccessToken),
     );
 
@@ -252,12 +386,12 @@ export class BrokerService {
       ordersR,
       tradesR,
     ] = await Promise.allSettled([
-      adapter.getProfile(),
-      adapter.getMargins(),
-      adapter.getHoldings(),
-      adapter.getPositions(),
-      adapter.getOrders(),
-      adapter.getTrades(),
+      this.safeCall(adapter, 'getProfile'),
+      this.safeCall(adapter, 'getMargins'),
+      this.safeCall(adapter, 'getHoldings'),
+      this.safeCall(adapter, 'getPositions'),
+      this.safeCall(adapter, 'getOrders'),
+      this.safeCall(adapter, 'getTrades'),
     ]);
 
     const profile = settle(profileR);
@@ -270,7 +404,9 @@ export class BrokerService {
     const results = [profileR, marginsR, holdingsR, positionsR, ordersR, tradesR];
     const allRejected = results.every((r) => r.status === 'rejected');
     const anyTokenError = results.some(
-      (r) => r.status === 'rejected' && isTokenError((r as PromiseRejectedResult).reason),
+      (r) =>
+        r.status === 'rejected' &&
+        isTokenError((r as PromiseRejectedResult).reason),
     );
 
     // Profile is the cheapest authenticated probe; use it as the liveness signal.
@@ -281,15 +417,11 @@ export class BrokerService {
       liveStatus = ConnectionStatus.CONNECTED;
     } else if (anyTokenError) {
       liveStatus = ConnectionStatus.EXPIRED;
-    } else if (allRejected) {
-      liveStatus = ConnectionStatus.ERROR;
     } else {
-      // Partial: profile failed but other calls succeeded — treat as ERROR on account
-      // level but still return the data we did get.
       liveStatus = ConnectionStatus.ERROR;
     }
 
-    // Persist heartbeat + status in a single query (no duplicate reads/writes).
+    // Persist heartbeat + status in a single query.
     const updated = await this.prisma.tradingAccount.update({
       where: { id: accountId },
       data: {
@@ -306,6 +438,22 @@ export class BrokerService {
       liveStatus === ConnectionStatus.EXPIRED ? true : tokenExpiredByClock;
     const sessionActive = connected && tokenExpired !== true;
 
+    // Live health state: distinguish an explicit token rejection ("invalid
+    // token") from a general broker/network error ("reauthentication required").
+    let liveHealthState: SessionHealthState;
+    if (connected) liveHealthState = 'CONNECTED';
+    else if (anyTokenError) liveHealthState = 'INVALID_TOKEN';
+    else if (allRejected) liveHealthState = 'REAUTHENTICATION_REQUIRED';
+    else liveHealthState = 'REAUTHENTICATION_REQUIRED';
+
+    const tokenStatus: TokenStatus = connected
+      ? 'VALID'
+      : anyTokenError
+      ? 'INVALID'
+      : 'EXPIRED';
+
+    const profileData: any = profile.data;
+
     return {
       profile: profile.data,
       margins: margins.data,
@@ -313,6 +461,7 @@ export class BrokerService {
       positions: positions.data,
       orders: orders.data,
       trades: trades.data,
+      funds: this.normalizeFunds(margins.data),
       errors: {
         profile: profile.error,
         margins: margins.error,
@@ -324,7 +473,12 @@ export class BrokerService {
       health: {
         connected,
         connectionStatus: liveStatus,
+        sessionHealthState: liveHealthState,
+        tokenStatus,
         broker: session.broker,
+        clientId: account.clientId,
+        accountHolder: profileData?.userName ?? session.userName ?? null,
+        brokerUserId: profileData?.userId ?? session.userId ?? null,
         loginTime: session.loginTime.toISOString(),
         lastHeartbeat: updated.lastHeartbeat
           ? updated.lastHeartbeat.toISOString()
@@ -332,6 +486,36 @@ export class BrokerService {
         sessionActive,
         tokenExpired,
       },
+    };
+  }
+
+  /**
+   * Sprint 6.1.2 — Compact broker-account verification used by the Follower
+   * Broker Accounts cards. Reuses the same live adapter probe as
+   * getDashboard() but returns only identity + entitlement + funds so the UI
+   * can confirm the connection without rendering the full trading dashboard.
+   */
+  async getBrokerInfo(accountId: string) {
+    const dash = await this.getDashboard(accountId);
+    const profile: any = dash.profile;
+    const health: any = dash.health;
+
+    return {
+      broker: health.broker,
+      clientId: health.clientId,
+      accountHolder: health.accountHolder,
+      brokerUserId: health.brokerUserId,
+      email: profile?.email ?? null,
+      connectionStatus: health.connectionStatus,
+      sessionHealthState: health.sessionHealthState,
+      tokenStatus: health.tokenStatus,
+      loginTime: health.loginTime,
+      lastSync: health.lastHeartbeat,
+      exchanges: Array.isArray(profile?.exchanges) ? profile.exchanges : null,
+      products: Array.isArray(profile?.products) ? profile.products : null,
+      funds: dash.funds,
+      marginAvailable: dash.margins !== null && dash.errors.margins === null,
+      error: dash.errors.profile,
     };
   }
 }

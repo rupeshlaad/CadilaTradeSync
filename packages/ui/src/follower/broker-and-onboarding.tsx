@@ -3,9 +3,13 @@
 import * as React from 'react';
 import type {
   BrokerConnectionState,
+  BrokerSessionHealthState,
+  BrokerTokenStatus,
+  BrokerFundsSummaryDto,
   FollowerDashboardSummaryDto,
   FollowerOnboardingStatusDto,
 } from '@cts/shared';
+import { BROKER_SESSION_HEALTH_LABELS } from '@cts/shared';
 
 /**
  * Sprint 6.1 — Shared broker + onboarding UI, consumed by both the
@@ -82,6 +86,12 @@ export interface BrokerAccountCardData {
   hasTotpSecret: boolean;
   /** Sprint 6.1.1 — Session health snapshot for the badge row. */
   sessionHealth?: BrokerSessionHealth | null;
+  /** Sprint 6.1.2 — Lifecycle session-health state (single source of truth). */
+  sessionHealthState?: BrokerSessionHealthState | null;
+  /** Sprint 6.1.2 — Access-token liveness. */
+  tokenStatus?: BrokerTokenStatus | null;
+  /** Sprint 6.1.2 — Broker-reported account holder name. */
+  accountHolder?: string | null;
   /** Optional details section — accountHolder / exchange / product / connection / refresh. */
   details?: BrokerAccountDetails | null;
 }
@@ -99,6 +109,25 @@ export interface BrokerAccountDetails {
   products?: string[] | null;
   connectionTime?: string | null;
   lastRefresh?: string | null;
+  /** Sprint 6.1.2 — Funds summary from the broker (null when unsupported). */
+  funds?: BrokerFundsSummaryDto[] | null;
+  /** Sprint 6.1.2 — whether the broker exposed a margin/funds payload. */
+  marginAvailable?: boolean | null;
+}
+
+const TOKEN_STATUS_LABELS: Record<BrokerTokenStatus, string> = {
+  VALID: 'Valid',
+  EXPIRED: 'Expired',
+  INVALID: 'Invalid',
+  NONE: 'None',
+};
+
+function fmtMoney(v: number | null | undefined): string {
+  if (v === null || v === undefined || !Number.isFinite(v)) return '—';
+  return v.toLocaleString(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
 }
 
 export interface BrokerAccountCardProps {
@@ -110,6 +139,8 @@ export interface BrokerAccountCardProps {
   onRemove?: (account: BrokerAccountCardData) => void;
   onToggleEnabled?: (account: BrokerAccountCardData) => void;
   onRefreshHealth?: (account: BrokerAccountCardData) => void;
+  /** Sprint 6.1.2 — live broker verification (profile/funds via adapter). */
+  onRefreshSession?: (account: BrokerAccountCardData) => void;
   showDetails?: boolean;
   onToggleDetails?: () => void;
 }
@@ -123,6 +154,7 @@ export function BrokerAccountCard({
   onRemove,
   onToggleEnabled,
   onRefreshHealth,
+  onRefreshSession,
   showDetails,
   onToggleDetails,
 }: BrokerAccountCardProps) {
@@ -196,6 +228,22 @@ export function BrokerAccountCard({
         </div>
         <div>
           <div className="text-[11px] uppercase tracking-wide text-muted-foreground">
+            Account Holder
+          </div>
+          <div data-testid={`broker-account-${account.id}-account-holder`}>
+            {account.accountHolder ?? account.details?.accountHolder ?? '—'}
+          </div>
+        </div>
+        <div>
+          <div className="text-[11px] uppercase tracking-wide text-muted-foreground">
+            Token Status
+          </div>
+          <div data-testid={`broker-account-${account.id}-token-status`}>
+            {account.tokenStatus ? TOKEN_STATUS_LABELS[account.tokenStatus] : '—'}
+          </div>
+        </div>
+        <div>
+          <div className="text-[11px] uppercase tracking-wide text-muted-foreground">
             Last Login
           </div>
           <div data-testid={`broker-account-${account.id}-last-login`}>
@@ -218,7 +266,24 @@ export function BrokerAccountCard({
             className="flex items-center gap-2"
             data-testid={`broker-account-${account.id}-session-health`}
           >
-            {account.sessionHealth ? (
+            {account.sessionHealthState ? (
+              <>
+                <span
+                  className={`inline-flex h-2.5 w-2.5 rounded-full ${
+                    account.sessionHealthState === 'CONNECTED'
+                      ? 'bg-emerald-500'
+                      : account.sessionHealthState === 'NEVER_CONNECTED' ||
+                        account.sessionHealthState === 'DISCONNECTED'
+                      ? 'bg-muted-foreground'
+                      : 'bg-amber-500'
+                  }`}
+                  aria-hidden
+                />
+                <span className="text-xs">
+                  {BROKER_SESSION_HEALTH_LABELS[account.sessionHealthState]}
+                </span>
+              </>
+            ) : account.sessionHealth ? (
               <>
                 <span
                   className={`inline-flex h-2.5 w-2.5 rounded-full ${
@@ -253,7 +318,9 @@ export function BrokerAccountCard({
         >
           <DetailRow
             label="Account holder"
-            value={account.details.accountHolder ?? '—'}
+            value={
+              account.accountHolder ?? account.details.accountHolder ?? '—'
+            }
           />
           <DetailRow
             label="Exchanges"
@@ -279,6 +346,41 @@ export function BrokerAccountCard({
             label="Last refresh"
             value={fmtTime(account.details.lastRefresh)}
           />
+          <DetailRow
+            label="Margin"
+            value={
+              account.details.marginAvailable
+                ? 'Available'
+                : account.details.marginAvailable === false
+                ? 'Not supported'
+                : '—'
+            }
+          />
+          {account.details.funds && account.details.funds.length > 0 && (
+            <div
+              className="col-span-2 md:col-span-3"
+              data-testid={`broker-account-${account.id}-funds`}
+            >
+              <div className="text-[11px] uppercase tracking-wide text-muted-foreground mb-1">
+                Funds
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                {account.details.funds.map((f) => (
+                  <div
+                    key={f.segment}
+                    className="rounded-md border px-3 py-2 flex items-center justify-between gap-3"
+                  >
+                    <span className="text-xs uppercase tracking-wide text-muted-foreground">
+                      {f.segment}
+                    </span>
+                    <span className="font-mono text-xs">
+                      Avail {fmtMoney(f.available)} · Net {fmtMoney(f.net)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -305,6 +407,14 @@ export function BrokerAccountCard({
             variant="ghost"
             onClick={() => onRefreshHealth(account)}
             testid={`broker-account-${account.id}-refresh-health`}
+          />
+        )}
+        {onRefreshSession && isConnected && (
+          <ActionButton
+            label="Refresh session"
+            variant="ghost"
+            onClick={() => onRefreshSession(account)}
+            testid={`broker-account-${account.id}-refresh-session`}
           />
         )}
         {onEdit && (

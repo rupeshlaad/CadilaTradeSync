@@ -27,12 +27,6 @@ const NAV = [
   },
 
   {
-    href: '/dashboard/trading-accounts',
-    label: 'Trading Accounts',
-    icon: Landmark,
-  },
-
-  {
     href: '/dashboard/marketplace',
     label: 'Marketplace',
     icon: LineChart,
