@@ -5,44 +5,46 @@ import {
   BrokerFeatureSupport,
   BrokerOnboardingRequirements,
   BrokerProfile,
+  UnsupportedResult,
 } from '../broker.interface';
 
+/**
+ * Sprint 6.1.6 — Full Shoonya (Finvasia Noren) adapter.
+ *
+ * Noren REST endpoints are POST calls with a body of
+ * `jData=<json>&jKey=<susertoken>` (application/x-www-form-urlencoded). Data
+ * endpoints require `uid` and `actid` in jData, both derived from the stored
+ * account user id (== Noren account id for retail accounts). Every documented
+ * account endpoint is wired: UserDetails, Limits, Holdings, PositionBook,
+ * OrderBook, TradeBook, Logout.
+ */
 export class ShoonyaAdapter implements BrokerAdapter {
-  /**
-   * Sprint 6.1.3 — Only profile (UserDetails) is wired today; the remaining
-   * data methods are stubs, so they are honestly reported as unsupported.
-   */
   static readonly capabilities: BrokerCapabilities = {
     profile: true,
-    exchanges: false,
+    exchanges: true,
     products: false,
-    funds: false,
-    margin: false,
-    holdings: false,
-    positions: false,
-    orders: false,
-    trades: false,
+    funds: true,
+    margin: true,
+    holdings: true,
+    positions: true,
+    orders: true,
+    trades: true,
   };
 
-  /** Sprint 6.1.5 — operational feature support. */
   static readonly features: BrokerFeatureSupport = {
     supportsProfile: true,
-    supportsFunds: false,
-    supportsMargins: false,
-    supportsHoldings: false,
-    supportsPositions: false,
-    supportsOrders: false,
-    supportsTrades: false,
-    supportsPortfolio: false,
+    supportsFunds: true,
+    supportsMargins: true,
+    supportsHoldings: true,
+    supportsPositions: true,
+    supportsOrders: true,
+    supportsTrades: true,
+    supportsPortfolio: true,
     supportsAutoLogin: true,
-    supportsLogout: false,
+    supportsLogout: true,
     supportsSessionRefresh: false,
   };
 
-  /**
-   * Sprint 6.1.5 — onboarding requirements. Shoonya uses direct login
-   * (API key + user id + password + TOTP + vendor code), not OAuth.
-   */
   static readonly onboarding: BrokerOnboardingRequirements = {
     requiresOAuth: false,
     requiresApiKey: true,
@@ -60,19 +62,38 @@ export class ShoonyaAdapter implements BrokerAdapter {
 
   private readonly baseUrl = 'https://api.shoonya.com/NorenWClientTP';
   private sessionToken = '';
+  private uid = '';
+  private actid = '';
 
   setSessionToken(token: string) {
     this.sessionToken = token;
   }
 
+  /** Sprint 6.1.6 — user/account id required by every Noren data endpoint. */
+  setUserId(userId: string) {
+    this.uid = userId;
+    this.actid = userId;
+  }
+
   getLoginUrl(): string {
-    // Shoonya does not use OAuth like Zerodha/FYERS.
-    // Login is handled using API credentials + TOTP.
+    // Shoonya uses direct API login (credentials + TOTP), not OAuth.
     return '';
   }
 
   async exchangeToken(_: string): Promise<any> {
     throw new Error('Shoonya does not support OAuth token exchange.');
+  }
+
+  /** Core Noren POST helper: jData + jKey, form-encoded. */
+  private async post(path: string, jData: Record<string, any>): Promise<any> {
+    const body = `jData=${JSON.stringify(jData)}&jKey=${this.sessionToken}`;
+    const { data } = await axios.post(`${this.baseUrl}/${path}`, body, {
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    });
+    if (data && data.stat && data.stat !== 'Ok' && !Array.isArray(data)) {
+      throw new Error(data.emsg || `Shoonya error on ${path}`);
+    }
+    return data;
   }
 
   async login(payload: {
@@ -83,74 +104,105 @@ export class ShoonyaAdapter implements BrokerAdapter {
     appkey: string;
   }) {
     const body = new URLSearchParams();
-
     body.append(
-      "jData",
+      'jData',
       JSON.stringify({
-        source: "API",
-        apkversion: "1.0.0",
+        source: 'API',
+        apkversion: '1.0.0',
         uid: payload.uid,
         pwd: payload.pwd,
         factor2: payload.factor2,
         vc: payload.vc,
         appkey: payload.appkey,
-        imei: "CTS_SERVER",
+        imei: 'CTS_SERVER',
       }),
     );
-
-    console.log(body.toString());
-
     const response = await axios.post(
       `${this.baseUrl}/QuickAuth`,
       body.toString(),
     );
-
-    console.log(response.data);
-
     return response.data;
   }
 
   async getProfile(): Promise<BrokerProfile> {
-    const { data } = await axios.post(
-      `${this.baseUrl}/UserDetails`,
-      {
-        jKey: this.sessionToken,
-      },
-    );
-
+    const data = await this.post('UserDetails', { uid: this.uid });
     return {
       broker: 'SHOONYA',
-      userId: data.actid,
-      userName: data.uname,
-      email: '',
+      userId: data.actid ?? this.uid,
+      userName: data.uname ?? '',
+      email: data.email ?? '',
+      exchanges: Array.isArray(data.exarr) ? data.exarr : undefined,
+      accountType: data.actid ? 'INDIVIDUAL' : undefined,
+      profileStatus: data.stat === 'Ok' ? 'ACTIVE' : undefined,
     };
   }
 
   async getMargins() {
-    return {};
+    return this.post('Limits', { uid: this.uid, actid: this.actid });
+  }
+
+  async getFunds() {
+    return this.post('Limits', { uid: this.uid, actid: this.actid });
   }
 
   async getHoldings() {
-    return [];
+    // prd = product type; 'C' (CNC) is the standard delivery holdings product.
+    return this.post('Holdings', {
+      uid: this.uid,
+      actid: this.actid,
+      prd: 'C',
+    });
   }
 
   async getPositions() {
-    return [];
-  }
-
-  async placeOrder(order: any) {
-    return {};
-  }
-
-  async modifyOrder(orderId: string, order: any) {
-    return {};
-  }
-
-  async cancelOrder(orderId: string) {
-    return {};
+    return this.post('PositionBook', { uid: this.uid, actid: this.actid });
   }
 
   async getOrders() {
-    return [];
+    return this.post('OrderBook', { uid: this.uid });
+  }
+
+  async getTrades() {
+    return this.post('TradeBook', { uid: this.uid, actid: this.actid });
+  }
+
+  async getPortfolio() {
+    return this.getHoldings();
+  }
+
+  async getExchanges(): Promise<string[] | null> {
+    const data = await this.post('UserDetails', { uid: this.uid });
+    return Array.isArray(data.exarr) ? data.exarr : null;
+  }
+
+  async getProducts(): Promise<string[] | null> {
+    return null; // Not distinctly enumerated by the Noren profile payload.
+  }
+
+  async logout(): Promise<UnsupportedResult | { supported: true; data?: any }> {
+    const data = await this.post('Logout', { uid: this.uid });
+    return { supported: true, data };
+  }
+
+  async refreshSession(): Promise<
+    UnsupportedResult | { supported: true; data?: any }
+  > {
+    return {
+      supported: false,
+      reason:
+        'Shoonya (Noren) has no token refresh; a fresh TOTP login is required daily.',
+    };
+  }
+
+  async placeOrder(_order: any) {
+    return {};
+  }
+
+  async modifyOrder(_orderId: string, _order: any) {
+    return {};
+  }
+
+  async cancelOrder(_orderId: string) {
+    return {};
   }
 }

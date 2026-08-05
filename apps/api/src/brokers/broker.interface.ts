@@ -91,4 +91,24 @@ export interface BrokerAdapter {
   cancelOrder(orderId: string): Promise<any>;
 
   getOrders(): Promise<any>;
+
+  // ---------------------------------------------------------------------
+  // Sprint 6.1.6 — Standardized optional surface. Every adapter exposes the
+  // same shape; when a broker SDK genuinely cannot provide a capability the
+  // adapter returns an UnsupportedResult ({ supported: false, reason }) rather
+  // than an empty object, so the dashboard never shows a false "Not Supported".
+  // ---------------------------------------------------------------------
+  getFunds?(): Promise<any>;
+  getTrades?(): Promise<any>;
+  getPortfolio?(): Promise<any>;
+  getExchanges?(): Promise<string[] | null>;
+  getProducts?(): Promise<string[] | null>;
+  refreshSession?(): Promise<UnsupportedResult | { supported: true; data?: any }>;
+  logout?(): Promise<UnsupportedResult | { supported: true; data?: any }>;
+}
+
+/** Sprint 6.1.6 — explicit "SDK limitation" signal for unsupported features. */
+export interface UnsupportedResult {
+  supported: false;
+  reason: string;
 }
