@@ -23,8 +23,17 @@ import {
  * redirect builder). Because Breeze's registered redirect URL may return the
  * API session token either as a query param (GET) or a form POST, both a GET
  * and a POST callback are wired to the same handler.
+ *
+ * Sprint 6.2.0 Hotfix — the routes are registered under BOTH `brokers/icici`
+ * and `api/brokers/icici`. The NestJS API runs with an empty global prefix
+ * (`setGlobalPrefix('')`), but the production ingress exposes the API under
+ * `/api`. GET flows reached NestJS fine, but Breeze delivers this callback as
+ * a cross-site POST to `/api/brokers/icici/callback` which NestJS had no route
+ * for → "Cannot POST /api/brokers/icici/callback". Serving both prefixes makes
+ * the callback resolve whether or not the `/api` segment is stripped upstream,
+ * without touching the shared global prefix or any other broker.
  */
-@Controller('brokers/icici')
+@Controller(['brokers/icici', 'api/brokers/icici'])
 export class ICICIDirectController {
   constructor(
     private readonly iciciService: ICICIDirectService,
@@ -64,7 +73,10 @@ export class ICICIDirectController {
 
     const stateId = randomUUID();
     putOAuthState(stateId, { tradingAccountId, returnTo });
-    setOAuthStateCookie(res, stateId);
+    // Sprint 6.2.0 Hotfix — Breeze returns via a cross-site POST, on which a
+    // SameSite=Lax cookie is NOT sent. Use SameSite=None (Secure) so the OAuth
+    // state cookie survives the POST callback and state validation works.
+    setOAuthStateCookie(res, stateId, 'None');
     return res.redirect(adapter.getLoginUrl());
   }
 
@@ -104,7 +116,7 @@ export class ICICIDirectController {
   ) {
     const stateId = readCookie(req, OAUTH_STATE_COOKIE);
     const entry = takeOAuthState(stateId);
-    clearOAuthStateCookie(res);
+    clearOAuthStateCookie(res, 'None');
 
     const tradingAccountId = entry?.tradingAccountId;
     const returnTo = entry?.returnTo;
