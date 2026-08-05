@@ -81,6 +81,21 @@ export const api = {
       request<import('@cts/shared').BrokerVerifyInfoDto>(
         `/trading-accounts/${id}/broker-info`,
       ),
+    // Sprint 6.1.5 — full SDK-driven operational dashboard.
+    dashboard: (id: string) =>
+      request<import('@cts/shared').BrokerDashboardDto>(
+        `/trading-accounts/${id}/dashboard`,
+      ),
+    // Sprint 6.1.5 — granular per-section live refresh.
+    section: (id: string, section: import('@cts/shared').BrokerDashboardSection) =>
+      request<import('@cts/shared').BrokerSectionResponse>(
+        `/trading-accounts/${id}/section/${section}`,
+      ),
+    // Sprint 6.1.5 — broker capability/onboarding catalog.
+    brokerCatalog: () =>
+      request<import('@cts/shared').BrokerCatalogEntry[]>(
+        `/trading-accounts/meta/broker-catalog`,
+      ),
   },
 
   // ---------- Follower Onboarding & Dashboard header (Sprint 6.1) ----------

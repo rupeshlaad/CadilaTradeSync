@@ -91,6 +91,44 @@ export class TradingAccountsController {
   }
 
   /**
+   * Sprint 6.1.5 — Full SDK-driven operational dashboard (profile, funds,
+   * holdings, positions, orders, trades, portfolio) for a follower account.
+   * Reuses the shared BrokerService — identical engine to the Master Portal.
+   */
+  @Get(':id/dashboard')
+  async dashboard(@Req() req: any, @Param('id') id: string) {
+    await this.assertOwnedFollowerAccount(req.user.sub, id);
+    return this.brokerService.getBrokerDashboard(id);
+  }
+
+  /**
+   * Sprint 6.1.5 — Granular per-section live refresh. Calls exactly one broker
+   * SDK method (no cached data), capability-aware.
+   */
+  @Get(':id/section/:section')
+  async section(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Param('section') section: string,
+  ) {
+    await this.assertOwnedFollowerAccount(req.user.sub, id);
+    const allowed = ['profile', 'funds', 'holdings', 'positions', 'orders', 'trades'];
+    if (!allowed.includes(section)) {
+      throw new ForbiddenException('Unknown broker section');
+    }
+    return this.brokerService.getBrokerSection(id, section as any);
+  }
+
+  /**
+   * Sprint 6.1.5 — Broker capability/onboarding catalog for capability-driven
+   * rendering and the dynamic onboarding form. Static, no account needed.
+   */
+  @Get('meta/broker-catalog')
+  brokerCatalog() {
+    return this.brokerService.brokerCatalog();
+  }
+
+  /**
    * Sprint 6.1 — Disconnect broker session for a follower's trading
    * account. Reuses BrokerService.disconnect (delete broker session
    * row, mark TradingAccount DISCONNECTED, clear heartbeat).

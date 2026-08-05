@@ -5,7 +5,11 @@ import { ZerodhaAdapter } from './zerodha/zerodha.adapter';
 import { FyersAdapter } from './fyers/fyers.adapter';
 import { ShoonyaAdapter } from './shoonya/shoonya.adapter';
 import { Broker, BrokerSession, ConnectionStatus, TradingAccount } from '@prisma/client';
-import type { BrokerCapabilities } from './broker.interface';
+import type {
+  BrokerCapabilities,
+  BrokerFeatureSupport,
+  BrokerOnboardingRequirements,
+} from './broker.interface';
 
 /**
  * Sprint 6.1.2 — Follower Broker Lifecycle Stabilization.
@@ -336,6 +340,14 @@ export class BrokerService {
       where: { tradingAccountId: accountId },
     });
 
+    // Sprint 6.1.5 — disconnecting from CTS also disables copy trading for
+    // every follower link that trades through this account. Broker
+    // authorization at the broker itself is NOT touched (no SDK logout).
+    await this.prisma.follower.updateMany({
+      where: { tradingAccountId: accountId },
+      data: { enabled: false },
+    });
+
     const updated = await this.prisma.tradingAccount.update({
       where: { id: accountId },
       data: {
@@ -348,6 +360,9 @@ export class BrokerService {
       ok: true,
       broker: account.broker,
       connectionStatus: updated.connectionStatus,
+      copyTradingDisabled: true,
+      message:
+        'Broker authorization remains active. Only CTS connection has been removed.',
     };
   }
 
@@ -601,5 +616,282 @@ export class BrokerService {
       marginAvailable: capabilities.margin && marginOk,
       error: dash.errors.profile,
     };
+  }
+
+  // -------------------------------------------------------------------------
+  // Sprint 6.1.5 — Feature / onboarding metadata (capability-driven UI)
+  // -------------------------------------------------------------------------
+
+  featuresFor(broker: Broker): BrokerFeatureSupport {
+    switch (broker) {
+      case Broker.FYERS:
+        return FyersAdapter.features;
+      case Broker.SHOONYA:
+        return ShoonyaAdapter.features;
+      case Broker.ZERODHA:
+        return ZerodhaAdapter.features;
+      default:
+        return {
+          supportsProfile: false,
+          supportsFunds: false,
+          supportsMargins: false,
+          supportsHoldings: false,
+          supportsPositions: false,
+          supportsOrders: false,
+          supportsTrades: false,
+          supportsPortfolio: false,
+          supportsAutoLogin: false,
+          supportsLogout: false,
+          supportsSessionRefresh: false,
+        };
+    }
+  }
+
+  onboardingFor(broker: Broker): BrokerOnboardingRequirements {
+    switch (broker) {
+      case Broker.FYERS:
+        return FyersAdapter.onboarding;
+      case Broker.SHOONYA:
+        return ShoonyaAdapter.onboarding;
+      case Broker.ZERODHA:
+        return ZerodhaAdapter.onboarding;
+      default:
+        return {
+          requiresOAuth: false,
+          requiresApiKey: false,
+          requiresSecret: false,
+          requiresPassword: false,
+          requiresPIN: false,
+          requiresTOTP: false,
+          requiresStaticIP: false,
+          requiresRedirect: false,
+          requiresVendorCode: false,
+          supportsAutoLogin: false,
+          supportsTokenRefresh: false,
+          supportsMFA: false,
+        };
+    }
+  }
+
+  /** Static broker catalog for the dynamic onboarding form + capability UI. */
+  brokerCatalog() {
+    return (Object.values(Broker) as Broker[]).map((broker) => ({
+      broker,
+      capabilities: this.capabilitiesFor(broker),
+      features: this.featuresFor(broker),
+      onboarding: this.onboardingFor(broker),
+    }));
+  }
+
+  // -------------------------------------------------------------------------
+  // Sprint 6.1.5 — SDK-driven normalization (values read straight from broker)
+  // -------------------------------------------------------------------------
+
+  private num(v: any): number | null {
+    if (v === null || v === undefined || v === '') return null;
+    const n = typeof v === 'number' ? v : Number(v);
+    return Number.isFinite(n) ? n : null;
+  }
+
+  private normalizeHoldings(raw: any) {
+    if (!Array.isArray(raw)) return null;
+    return raw.map((h: any) => {
+      const qty = this.num(h?.quantity ?? h?.opening_quantity);
+      const ltp = this.num(h?.last_price);
+      return {
+        symbol: h?.tradingsymbol ?? h?.symbol ?? '—',
+        exchange: h?.exchange ?? null,
+        quantity: qty,
+        averagePrice: this.num(h?.average_price),
+        ltp,
+        currentValue:
+          qty !== null && ltp !== null ? Number((qty * ltp).toFixed(2)) : null,
+        pnl: this.num(h?.pnl),
+      };
+    });
+  }
+
+  private normalizePositions(raw: any) {
+    const list = Array.isArray(raw) ? raw : Array.isArray(raw?.net) ? raw.net : null;
+    if (!list) return null;
+    return list.map((p: any) => ({
+      symbol: p?.tradingsymbol ?? p?.symbol ?? '—',
+      exchange: p?.exchange ?? null,
+      product: p?.product ?? null,
+      quantity: this.num(p?.quantity),
+      averagePrice: this.num(p?.average_price),
+      ltp: this.num(p?.last_price),
+      pnl: this.num(p?.pnl),
+    }));
+  }
+
+  private normalizeOrders(raw: any) {
+    if (!Array.isArray(raw)) return null;
+    return raw.map((o: any) => ({
+      orderId: o?.order_id ?? o?.id ?? '—',
+      symbol: o?.tradingsymbol ?? o?.symbol ?? '—',
+      side: o?.transaction_type ?? o?.side ?? null,
+      quantity: this.num(o?.quantity),
+      price: this.num(o?.price ?? o?.average_price),
+      status: o?.status ?? null,
+      orderType: o?.order_type ?? null,
+      time: o?.order_timestamp ?? o?.exchange_timestamp ?? null,
+    }));
+  }
+
+  private normalizeTrades(raw: any) {
+    if (!Array.isArray(raw)) return null;
+    return raw.map((t: any) => ({
+      tradeId: t?.trade_id ?? t?.id ?? '—',
+      orderId: t?.order_id ?? null,
+      symbol: t?.tradingsymbol ?? t?.symbol ?? '—',
+      side: t?.transaction_type ?? t?.side ?? null,
+      quantity: this.num(t?.quantity),
+      price: this.num(t?.average_price ?? t?.price),
+      time: t?.fill_timestamp ?? t?.exchange_timestamp ?? null,
+    }));
+  }
+
+  private buildLiveProfile(profile: any, caps: BrokerCapabilities, profileOk: boolean) {
+    return {
+      userName: profile?.userName ?? null,
+      email: profile?.email ?? null,
+      mobile: profile?.mobile ?? null,
+      accountType: profile?.accountType ?? null,
+      rmsStatus: profile?.rmsStatus ?? null,
+      exchanges:
+        caps.exchanges && Array.isArray(profile?.exchanges) ? profile.exchanges : null,
+      products:
+        caps.products && Array.isArray(profile?.products) ? profile.products : null,
+      segments: Array.isArray(profile?.segments) ? profile.segments : null,
+      profileStatus: profile?.profileStatus ?? (profileOk ? 'ACTIVE' : null),
+    };
+  }
+
+  private portfolioSummary(holdings: any[] | null) {
+    if (!holdings || holdings.length === 0) return null;
+    let totalValue = 0;
+    let totalPnl = 0;
+    let hasValue = false;
+    let hasPnl = false;
+    for (const h of holdings) {
+      if (h.currentValue !== null) {
+        totalValue += h.currentValue;
+        hasValue = true;
+      }
+      if (h.pnl !== null) {
+        totalPnl += h.pnl;
+        hasPnl = true;
+      }
+    }
+    return {
+      instruments: holdings.length,
+      totalValue: hasValue ? Number(totalValue.toFixed(2)) : null,
+      totalPnl: hasPnl ? Number(totalPnl.toFixed(2)) : null,
+    };
+  }
+
+  /**
+   * Sprint 6.1.5 — Full SDK-driven broker dashboard for a follower/master
+   * account. Reuses getDashboard() (single live probe) and reshapes it into
+   * the typed, capability-aware DTO the operational dashboard renders.
+   */
+  async getBrokerDashboard(accountId: string) {
+    const { account } = await this.loadContext(accountId);
+    const capabilities = this.capabilitiesFor(account.broker);
+    const features = this.featuresFor(account.broker);
+
+    const dash = await this.getDashboard(accountId);
+    const profile: any = dash.profile;
+    const health: any = dash.health;
+    const profileOk = dash.errors.profile === null && profile !== null;
+
+    const holdings = capabilities.holdings ? this.normalizeHoldings(dash.holdings) : null;
+    const positions = capabilities.positions
+      ? this.normalizePositions(dash.positions)
+      : null;
+    const orders = capabilities.orders ? this.normalizeOrders(dash.orders) : null;
+    const trades = capabilities.trades ? this.normalizeTrades(dash.trades) : null;
+
+    return {
+      broker: account.broker,
+      clientId: account.clientId,
+      capabilities,
+      features,
+      health,
+      profile: this.buildLiveProfile(profile, capabilities, profileOk),
+      funds: capabilities.funds ? dash.funds : null,
+      holdings,
+      positions,
+      orders,
+      trades,
+      portfolio: features.supportsPortfolio ? this.portfolioSummary(holdings) : null,
+      errors: dash.errors,
+    };
+  }
+
+  /**
+   * Sprint 6.1.5 — Granular SDK refresh for a single dashboard section. Calls
+   * exactly one broker SDK method (no cached data). Returns a capability-aware
+   * envelope so the UI can show "Not supported by broker" honestly.
+   */
+  async getBrokerSection(
+    accountId: string,
+    section: 'profile' | 'funds' | 'holdings' | 'positions' | 'orders' | 'trades',
+  ) {
+    const { account, session } = await this.loadContext(accountId);
+    const capabilities = this.capabilitiesFor(account.broker);
+
+    const capMap: Record<typeof section, boolean> = {
+      profile: capabilities.profile,
+      funds: capabilities.funds,
+      holdings: capabilities.holdings,
+      positions: capabilities.positions,
+      orders: capabilities.orders,
+      trades: capabilities.trades,
+    };
+    const methodMap: Record<typeof section, string> = {
+      profile: 'getProfile',
+      funds: 'getMargins',
+      holdings: 'getHoldings',
+      positions: 'getPositions',
+      orders: 'getOrders',
+      trades: 'getTrades',
+    };
+
+    if (!capMap[section]) {
+      return { section, supported: false, data: null, error: null };
+    }
+    if (!session) {
+      return {
+        section,
+        supported: true,
+        data: null,
+        error: 'No active broker session. Please connect the broker.',
+      };
+    }
+
+    const adapter = this.buildAdapter(
+      account.broker,
+      this.encryption.decrypt(session.encryptedAccessToken),
+    );
+    const settled = await Promise.allSettled([
+      this.safeCall(adapter, methodMap[section]),
+    ]);
+    const s = settle(settled[0]);
+    if (s.error) {
+      return { section, supported: true, data: null, error: s.error };
+    }
+
+    let data: any = s.data;
+    if (section === 'funds') data = this.normalizeFunds(s.data);
+    else if (section === 'holdings') data = this.normalizeHoldings(s.data);
+    else if (section === 'positions') data = this.normalizePositions(s.data);
+    else if (section === 'orders') data = this.normalizeOrders(s.data);
+    else if (section === 'trades') data = this.normalizeTrades(s.data);
+    else if (section === 'profile')
+      data = this.buildLiveProfile(s.data, capabilities, true);
+
+    return { section, supported: true, data, error: null };
   }
 }

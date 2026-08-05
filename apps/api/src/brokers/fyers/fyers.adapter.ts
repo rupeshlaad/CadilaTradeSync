@@ -1,5 +1,11 @@
 import { fyersModel } from 'fyers-api-v3';
-import { BrokerAdapter, BrokerCapabilities, BrokerProfile } from '../broker.interface';
+import {
+  BrokerAdapter,
+  BrokerCapabilities,
+  BrokerFeatureSupport,
+  BrokerOnboardingRequirements,
+  BrokerProfile,
+} from '../broker.interface';
 
 export class FyersAdapter implements BrokerAdapter {
   /**
@@ -18,6 +24,37 @@ export class FyersAdapter implements BrokerAdapter {
     positions: false,
     orders: true,
     trades: false,
+  };
+
+  /** Sprint 6.1.5 — operational feature support (only what the adapter wires). */
+  static readonly features: BrokerFeatureSupport = {
+    supportsProfile: true,
+    supportsFunds: false,
+    supportsMargins: false,
+    supportsHoldings: false,
+    supportsPositions: false,
+    supportsOrders: true,
+    supportsTrades: false,
+    supportsPortfolio: false,
+    supportsAutoLogin: false,
+    supportsLogout: false,
+    supportsSessionRefresh: true,
+  };
+
+  /** Sprint 6.1.5 — onboarding requirements (OAuth app id/secret + redirect). */
+  static readonly onboarding: BrokerOnboardingRequirements = {
+    requiresOAuth: true,
+    requiresApiKey: true,
+    requiresSecret: true,
+    requiresPassword: false,
+    requiresPIN: false,
+    requiresTOTP: false,
+    requiresStaticIP: false,
+    requiresRedirect: true,
+    requiresVendorCode: false,
+    supportsAutoLogin: false,
+    supportsTokenRefresh: true,
+    supportsMFA: false,
   };
 
   private fyers: any;

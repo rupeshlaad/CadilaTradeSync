@@ -1,5 +1,11 @@
 import { KiteConnect } from 'kiteconnect';
-import { BrokerAdapter, BrokerCapabilities, BrokerProfile } from '../broker.interface';
+import {
+  BrokerAdapter,
+  BrokerCapabilities,
+  BrokerFeatureSupport,
+  BrokerOnboardingRequirements,
+  BrokerProfile,
+} from '../broker.interface';
 
 export class ZerodhaAdapter implements BrokerAdapter {
   /** Sprint 6.1.3 — Kite exposes the full trading surface. */
@@ -13,6 +19,37 @@ export class ZerodhaAdapter implements BrokerAdapter {
     positions: true,
     orders: true,
     trades: true,
+  };
+
+  /** Sprint 6.1.5 — operational feature support (Kite SDK). */
+  static readonly features: BrokerFeatureSupport = {
+    supportsProfile: true,
+    supportsFunds: true,
+    supportsMargins: true,
+    supportsHoldings: true,
+    supportsPositions: true,
+    supportsOrders: true,
+    supportsTrades: true,
+    supportsPortfolio: true,
+    supportsAutoLogin: true,
+    supportsLogout: false,
+    supportsSessionRefresh: false,
+  };
+
+  /** Sprint 6.1.5 — onboarding requirements (OAuth + API key/secret). */
+  static readonly onboarding: BrokerOnboardingRequirements = {
+    requiresOAuth: true,
+    requiresApiKey: true,
+    requiresSecret: true,
+    requiresPassword: false,
+    requiresPIN: false,
+    requiresTOTP: false,
+    requiresStaticIP: false,
+    requiresRedirect: true,
+    requiresVendorCode: false,
+    supportsAutoLogin: true,
+    supportsTokenRefresh: false,
+    supportsMFA: true,
   };
 
   private kite: any;

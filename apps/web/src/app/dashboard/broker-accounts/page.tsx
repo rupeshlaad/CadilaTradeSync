@@ -5,11 +5,13 @@ import { useSearchParams } from 'next/navigation';
 
 import {
   BrokerAccountCard,
+  BrokerDashboardPanel,
   type BrokerAccountCardData,
 } from '@cts/ui';
 import type {
   BrokerConnectionState,
-  BrokerVerifyInfoDto,
+  BrokerDashboardDto,
+  BrokerDashboardSection,
 } from '@cts/shared';
 import {
   BROKER_LABELS,
@@ -84,7 +86,7 @@ function mapConnectionState(v: string | null | undefined): BrokerConnectionState
 function toCardData(
   row: TradingAccountDto,
   health: FollowerHealthById | undefined,
-  info: BrokerVerifyInfoDto | undefined,
+  dash: BrokerDashboardDto | undefined,
 ): BrokerAccountCardData {
   // Sprint 6.1.2 — connection state is driven by the persisted backend
   // session-health, never by frontend-only state. Falls back to the row's
@@ -93,7 +95,8 @@ function toCardData(
     health?.connectionStatus ?? (row.connectionStatus as any),
   );
   const loginTime = health?.loginTime ?? null;
-  const accountHolder = info?.accountHolder ?? health?.accountHolder ?? null;
+  const accountHolder =
+    dash?.health.accountHolder ?? health?.accountHolder ?? null;
   return {
     id: row.id,
     broker: row.broker,
@@ -102,7 +105,8 @@ function toCardData(
     clientId: row.clientId,
     connectionState,
     enabled: row.enabled,
-    lastHeartbeat: info?.lastSync ?? row.lastHeartbeat ?? health?.lastHeartbeat ?? null,
+    lastHeartbeat:
+      dash?.health.lastHeartbeat ?? row.lastHeartbeat ?? health?.lastHeartbeat ?? null,
     lastLogin: loginTime,
     createdAt: row.createdAt ?? null,
     hasApiKey: row.hasApiKey,
@@ -112,9 +116,9 @@ function toCardData(
     sessionHealthState: health?.sessionHealthState ?? null,
     tokenStatus: health?.tokenStatus ?? null,
     accountHolder,
-    connectionTime: info?.connectionTime ?? loginTime,
-    capabilities: info?.capabilities ?? null,
-    liveProfile: info?.liveProfile ?? null,
+    connectionTime: dash?.health.loginTime ?? loginTime,
+    capabilities: dash?.capabilities ?? null,
+    liveProfile: dash?.profile ?? null,
     sessionHealth: health
       ? {
           healthy:
@@ -126,13 +130,15 @@ function toCardData(
         }
       : null,
     details: {
-      exchanges: info?.exchanges ?? null,
-      products: info?.products ?? null,
-      funds: info?.funds ?? null,
-      marginAvailable: info ? info.marginAvailable : null,
+      exchanges: dash?.profile.exchanges ?? null,
+      products: dash?.profile.products ?? null,
+      funds: dash?.funds ?? null,
+      marginAvailable: dash ? dash.errors.margins === null && dash.funds !== null : null,
     },
   };
 }
+
+type RefreshTarget = BrokerDashboardSection | 'all' | 'session' | null;
 
 type FollowerHealthById = Awaited<
   ReturnType<typeof api.tradingAccounts.sessionHealth>
@@ -148,8 +154,9 @@ export default function BrokerAccountsPage() {
     Record<string, FollowerHealthById>
   >({});
   const [infoByAccount, setInfoByAccount] = useState<
-    Record<string, BrokerVerifyInfoDto>
+    Record<string, BrokerDashboardDto>
   >({});
+  const [refreshing, setRefreshing] = useState<Record<string, RefreshTarget>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [banner, setBanner] = useState<
@@ -174,7 +181,7 @@ export default function BrokerAccountsPage() {
       // For connected accounts we additionally verify against the broker
       // (profile / entitlements / funds) so the card can confirm the link.
       const healthMap: Record<string, FollowerHealthById> = {};
-      const infoMap: Record<string, BrokerVerifyInfoDto> = {};
+      const infoMap: Record<string, BrokerDashboardDto> = {};
       await Promise.all(
         list.map(async (row) => {
           try {
@@ -182,7 +189,8 @@ export default function BrokerAccountsPage() {
             healthMap[row.id] = h;
             if (h.connectionStatus === 'CONNECTED') {
               try {
-                infoMap[row.id] = await api.tradingAccounts.brokerInfo(row.id);
+                // Sprint 6.1.5 — auto-verify against the broker SDK on open.
+                infoMap[row.id] = await api.tradingAccounts.dashboard(row.id);
               } catch {
                 /* live verify is best-effort; card still shows persisted state */
               }
@@ -309,44 +317,72 @@ export default function BrokerAccountsPage() {
     }
   }
 
+  function setBusy(id: string, target: RefreshTarget) {
+    setRefreshing((prev) => ({ ...prev, [id]: target }));
+  }
+
   async function refreshSession(row: BrokerAccountCardData) {
-    // Sprint 6.1.2 — live broker verification through the shared adapter.
+    // Sprint 6.1.5 — re-verify session health + full SDK dashboard.
+    setBusy(row.id, 'session');
     try {
-      const [h, info] = await Promise.all([
+      const [h, dash] = await Promise.all([
         api.tradingAccounts.sessionHealth(row.id),
-        api.tradingAccounts.brokerInfo(row.id),
+        api.tradingAccounts.dashboard(row.id),
       ]);
       setHealthByAccount((prev) => ({ ...prev, [row.id]: h }));
-      setInfoByAccount((prev) => ({ ...prev, [row.id]: info }));
-      setBanner(
-        info.error
-          ? { kind: 'error', message: info.error }
-          : { kind: 'success', message: 'Broker session verified.' },
-      );
+      setInfoByAccount((prev) => ({ ...prev, [row.id]: dash }));
+      setBanner({ kind: 'success', message: 'Broker session verified.' });
     } catch (e: any) {
-      setBanner({
-        kind: 'error',
-        message: e?.message ?? 'Session verification failed',
+      setBanner({ kind: 'error', message: e?.message ?? 'Session verification failed' });
+    } finally {
+      setBusy(row.id, null);
+    }
+  }
+
+  async function refreshAll(row: BrokerAccountCardData) {
+    setBusy(row.id, 'all');
+    try {
+      const [h, dash] = await Promise.all([
+        api.tradingAccounts.sessionHealth(row.id),
+        api.tradingAccounts.dashboard(row.id),
+      ]);
+      setHealthByAccount((prev) => ({ ...prev, [row.id]: h }));
+      setInfoByAccount((prev) => ({ ...prev, [row.id]: dash }));
+    } catch (e: any) {
+      setBanner({ kind: 'error', message: e?.message ?? 'Refresh failed' });
+    } finally {
+      setBusy(row.id, null);
+    }
+  }
+
+  async function refreshSection(row: BrokerAccountCardData, section: BrokerDashboardSection) {
+    // Sprint 6.1.5 — granular live SDK refresh; merge into cached dashboard.
+    setBusy(row.id, section);
+    try {
+      const res = await api.tradingAccounts.section(row.id, section);
+      setInfoByAccount((prev) => {
+        const current = prev[row.id];
+        if (!current) return prev;
+        const next: BrokerDashboardDto = { ...current };
+        if (section === 'profile') next.profile = (res.data as any) ?? current.profile;
+        else if (section === 'funds') next.funds = res.data as any;
+        else if (section === 'holdings') next.holdings = res.data as any;
+        else if (section === 'positions') next.positions = res.data as any;
+        else if (section === 'orders') next.orders = res.data as any;
+        else if (section === 'trades') next.trades = res.data as any;
+        return { ...prev, [row.id]: next };
       });
+      if (res.error) setBanner({ kind: 'error', message: res.error });
+    } catch (e: any) {
+      setBanner({ kind: 'error', message: e?.message ?? 'Section refresh failed' });
+    } finally {
+      setBusy(row.id, null);
     }
   }
 
   async function refreshProfile(row: BrokerAccountCardData) {
-    // Sprint 6.1.4 — refresh the live broker profile / funds via the adapter.
-    try {
-      const info = await api.tradingAccounts.brokerInfo(row.id);
-      setInfoByAccount((prev) => ({ ...prev, [row.id]: info }));
-      setBanner(
-        info.error
-          ? { kind: 'error', message: info.error }
-          : { kind: 'success', message: 'Broker profile refreshed.' },
-      );
-    } catch (e: any) {
-      setBanner({
-        kind: 'error',
-        message: e?.message ?? 'Profile refresh failed',
-      });
-    }
+    await refreshSection(row, 'profile');
+    setBanner({ kind: 'success', message: 'Broker profile refreshed.' });
   }
 
   async function disconnectBroker(row: BrokerAccountCardData) {
@@ -484,27 +520,42 @@ export default function BrokerAccountsPage() {
               </Button>
             </div>
           ) : (
-            <div className="grid grid-cols-1 gap-4">
-              {cards.map((card) => (
-                <BrokerAccountCard
-                  key={card.id}
-                  account={card}
-                  onConnect={connectBroker}
-                  onReconnect={connectBroker}
-                  onDisconnect={disconnectBroker}
-                  onEdit={(c) => {
-                    const original = rows.find((r) => r.id === c.id);
-                    if (original) openEdit(original);
-                  }}
-                  onRemove={removeAccount}
-                  onToggleEnabled={toggleEnabled}
-                  onRefreshHealth={refreshHealth}
-                  onRefreshSession={refreshSession}
-                  onRefreshProfile={refreshProfile}
-                  showDetails={expanded.has(card.id)}
-                  onToggleDetails={() => toggleDetails(card.id)}
-                />
-              ))}
+            <div className="grid grid-cols-1 gap-6">
+              {cards.map((card) => {
+                const dash = infoByAccount[card.id];
+                const isConnected = card.connectionState === 'CONNECTED';
+                return (
+                  <div key={card.id} className="space-y-3">
+                    <BrokerAccountCard
+                      account={card}
+                      onConnect={connectBroker}
+                      onReconnect={connectBroker}
+                      onDisconnect={disconnectBroker}
+                      onEdit={(c) => {
+                        const original = rows.find((r) => r.id === c.id);
+                        if (original) openEdit(original);
+                      }}
+                      onRemove={removeAccount}
+                      onToggleEnabled={toggleEnabled}
+                      onRefreshHealth={refreshHealth}
+                      onRefreshSession={refreshSession}
+                      onRefreshProfile={refreshProfile}
+                      showDetails={expanded.has(card.id)}
+                      onToggleDetails={() => toggleDetails(card.id)}
+                    />
+                    {isConnected && (
+                      <BrokerDashboardPanel
+                        dashboard={dash ?? null}
+                        loading={!dash}
+                        refreshing={refreshing[card.id] ?? null}
+                        onRefreshSection={(section) => refreshSection(card, section)}
+                        onRefreshAll={() => refreshAll(card)}
+                        onRefreshSession={() => refreshSession(card)}
+                      />
+                    )}
+                  </div>
+                );
+              })}
             </div>
           )}
         </CardContent>
