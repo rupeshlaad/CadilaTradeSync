@@ -112,6 +112,8 @@ function toCardData(
     sessionHealthState: health?.sessionHealthState ?? null,
     tokenStatus: health?.tokenStatus ?? null,
     accountHolder,
+    connectionTime: info?.connectionTime ?? loginTime,
+    capabilities: info?.capabilities ?? null,
     sessionHealth: health
       ? {
           healthy:
@@ -123,11 +125,8 @@ function toCardData(
         }
       : null,
     details: {
-      accountHolder,
       exchanges: info?.exchanges ?? null,
       products: info?.products ?? null,
-      connectionTime: loginTime ?? row.updatedAt ?? null,
-      lastRefresh: info?.lastSync ?? row.lastHeartbeat ?? null,
       funds: info?.funds ?? null,
       marginAvailable: info ? info.marginAvailable : null,
     },

@@ -1,7 +1,20 @@
 import { KiteConnect } from 'kiteconnect';
-import { BrokerAdapter, BrokerProfile } from '../broker.interface';
+import { BrokerAdapter, BrokerCapabilities, BrokerProfile } from '../broker.interface';
 
 export class ZerodhaAdapter implements BrokerAdapter {
+  /** Sprint 6.1.3 — Kite exposes the full trading surface. */
+  static readonly capabilities: BrokerCapabilities = {
+    profile: true,
+    exchanges: true,
+    products: true,
+    funds: true,
+    margin: true,
+    holdings: true,
+    positions: true,
+    orders: true,
+    trades: true,
+  };
+
   private kite: any;
 
   constructor() {

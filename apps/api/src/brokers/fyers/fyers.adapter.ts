@@ -1,7 +1,25 @@
 import { fyersModel } from 'fyers-api-v3';
-import { BrokerAdapter, BrokerProfile } from '../broker.interface';
+import { BrokerAdapter, BrokerCapabilities, BrokerProfile } from '../broker.interface';
 
 export class FyersAdapter implements BrokerAdapter {
+  /**
+   * Sprint 6.1.3 — Reflects what THIS adapter currently implements, not the
+   * broker's theoretical API. Profile + order placement/book are wired;
+   * funds/margin/holdings/positions/trades are not implemented here yet, so
+   * they are honestly reported as unsupported ("Not Supported by Broker").
+   */
+  static readonly capabilities: BrokerCapabilities = {
+    profile: true,
+    exchanges: false,
+    products: false,
+    funds: false,
+    margin: false,
+    holdings: false,
+    positions: false,
+    orders: true,
+    trades: false,
+  };
+
   private fyers: any;
 
   constructor() {

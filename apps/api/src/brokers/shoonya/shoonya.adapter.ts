@@ -1,7 +1,23 @@
 import axios from 'axios';
-import { BrokerAdapter, BrokerProfile } from '../broker.interface';
+import { BrokerAdapter, BrokerCapabilities, BrokerProfile } from '../broker.interface';
 
 export class ShoonyaAdapter implements BrokerAdapter {
+  /**
+   * Sprint 6.1.3 — Only profile (UserDetails) is wired today; the remaining
+   * data methods are stubs, so they are honestly reported as unsupported.
+   */
+  static readonly capabilities: BrokerCapabilities = {
+    profile: true,
+    exchanges: false,
+    products: false,
+    funds: false,
+    margin: false,
+    holdings: false,
+    positions: false,
+    orders: false,
+    trades: false,
+  };
+
   private readonly baseUrl = 'https://api.shoonya.com/NorenWClientTP';
   private sessionToken = '';
 

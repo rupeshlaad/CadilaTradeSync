@@ -8,6 +8,25 @@ export interface BrokerProfile {
   products?: string[];
 }
 
+/**
+ * Sprint 6.1.3 — Declares which broker-data capabilities an adapter actually
+ * implements. Used to distinguish "Not Supported by Broker" from genuinely
+ * empty/failed data so the UI never fabricates values. This is the reusable
+ * capability surface future modules (Holdings / Positions / Orders / Trades /
+ * Portfolio / Live P&L) can consume without broker-specific branching.
+ */
+export interface BrokerCapabilities {
+  profile: boolean;
+  exchanges: boolean;
+  products: boolean;
+  funds: boolean;
+  margin: boolean;
+  holdings: boolean;
+  positions: boolean;
+  orders: boolean;
+  trades: boolean;
+}
+
 export interface BrokerAdapter {
   getLoginUrl(): string;
 
