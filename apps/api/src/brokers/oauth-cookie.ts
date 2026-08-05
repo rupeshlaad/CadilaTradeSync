@@ -14,32 +14,44 @@ export const OAUTH_STATE_COOKIE = 'cts_oauth_state';
 const COOKIE_MAX_AGE_MS = 15 * 60 * 1000;
 
 /**
- * Set an HttpOnly, SameSite=Lax cookie carrying the OAuth state id.
- * We deliberately use SameSite=Lax (not Strict) — a Lax cookie is
- * still transmitted on the top-level redirect issued by the broker
- * back to the per-broker callback endpoint, which is what we need.
+ * Set an HttpOnly cookie carrying the OAuth state id.
+ *
+ * `sameSite` defaults to 'Lax' — still transmitted on the top-level GET
+ * redirect issued by GET-callback brokers (Zerodha/Fyers/Shoonya), so their
+ * behaviour is unchanged. Pass 'None' for brokers whose provider returns via a
+ * cross-site POST (ICICI Direct/Breeze), on which Lax cookies are NOT sent;
+ * SameSite=None mandates Secure, so Secure is forced in that case.
  */
-export function setOAuthStateCookie(res: Response, stateId: string): void {
+export function setOAuthStateCookie(
+  res: Response,
+  stateId: string,
+  sameSite: 'Lax' | 'None' = 'Lax',
+): void {
   const isProd = process.env.NODE_ENV === 'production';
+  const secure = isProd || sameSite === 'None';
   res.setHeader('Set-Cookie', [
     `${OAUTH_STATE_COOKIE}=${encodeURIComponent(stateId)}`,
     'Path=/',
     'HttpOnly',
     `Max-Age=${Math.floor(COOKIE_MAX_AGE_MS / 1000)}`,
-    'SameSite=Lax',
-    ...(isProd ? ['Secure'] : []),
+    `SameSite=${sameSite}`,
+    ...(secure ? ['Secure'] : []),
   ].join('; '));
 }
 
-export function clearOAuthStateCookie(res: Response): void {
+export function clearOAuthStateCookie(
+  res: Response,
+  sameSite: 'Lax' | 'None' = 'Lax',
+): void {
   const isProd = process.env.NODE_ENV === 'production';
+  const secure = isProd || sameSite === 'None';
   res.setHeader('Set-Cookie', [
     `${OAUTH_STATE_COOKIE}=`,
     'Path=/',
     'HttpOnly',
     'Max-Age=0',
-    'SameSite=Lax',
-    ...(isProd ? ['Secure'] : []),
+    `SameSite=${sameSite}`,
+    ...(secure ? ['Secure'] : []),
   ].join('; '));
 }
 
