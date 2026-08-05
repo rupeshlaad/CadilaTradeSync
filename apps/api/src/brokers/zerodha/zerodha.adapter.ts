@@ -52,6 +52,11 @@ export class ZerodhaAdapter implements BrokerAdapter {
       email: p.email,
       exchanges: Array.isArray(p.exchanges) ? p.exchanges : undefined,
       products: Array.isArray(p.products) ? p.products : undefined,
+      // Kite exposes user_type + exchange list; mobile / RMS / profile status
+      // are not part of the profile payload, so they are intentionally left
+      // undefined ("Not provided by broker") rather than fabricated.
+      accountType: p.user_type ?? undefined,
+      segments: Array.isArray(p.exchanges) ? p.exchanges : undefined,
     };
   }
 

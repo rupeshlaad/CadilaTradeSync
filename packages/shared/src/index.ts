@@ -409,6 +409,28 @@ export interface BrokerFundsSummaryDto {
   available: number | null;
   used: number | null;
   net: number | null;
+  /** Sprint 6.1.4 — detailed funds/margin breakdown (null when not exposed). */
+  availableCash: number | null;
+  usedMargin: number | null;
+  availableMargin: number | null;
+  openingBalance: number | null;
+  collateral: number | null;
+}
+
+/**
+ * Sprint 6.1.4 — Live broker profile. Every field is nullable; a null value
+ * is rendered as "Not provided by broker" (never fabricated, never "--").
+ */
+export interface BrokerLiveProfileDto {
+  userName: string | null;
+  email: string | null;
+  mobile: string | null;
+  accountType: string | null;
+  rmsStatus: string | null;
+  exchanges: string[] | null;
+  products: string[] | null;
+  segments: string[] | null;
+  profileStatus: string | null;
 }
 
 /**
@@ -450,9 +472,76 @@ export interface BrokerVerifyInfoDto {
   capabilities: BrokerCapabilities;
   /** True when the live profile probe returned data. */
   profileAvailable: boolean;
+  /** Sprint 6.1.4 — full live profile (nullable fields → "Not provided by broker"). */
+  liveProfile: BrokerLiveProfileDto;
   exchanges: string[] | null;
   products: string[] | null;
   funds: BrokerFundsSummaryDto[] | null;
   marginAvailable: boolean;
   error: string | null;
+}
+
+// ---------------------------------------------------------------------------
+// Sprint 6.1.4 — Master Portal follower operational overview.
+// Aggregated from existing tables/services (User, Follower, Subscription,
+// TradingAccount, BrokerSession via BrokerService, ExecutionHistory). No new
+// schema. Broker credentials/secrets are NEVER included.
+// ---------------------------------------------------------------------------
+
+export interface FollowerBrokerAccountSummary {
+  id: string;
+  broker: Broker;
+  brokerLabel: string;
+  nickname: string;
+  clientId: string;
+  accountHolder: string | null;
+  connectionStatus: ConnectionStatus;
+  sessionHealthState: BrokerSessionHealthState;
+  tokenStatus: BrokerTokenStatus;
+  enabled: boolean;
+  loginTime: string | null;
+  lastSync: string | null;
+  connectedSince: string | null;
+}
+
+export interface FollowerSubscriptionSummary {
+  followerId: string;
+  strategyId: string;
+  strategyName: string | null;
+  strategyStatus: StrategyStatus | null;
+  subscriptionStatus: SubscriptionStatus | null;
+  subscriptionDate: string | null;
+  copyTradingEnabled: boolean;
+  multiplier: number;
+  maximumLoss: number | null;
+  maximumDailyLoss: number | null;
+}
+
+export interface FollowerTradingSummary {
+  totalOrders: number;
+  successfulOrders: number;
+  failedOrders: number;
+  skippedOrders: number;
+  lastTradeAt: string | null;
+  openPositions: number | null;
+  currentPnl: number | null;
+  lifetimePnl: number | null;
+}
+
+export interface FollowerOverviewDto {
+  profile: {
+    userId: string;
+    fullName: string | null;
+    email: string;
+    mobile: string | null;
+    registrationDate: string | null;
+    accountStatus: 'ACTIVE' | 'INACTIVE';
+    lastLogin: string | null;
+    lastActivity: string | null;
+    country: string | null;
+    subscriptionPlan: string | null;
+  };
+  brokerAccounts: FollowerBrokerAccountSummary[];
+  subscriptions: FollowerSubscriptionSummary[];
+  trading: FollowerTradingSummary;
 }

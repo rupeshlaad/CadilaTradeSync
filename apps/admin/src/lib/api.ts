@@ -820,6 +820,24 @@ export const api = {
 
     listFollowers: () => request<FollowerDto[]>('/admin/followers'),
 
+    // Sprint 6.1.4 — Master Portal follower management (operational overview
+    // + copy-trading enable/disable). Reuses existing admin follower APIs.
+    followers: {
+      list: () => request<FollowerDto[]>('/admin/followers'),
+      overview: (userId: string) =>
+        request<import('@cts/shared').FollowerOverviewDto>(
+          `/admin/followers/${encodeURIComponent(userId)}/overview`,
+        ),
+      enable: (id: string) =>
+        request<FollowerDto>(`/admin/followers/${id}/enable`, {
+          method: 'POST',
+        }),
+      disable: (id: string) =>
+        request<FollowerDto>(`/admin/followers/${id}/disable`, {
+          method: 'POST',
+        }),
+    },
+
     listSubscriptions: () =>
       request<
         (SubscriptionDto & {

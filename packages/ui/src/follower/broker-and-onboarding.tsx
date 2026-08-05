@@ -7,6 +7,7 @@ import type {
   BrokerTokenStatus,
   BrokerCapabilities,
   BrokerFundsSummaryDto,
+  BrokerLiveProfileDto,
   FollowerDashboardSummaryDto,
   FollowerOnboardingStatusDto,
 } from '@cts/shared';
@@ -97,6 +98,8 @@ export interface BrokerAccountCardData {
   connectionTime?: string | null;
   /** Sprint 6.1.3 — Broker-declared data capabilities. */
   capabilities?: BrokerCapabilities | null;
+  /** Sprint 6.1.4 — full live broker profile (nulls → "Not provided by broker"). */
+  liveProfile?: BrokerLiveProfileDto | null;
   /** Optional details section — exchanges / products / margin / funds. */
   details?: BrokerAccountDetails | null;
 }
@@ -133,6 +136,12 @@ function fmtMoney(v: number | null | undefined): string {
 }
 
 const NOT_SUPPORTED = 'Not Supported by Broker';
+const NOT_PROVIDED = 'Not provided by broker';
+
+/** Sprint 6.1.4 — profile field value or honest "Not provided by broker". */
+function profileValue(value: string | null | undefined): string {
+  return value && value.length > 0 ? value : NOT_PROVIDED;
+}
 
 /**
  * Sprint 6.1.3 — Render a broker-metadata value honestly:
@@ -160,6 +169,8 @@ export interface BrokerAccountCardProps {
   onRefreshHealth?: (account: BrokerAccountCardData) => void;
   /** Sprint 6.1.2 — live broker verification (profile/funds via adapter). */
   onRefreshSession?: (account: BrokerAccountCardData) => void;
+  /** Sprint 6.1.4 — refresh only the live broker profile/funds. */
+  onRefreshProfile?: (account: BrokerAccountCardData) => void;
   showDetails?: boolean;
   onToggleDetails?: () => void;
 }
@@ -174,6 +185,7 @@ export function BrokerAccountCard({
   onToggleEnabled,
   onRefreshHealth,
   onRefreshSession,
+  onRefreshProfile,
   showDetails,
   onToggleDetails,
 }: BrokerAccountCardProps) {
@@ -340,66 +352,83 @@ export function BrokerAccountCard({
 
       {showDetails && account.details && (
         <div
-          className="border-t px-4 py-3 grid grid-cols-2 md:grid-cols-3 gap-3 text-sm"
+          className="border-t px-4 py-3 space-y-4 text-sm"
           data-testid={`broker-account-card-${account.id}-details`}
         >
-          <DetailRow
-            label="Exchanges"
-            value={metaValue(
-              account.capabilities?.exchanges,
-              account.details.exchanges && account.details.exchanges.length > 0
-                ? account.details.exchanges.join(', ')
-                : null,
-            )}
-          />
-          <DetailRow
-            label="Products"
-            value={metaValue(
-              account.capabilities?.products,
-              account.details.products && account.details.products.length > 0
-                ? account.details.products.join(', ')
-                : null,
-            )}
-          />
-          <DetailRow
-            label="Margin"
-            value={
-              account.capabilities?.margin === false
-                ? NOT_SUPPORTED
-                : account.details.marginAvailable
-                ? 'Available'
-                : '—'
-            }
-          />
-          {account.capabilities?.funds === false ? (
-            <DetailRow label="Funds" value={NOT_SUPPORTED} />
-          ) : account.details.funds && account.details.funds.length > 0 ? (
-            <div
-              className="col-span-2 md:col-span-3"
-              data-testid={`broker-account-${account.id}-funds`}
-            >
-              <div className="text-[11px] uppercase tracking-wide text-muted-foreground mb-1">
-                Funds
-              </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+          {/* Sprint 6.1.4 — Live broker profile (capability/availability aware). */}
+          <div>
+            <div className="text-[11px] uppercase tracking-wide text-muted-foreground mb-2">
+              Broker Profile
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+              <DetailRow label="User name" value={profileValue(account.liveProfile?.userName)} />
+              <DetailRow label="Email" value={profileValue(account.liveProfile?.email)} />
+              <DetailRow label="Mobile" value={profileValue(account.liveProfile?.mobile)} />
+              <DetailRow label="Account type" value={profileValue(account.liveProfile?.accountType)} />
+              <DetailRow label="RMS status" value={profileValue(account.liveProfile?.rmsStatus)} />
+              <DetailRow label="Profile status" value={profileValue(account.liveProfile?.profileStatus)} />
+              <DetailRow
+                label="Exchanges"
+                value={metaValue(
+                  account.capabilities?.exchanges,
+                  account.details.exchanges && account.details.exchanges.length > 0
+                    ? account.details.exchanges.join(', ')
+                    : null,
+                )}
+              />
+              <DetailRow
+                label="Products"
+                value={metaValue(
+                  account.capabilities?.products,
+                  account.details.products && account.details.products.length > 0
+                    ? account.details.products.join(', ')
+                    : null,
+                )}
+              />
+              <DetailRow
+                label="Segments"
+                value={metaValue(
+                  account.capabilities?.exchanges,
+                  account.liveProfile?.segments && account.liveProfile.segments.length > 0
+                    ? account.liveProfile.segments.join(', ')
+                    : null,
+                )}
+              />
+            </div>
+          </div>
+
+          {/* Sprint 6.1.4 — Funds / Margin. */}
+          <div>
+            <div className="text-[11px] uppercase tracking-wide text-muted-foreground mb-2">
+              Funds &amp; Margin
+            </div>
+            {account.capabilities?.funds === false ? (
+              <div className="text-sm">{NOT_SUPPORTED}</div>
+            ) : account.details.funds && account.details.funds.length > 0 ? (
+              <div
+                className="grid grid-cols-1 md:grid-cols-2 gap-2"
+                data-testid={`broker-account-${account.id}-funds`}
+              >
                 {account.details.funds.map((f) => (
-                  <div
-                    key={f.segment}
-                    className="rounded-md border px-3 py-2 flex items-center justify-between gap-3"
-                  >
-                    <span className="text-xs uppercase tracking-wide text-muted-foreground">
+                  <div key={f.segment} className="rounded-md border px-3 py-2">
+                    <div className="text-xs uppercase tracking-wide text-muted-foreground mb-1">
                       {f.segment}
-                    </span>
-                    <span className="font-mono text-xs">
-                      Avail {fmtMoney(f.available)} · Net {fmtMoney(f.net)}
-                    </span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-x-3 gap-y-1 font-mono text-xs">
+                      <span>Available Cash</span><span className="text-right">{fmtMoney(f.availableCash)}</span>
+                      <span>Available Margin</span><span className="text-right">{fmtMoney(f.availableMargin)}</span>
+                      <span>Used Margin</span><span className="text-right">{fmtMoney(f.usedMargin)}</span>
+                      <span>Opening Balance</span><span className="text-right">{fmtMoney(f.openingBalance)}</span>
+                      <span>Collateral</span><span className="text-right">{fmtMoney(f.collateral)}</span>
+                      <span>Available Funds</span><span className="text-right">{fmtMoney(f.net)}</span>
+                    </div>
                   </div>
                 ))}
               </div>
-            </div>
-          ) : (
-            <DetailRow label="Funds" value="—" />
-          )}
+            ) : (
+              <div className="text-sm text-muted-foreground">—</div>
+            )}
+          </div>
         </div>
       )}
 
@@ -434,6 +463,14 @@ export function BrokerAccountCard({
             variant="ghost"
             onClick={() => onRefreshSession(account)}
             testid={`broker-account-${account.id}-refresh-session`}
+          />
+        )}
+        {onRefreshProfile && isConnected && (
+          <ActionButton
+            label="Refresh profile"
+            variant="ghost"
+            onClick={() => onRefreshProfile(account)}
+            testid={`broker-account-${account.id}-refresh-profile`}
           />
         )}
         {onEdit && (

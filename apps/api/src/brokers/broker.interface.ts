@@ -6,6 +6,12 @@ export interface BrokerProfile {
   /** Sprint 6.1.2 — optional broker-reported entitlements (null when unsupported). */
   exchanges?: string[];
   products?: string[];
+  /** Sprint 6.1.4 — richer live-profile fields (only when the SDK exposes them). */
+  mobile?: string;
+  accountType?: string;
+  rmsStatus?: string;
+  segments?: string[];
+  profileStatus?: string;
 }
 
 /**
