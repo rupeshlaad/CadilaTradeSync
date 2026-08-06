@@ -845,16 +845,31 @@ export class BrokerService {
         };
       }
       if (broker === Broker.ICICI_DIRECT) {
-        // Breeze dematholdings carry no LTP/market-value/P&L (separate quotes
-        // endpoint required) — left null rather than fabricated.
+        // Breeze portfolioholdings → { stock_code, exchange_code, quantity,
+        // average_price, current_market_price }. LTP is the holdings-provided
+        // current_market_price, else the quotes-enriched `ltp` (set by the
+        // adapter). Value/P&L are derived — never fabricated.
+        const qty = this.num(
+          h?.quantity ?? h?.demat_avail_quantity ?? h?.demat_total_bulk_quantity,
+        );
+        const avg = this.num(
+          h?.average_price ?? h?.average_cost_of_holdings ?? h?.average_cost,
+        );
+        const ltp = this.num(h?.ltp ?? h?.current_market_price ?? h?.market_price);
+        const currentValue =
+          qty !== null && ltp !== null ? Number((qty * ltp).toFixed(2)) : null;
+        const pnl =
+          qty !== null && ltp !== null && avg !== null
+            ? Number(((ltp - avg) * qty).toFixed(2))
+            : null;
         return {
           symbol: h?.stock_code ?? h?.stock_ISIN ?? '—',
           exchange: h?.exchange_code ?? null,
-          quantity: this.num(h?.quantity ?? h?.demat_avail_quantity),
-          averagePrice: this.num(h?.average_cost_of_holdings ?? h?.average_cost),
-          ltp: null,
-          currentValue: null,
-          pnl: null,
+          quantity: qty,
+          averagePrice: avg,
+          ltp,
+          currentValue,
+          pnl,
         };
       }
       const qty = this.num(h?.quantity ?? h?.opening_quantity);
@@ -899,14 +914,25 @@ export class BrokerService {
         };
       }
       if (broker === Broker.ICICI_DIRECT) {
+        // Breeze portfoliopositions → { stock_code, exchange_code,
+        // product_type, quantity, average_price, ltp }. Use the API-provided
+        // P&L when present, else derive from the quotes-enriched LTP.
+        const qty = this.num(p?.quantity);
+        const avg = this.num(p?.average_price);
+        const ltp = this.num(p?.ltp ?? p?.current_market_price ?? p?.last_traded_price);
+        const pnl =
+          this.num(p?.pnl) ??
+          (qty !== null && ltp !== null && avg !== null
+            ? Number(((ltp - avg) * qty).toFixed(2))
+            : null);
         return {
           symbol: p?.stock_code ?? '—',
           exchange: p?.exchange_code ?? null,
-          product: p?.product_type ?? null,
-          quantity: this.num(p?.quantity),
-          averagePrice: this.num(p?.average_price),
-          ltp: this.num(p?.ltp),
-          pnl: this.num(p?.pnl),
+          product: p?.product_type ?? p?.product ?? null,
+          quantity: qty,
+          averagePrice: avg,
+          ltp,
+          pnl,
         };
       }
       return {
@@ -950,12 +976,22 @@ export class BrokerService {
         };
       }
       if (broker === Broker.ICICI_DIRECT) {
+        // Breeze order_list → { order_id, stock_code, action, product_type,
+        // quantity, pending_quantity, price, status, order_datetime }.
         const action = o?.action != null ? String(o.action).toUpperCase() : null;
+        const qty = this.num(o?.quantity);
+        const pending = this.num(o?.pending_quantity);
+        const filled =
+          qty !== null && pending !== null
+            ? qty - pending
+            : this.num(o?.filled_quantity ?? o?.executed_quantity);
         return {
           orderId: o?.order_id ?? '—',
           symbol: o?.stock_code ?? '—',
           side: action,
-          quantity: this.num(o?.quantity),
+          product: o?.product_type ?? o?.product ?? null,
+          quantity: qty,
+          filledQuantity: filled,
           price: this.num(o?.price ?? o?.average_price),
           status: o?.status ?? null,
           orderType: o?.order_type ?? null,
@@ -1002,14 +1038,17 @@ export class BrokerService {
         };
       }
       if (broker === Broker.ICICI_DIRECT) {
+        // Breeze trade_list → { trade_id, order_id, stock_code, action,
+        // product_type, quantity, average_cost, trade_date }.
         const action = t?.action != null ? String(t.action).toUpperCase() : null;
         return {
           tradeId: t?.trade_id ?? t?.order_id ?? '—',
           orderId: t?.order_id ?? null,
           symbol: t?.stock_code ?? '—',
           side: action,
+          product: t?.product_type ?? null,
           quantity: this.num(t?.quantity),
-          price: this.num(t?.average_cost ?? t?.price ?? t?.traded_price),
+          price: this.num(t?.average_cost ?? t?.price ?? t?.traded_price ?? t?.ltp),
           time: t?.trade_date ?? t?.trade_datetime ?? null,
         };
       }
