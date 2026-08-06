@@ -42,6 +42,7 @@ const EXIT_STATES: ReadonlySet<PositionState> = new Set([
 const ACTIONABLE_BROKERS: ReadonlySet<Broker> = new Set<Broker>([
   Broker.ZERODHA,
   Broker.FYERS,
+  Broker.ICICI_DIRECT,
 ]);
 
 function assertBrokerActionable(position: PositionRecord, action: string): void {

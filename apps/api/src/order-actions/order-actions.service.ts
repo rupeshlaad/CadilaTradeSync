@@ -10,6 +10,7 @@ import { PrismaService } from '../prisma/prisma.module';
 import { EncryptionService } from '../encryption/encryption.service';
 import { ZerodhaAdapter } from '../brokers/zerodha/zerodha.adapter';
 import { FyersAdapter } from '../brokers/fyers/fyers.adapter';
+import { ICICIDirectAdapter } from '../brokers/icici/icici.adapter';
 
 import { PositionLifecycleService } from '../position-lifecycle/position-lifecycle.service';
 import { PositionRegistryService } from '../position-lifecycle/position-registry.service';
@@ -231,6 +232,25 @@ export class OrderActionsService {
       return adapter.modifyOrder(position.brokerOrderId, payload);
     }
 
+    if (position.broker === Broker.ICICI_DIRECT) {
+      const adapter = await this.buildIciciAdapter(position, accessToken);
+      const payload: Record<string, unknown> = {
+        exchange_code: position.exchange ?? 'NSE',
+        quantity: String(patch.quantity),
+      };
+      if (patch.orderType) payload.order_type = mapIciciOrderType(orderType);
+      if (patch.price !== null && (orderType === 'LIMIT' || orderType === 'SL')) {
+        payload.price = String(patch.price);
+      }
+      if (
+        patch.triggerPrice !== null &&
+        (orderType === 'SL' || orderType === 'SL-M')
+      ) {
+        payload.stoploss = String(patch.triggerPrice);
+      }
+      return adapter.modifyOrder(position.brokerOrderId, payload);
+    }
+
     throw new BadRequestException(
       `Broker ${position.broker} does not support modify from the admin console`,
     );
@@ -249,6 +269,11 @@ export class OrderActionsService {
       const adapter = new FyersAdapter();
       adapter.setAccessToken(accessToken);
       return adapter.cancelOrder(position.brokerOrderId);
+    }
+
+    if (position.broker === Broker.ICICI_DIRECT) {
+      const adapter = await this.buildIciciAdapter(position, accessToken);
+      return adapter.cancelOrder(position.brokerOrderId, position.exchange ?? 'NSE');
     }
 
     throw new BadRequestException(
@@ -295,10 +320,54 @@ export class OrderActionsService {
       return adapter.placeOrder(order);
     }
 
+    if (position.broker === Broker.ICICI_DIRECT) {
+      const adapter = await this.buildIciciAdapter(position, accessToken);
+      const order: Record<string, unknown> = {
+        stock_code: position.symbol,
+        exchange_code: position.exchange ?? 'NSE',
+        product: mapIciciProduct(position.productType),
+        action: position.side === 'BUY' ? 'sell' : 'buy',
+        order_type: 'market',
+        quantity: String(exitQuantity),
+        price: '',
+        stoploss: '',
+        validity: 'day',
+        disclosed_quantity: '0',
+        expiry_date: '',
+        right: '',
+        strike_price: '',
+        user_remark: 'CTS Exit',
+      };
+      return adapter.placeOrder(order);
+    }
+
+
     throw new BadRequestException(
       `Broker ${position.broker} does not support exit from the admin console`,
     );
   }
+
+  /** Build a credentialed ICICI Direct (Breeze) adapter for order actions. */
+  private async buildIciciAdapter(
+    position: PositionRecord,
+    accessToken: string,
+  ): Promise<ICICIDirectAdapter> {
+    const account = await this.prisma.tradingAccount.findUnique({
+      where: { id: position.masterAccountId },
+    });
+    const adapter = new ICICIDirectAdapter();
+    adapter.setCredentials(
+      account?.encryptedApiKey
+        ? this.encryption.decrypt(account.encryptedApiKey)
+        : '',
+      account?.encryptedApiSecret
+        ? this.encryption.decrypt(account.encryptedApiSecret)
+        : '',
+    );
+    adapter.setSessionToken(accessToken);
+    return adapter;
+  }
+
 
   private async loadAccessToken(position: PositionRecord): Promise<string> {
     const session = await this.prisma.brokerSession.findFirst({
@@ -394,6 +463,38 @@ export class OrderActionsService {
 // re-export another broker mapping utility. Mirrors the vocabulary
 // used by ManualTradeService.
 // ---------------------------------------------------------------------------
+
+function mapIciciOrderType(orderType: string | null): string {
+  switch ((orderType ?? '').toUpperCase()) {
+    case 'LIMIT':
+      return 'limit';
+    case 'SL':
+    case 'SL-M':
+      return 'stoploss';
+    case 'MARKET':
+    default:
+      return 'market';
+  }
+}
+
+function mapIciciProduct(productType: string | null): string {
+  switch ((productType ?? '').toUpperCase()) {
+    case 'CNC':
+    case 'CASH':
+    case 'DELIVERY':
+      return 'cash';
+    case 'MIS':
+    case 'MARGIN':
+    case 'INTRADAY':
+      return 'margin';
+    case 'NRML':
+    case 'FUTURES':
+      return 'futures';
+    default:
+      return 'cash';
+  }
+}
+
 
 function mapFyersOrderTypeCode(orderType: string | null): number {
   const t = (orderType ?? '').toUpperCase();

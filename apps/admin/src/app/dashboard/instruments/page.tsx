@@ -8,8 +8,9 @@ import {
   type AdminInstrumentTranslateResponse,
   type AdminInstrumentImportSummary,
   type AdminInstrumentStatsResponse,
+  type AdminInstrumentIntegrityReport,
 } from '@/lib/api';
-import { Broker, BROKER_LABELS } from '@cts/shared';
+import { Broker, BROKER_LABELS, ACTIVE_BROKERS } from '@cts/shared';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -630,20 +631,21 @@ export default function InstrumentsPage() {
       )}
 
       {/* Import summaries */}
-      {(importSummaries[Broker.ZERODHA] || importSummaries[Broker.FYERS]) && (
+      {ACTIVE_BROKERS.some((b) => importSummaries[b]) && (
         <div
           className="grid gap-4 md:grid-cols-2"
           data-testid="import-summaries"
         >
-          {(
-            [Broker.ZERODHA, Broker.FYERS] as const
-          ).map((b) =>
+          {ACTIVE_BROKERS.map((b) =>
             importSummaries[b] ? (
               <ImportSummaryCard key={b} summary={importSummaries[b]!} />
             ) : null,
           )}
         </div>
       )}
+
+      {/* Instrument integrity (Sprint 6.2.5) */}
+      <IntegrityPanel />
 
       {/* Search + filters */}
       <Card>
@@ -674,8 +676,7 @@ export default function InstrumentsPage() {
                 data-testid="instrument-filter-broker"
               >
                 <option value="">All brokers</option>
-                {Object.values(Broker)
-                  .filter((b) => b === Broker.ZERODHA || b === Broker.FYERS)
+                {ACTIVE_BROKERS
                   .map((b) => (
                     <option key={b} value={b}>
                       {BROKER_LABELS[b]}
@@ -888,8 +889,7 @@ export default function InstrumentsPage() {
                 onChange={(e) => setFromBroker(e.target.value as Broker)}
                 data-testid="translate-from-broker"
               >
-                {Object.values(Broker)
-                  .filter((b) => b === Broker.ZERODHA || b === Broker.FYERS)
+                {ACTIVE_BROKERS
                   .map((b) => (
                     <option key={b} value={b}>
                       {BROKER_LABELS[b]}
@@ -917,8 +917,7 @@ export default function InstrumentsPage() {
                 onChange={(e) => setToBroker(e.target.value as Broker)}
                 data-testid="translate-to-broker"
               >
-                {Object.values(Broker)
-                  .filter((b) => b === Broker.ZERODHA || b === Broker.FYERS)
+                {ACTIVE_BROKERS
                   .map((b) => (
                     <option key={b} value={b}>
                       {BROKER_LABELS[b]}
@@ -1379,5 +1378,184 @@ function CopyButton({
         <Copy className="h-3.5 w-3.5" />
       )}
     </button>
+  );
+}
+
+
+// ---------------------------------------------------------------------------
+// Instrument Integrity (Sprint 6.2.5) — canonical ↔ broker-mapping validation
+// ---------------------------------------------------------------------------
+
+function IntegrityRow({
+  label,
+  ok,
+  value,
+}: {
+  label: string;
+  ok: boolean;
+  value: string | number;
+}) {
+  return (
+    <div className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
+      <span className="flex items-center gap-2">
+        {ok ? (
+          <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+        ) : (
+          <AlertCircle className="h-4 w-4 text-destructive" />
+        )}
+        {label}
+      </span>
+      <span className="font-mono">{value}</span>
+    </div>
+  );
+}
+
+function IntegrityPanel() {
+  const [report, setReport] = useState<AdminInstrumentIntegrityReport | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [fixing, setFixing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await api.admin.instruments.integrity();
+      setReport(res);
+    } catch (e: any) {
+      setError(e?.message ?? 'Failed to load integrity report');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const runFix = useCallback(async () => {
+    setFixing(true);
+    setError(null);
+    try {
+      const res = await api.admin.instruments.fixIntegrity();
+      setReport(res.after);
+    } catch (e: any) {
+      setError(e?.message ?? 'Integrity fix failed');
+    } finally {
+      setFixing(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  return (
+    <Card data-testid="instrument-integrity-panel">
+      <CardContent className="pt-6 space-y-4">
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <div className="flex items-center gap-2">
+            <Database className="h-4 w-4 text-muted-foreground" />
+            <h3 className="font-semibold">Instrument Integrity</h3>
+            {report &&
+              (report.healthy ? (
+                <Badge variant="success" data-testid="integrity-status">
+                  Healthy
+                </Badge>
+              ) : (
+                <Badge variant="destructive" data-testid="integrity-status">
+                  Issues found
+                </Badge>
+              ))}
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={load}
+              disabled={loading || fixing}
+              data-testid="integrity-refresh-btn"
+            >
+              <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+              Validate
+            </Button>
+            <Button
+              size="sm"
+              onClick={runFix}
+              disabled={loading || fixing || (report?.healthy ?? false)}
+              data-testid="integrity-fix-btn"
+            >
+              {fixing ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" /> Fixing…
+                </>
+              ) : (
+                'Fix Issues'
+              )}
+            </Button>
+          </div>
+        </div>
+
+        {error && (
+          <div className="text-sm text-destructive" data-testid="integrity-error">
+            {error}
+          </div>
+        )}
+
+        {report && (
+          <div className="grid gap-3 md:grid-cols-2">
+            <div className="space-y-2">
+              <p className="text-xs uppercase tracking-wide text-muted-foreground">
+                Counts
+              </p>
+              <IntegrityRow
+                label="Canonical instruments"
+                ok
+                value={report.counts.canonical}
+              />
+              <IntegrityRow
+                label="Broker mappings"
+                ok
+                value={report.counts.brokerMappings}
+              />
+              {ACTIVE_BROKERS.map((b) => (
+                <IntegrityRow
+                  key={b}
+                  label={`${BROKER_LABELS[b]} mappings`}
+                  ok
+                  value={report.counts.perBroker?.[b] ?? 0}
+                />
+              ))}
+            </div>
+            <div className="space-y-2">
+              <p className="text-xs uppercase tracking-wide text-muted-foreground">
+                Invariants &amp; Issues
+              </p>
+              <IntegrityRow
+                label="Canonical = union of brokers"
+                ok={report.invariants.canonicalEqualsUnion}
+                value={report.invariants.canonicalEqualsUnion ? 'PASS' : 'FAIL'}
+              />
+              <IntegrityRow
+                label="Mappings = sum of brokers"
+                ok={report.invariants.brokerMappingsEqualsSum}
+                value={report.invariants.brokerMappingsEqualsSum ? 'PASS' : 'FAIL'}
+              />
+              <IntegrityRow
+                label="Duplicate mappings"
+                ok={report.issues.duplicateMappings === 0}
+                value={report.issues.duplicateMappings}
+              />
+              <IntegrityRow
+                label="Missing canonical mappings"
+                ok={report.issues.missingCanonicalMappings === 0}
+                value={report.issues.missingCanonicalMappings}
+              />
+              <IntegrityRow
+                label="Orphan instruments"
+                ok={report.issues.orphanInstruments === 0}
+                value={report.issues.orphanInstruments}
+              />
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
