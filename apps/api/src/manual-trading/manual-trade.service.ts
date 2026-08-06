@@ -12,6 +12,7 @@ import { PrismaService } from '../prisma/prisma.module';
 import { EncryptionService } from '../encryption/encryption.service';
 import { ZerodhaAdapter } from '../brokers/zerodha/zerodha.adapter';
 import { FyersAdapter } from '../brokers/fyers/fyers.adapter';
+import { ICICIDirectAdapter } from '../brokers/icici/icici.adapter';
 
 import { ExecutionEventRecorderService } from '../copy-trading/execution-event.recorder';
 import { classifyFailure } from '../copy-trading/execution-event.recorder';
@@ -321,6 +322,27 @@ export class ManualTradeService implements OnModuleInit {
       return { response, brokerOrderId: extractFyersOrderId(response) };
     }
 
+    if (broker === Broker.ICICI_DIRECT) {
+      // ICICI Direct (Breeze) needs the account api key/secret alongside the
+      // session token to sign the checksum-authenticated place_order call.
+      const account = await this.prisma.tradingAccount.findUnique({
+        where: { id: tradingAccountId },
+      });
+      const adapter = new ICICIDirectAdapter();
+      adapter.setCredentials(
+        account?.encryptedApiKey
+          ? this.encryption.decrypt(account.encryptedApiKey)
+          : '',
+        account?.encryptedApiSecret
+          ? this.encryption.decrypt(account.encryptedApiSecret)
+          : '',
+      );
+      adapter.setSessionToken(accessToken);
+      const order = buildIciciOrder(dto);
+      const response = await adapter.placeOrder(order);
+      return { response, brokerOrderId: extractIciciOrderId(response) };
+    }
+
     throw new BadRequestException(
       `Broker ${broker} not supported for manual trade placement`,
     );
@@ -357,6 +379,27 @@ export class ManualTradeService implements OnModuleInit {
         if (!Array.isArray(list)) return null;
         return (
           list.find((o: any) => String(o?.id) === brokerOrderId) ?? null
+        );
+      }
+
+      if (broker === Broker.ICICI_DIRECT) {
+        const account = await this.prisma.tradingAccount.findUnique({
+          where: { id: tradingAccountId },
+        });
+        const adapter = new ICICIDirectAdapter();
+        adapter.setCredentials(
+          account?.encryptedApiKey
+            ? this.encryption.decrypt(account.encryptedApiKey)
+            : '',
+          account?.encryptedApiSecret
+            ? this.encryption.decrypt(account.encryptedApiSecret)
+            : '',
+        );
+        adapter.setSessionToken(accessToken);
+        const orders = await adapter.getOrders();
+        const list = Array.isArray(orders) ? orders : orders ? [orders] : [];
+        return (
+          list.find((o: any) => String(o?.order_id) === brokerOrderId) ?? null
         );
       }
     } catch (err: any) {
@@ -404,6 +447,28 @@ export class ManualTradeService implements OnModuleInit {
         type: fyersOrderTypeCode(dto.orderType),
         productType: fyersProduct(dto.product),
         orderDateTime: nowIso,
+        message: extractRejectionReason(placementResponse) ?? null,
+      };
+    }
+
+    if (broker === Broker.ICICI_DIRECT) {
+      // Breeze order-shaped surrogate (matches getOrders() field names the
+      // ICICI lifecycle normalizer understands).
+      return {
+        order_id: brokerOrderId,
+        status: isMarket ? 'Executed' : 'Ordered',
+        stock_code: dto.symbol,
+        exchange_code: dto.exchange,
+        action: dto.side === 'BUY' ? 'Buy' : 'Sell',
+        quantity: dto.quantity,
+        pending_quantity: isMarket ? 0 : dto.quantity,
+        price: dto.price ?? 0,
+        average_price: isMarket ? dto.price ?? 0 : 0,
+        stoploss: dto.triggerPrice ?? 0,
+        order_type: iciciOrderType(dto.orderType),
+        product: iciciProduct(dto.product),
+        validity: (dto.validity ?? 'DAY').toLowerCase(),
+        order_datetime: nowIso,
         message: extractRejectionReason(placementResponse) ?? null,
       };
     }
@@ -612,6 +677,77 @@ function extractFyersOrderId(response: unknown): string | null {
   const id = r.id;
   if (typeof id === 'string' && id.length > 0) return id;
   if (typeof id === 'number') return String(id);
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// ICICI Direct (Breeze) order shaping — mirrors the Zerodha/Fyers builders,
+// mapping the shared manual-trade DTO onto the official Breeze place_order
+// parameters. Supports BUY/SELL · MARKET/LIMIT/SL/SL-M · CNC/MIS/NRML.
+// ---------------------------------------------------------------------------
+
+function iciciProduct(product: PlaceManualTradeDto['product']): string {
+  switch (product) {
+    case 'CNC':
+      return 'cash';
+    case 'MIS':
+      return 'margin';
+    case 'NRML':
+      return 'futures';
+    default:
+      return 'cash';
+  }
+}
+
+function iciciOrderType(orderType: PlaceManualTradeDto['orderType']): string {
+  switch (orderType) {
+    case 'LIMIT':
+      return 'limit';
+    case 'SL':
+    case 'SL-M':
+      return 'stoploss';
+    case 'MARKET':
+    default:
+      return 'market';
+  }
+}
+
+function buildIciciOrder(dto: PlaceManualTradeDto): Record<string, unknown> {
+  const wantsPrice = dto.orderType === 'LIMIT' || dto.orderType === 'SL';
+  const wantsTrigger = dto.orderType === 'SL' || dto.orderType === 'SL-M';
+  return {
+    stock_code: dto.symbol,
+    exchange_code: dto.exchange,
+    product: iciciProduct(dto.product),
+    action: dto.side === 'BUY' ? 'buy' : 'sell',
+    order_type: iciciOrderType(dto.orderType),
+    quantity: String(dto.quantity),
+    price: wantsPrice && dto.price !== undefined ? String(dto.price) : '',
+    stoploss:
+      wantsTrigger && dto.triggerPrice !== undefined
+        ? String(dto.triggerPrice)
+        : '',
+    validity: (dto.validity ?? 'DAY').toLowerCase(),
+    validity_date: '',
+    disclosed_quantity: '0',
+    expiry_date: '',
+    right: '',
+    strike_price: '',
+    user_remark: 'CTS Manual Trade',
+  };
+}
+
+function extractIciciOrderId(response: unknown): string | null {
+  if (!response) return null;
+  if (typeof response === 'string' && response.length > 0) return response;
+  if (typeof response === 'object') {
+    const r = response as Record<string, unknown>;
+    for (const key of ['order_id', 'orderId', 'OrderId']) {
+      const v = r[key];
+      if (typeof v === 'string' && v.length > 0) return v;
+      if (typeof v === 'number') return String(v);
+    }
+  }
   return null;
 }
 

@@ -449,16 +449,69 @@ export class ICICIDirectAdapter implements BrokerAdapter {
     };
   }
 
-  // Order execution is intentionally out of scope for Sprint 6.2.0.
-  async placeOrder(_order: any) {
-    return {};
+  /**
+   * Authenticated Breeze write call (POST/PUT/DELETE) — same checksum-header
+   * auth as `get()`, but with a mutating HTTP method. Breeze order placement,
+   * modification and cancellation all target the `order` endpoint.
+   */
+  private async request(
+    method: 'POST' | 'PUT' | 'DELETE',
+    endpoint: string,
+    payload: Record<string, any>,
+  ): Promise<any> {
+    await this.ensureSession();
+    const body = JSON.stringify(payload ?? {});
+    const headers = this.generateHeaders(body);
+    this.logger.log(
+      `[Breeze ${method}] ${this.baseUrl}${endpoint} | headers: ${JSON.stringify({
+        'Content-Type': headers['Content-Type'],
+        'X-AppKey': this.mask(headers['X-AppKey']),
+        'X-SessionToken': this.mask(headers['X-SessionToken']),
+        'X-Checksum': this.mask(headers['X-Checksum'].replace('token ', '')),
+        'X-Timestamp': headers['X-Timestamp'],
+      })} | body: ${body}`,
+    );
+    try {
+      const { data, status } = await axios.request({
+        method,
+        url: `${this.baseUrl}${endpoint}`,
+        data: body,
+        headers,
+      });
+      this.logResponse(endpoint, status, data);
+      if (data && data.Error) {
+        throw new Error(String(data.Error));
+      }
+      return data && data.Success !== undefined ? data.Success : data;
+    } catch (err: any) {
+      this.logResponse(
+        endpoint,
+        err?.response?.status,
+        err?.response?.data ?? err?.message,
+      );
+      throw err;
+    }
   }
 
-  async modifyOrder(_orderId: string, _order: any) {
-    return {};
+  /**
+   * Breeze place_order (official Breeze API v1 `order` endpoint, POST).
+   * `order` is the already-shaped Breeze payload built by the caller
+   * (stock_code, exchange_code, product, action, order_type, quantity,
+   * price, stoploss, validity, …). Returns the Breeze `Success` block,
+   * which carries `order_id`.
+   */
+  async placeOrder(order: any) {
+    return this.request('POST', 'order', order ?? {});
   }
 
-  async cancelOrder(_orderId: string) {
-    return {};
+  async modifyOrder(orderId: string, order: any) {
+    return this.request('PUT', 'order', { ...(order ?? {}), order_id: orderId });
+  }
+
+  async cancelOrder(orderId: string, exchangeCode = 'NSE') {
+    return this.request('DELETE', 'order', {
+      order_id: orderId,
+      exchange_code: exchangeCode,
+    });
   }
 }

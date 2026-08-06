@@ -23,6 +23,25 @@ export const BROKER_LABELS: Record<Broker, string> = {
   [Broker.SHOONYA]: 'Shoonya',
 };
 
+/**
+ * Broker registry — the brokers with a live adapter + instrument importer
+ * wired into the platform. Single source of truth for every broker-picker
+ * (instrument search, cross-broker translation, import controls) so no UI
+ * hardcodes the supported set. The remaining Broker enum members
+ * (ANGEL_ONE / UPSTOX / DHAN) are reserved and have no adapter yet.
+ */
+export const ACTIVE_BROKERS: Broker[] = [
+  Broker.ZERODHA,
+  Broker.FYERS,
+  Broker.ICICI_DIRECT,
+  Broker.SHOONYA,
+];
+
+export function isActiveBroker(broker: Broker): boolean {
+  return ACTIVE_BROKERS.includes(broker);
+}
+
+
 export enum ConnectionStatus {
   DISCONNECTED = 'DISCONNECTED',
   CONNECTING = 'CONNECTING',

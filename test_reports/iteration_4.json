@@ -1,0 +1,64 @@
+{
+  "summary": "Sprint 6.2.5 ICICI Direct final production compliance — static + executable verification. All three reported bugs (manual trading ICICI branch, broker registry, instrument integrity) are correctly resolved in code. Executable validations pnpm typecheck, pnpm -r build, and node dist/main.js all succeed to the expected boundary (Nest resolves all modules and maps all routes; the only failure is the expected Prisma DATABASE_URL error at DB connect time, which the task note explicitly whitelists).",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "verification_details": {
+    "issue_1_manual_trade_icici": {
+      "placeOnMaster_branch": "PASS — apps/api/src/manual-trading/manual-trade.service.ts lines 325-344 add an explicit Broker.ICICI_DIRECT branch that loads api key/secret from TradingAccount, session token from BrokerSession, builds a Breeze order via buildIciciOrder() and calls adapter.placeOrder(). The 'Broker X not supported for manual trade placement' throw at line 346 is now unreachable for ICICI_DIRECT.",
+      "fetchPlacedOrder_branch": "PASS — lines 385-404 add an ICICI branch that calls adapter.getOrders() and matches order_id.",
+      "buildOptimisticOrder_branch": "PASS — lines 454-474 emit a Breeze-shaped surrogate (order_id/stock_code/exchange_code/action/quantity/pending_quantity/price/stoploss/order_type/product/validity).",
+      "buildIciciOrder": "PASS — lines 715-738 map side→action ('buy'/'sell'), orderType→ (limit/stoploss/market), product CNC→cash / MIS→margin / NRML→futures, price only for LIMIT/SL, stoploss only for SL/SL-M, validity lowercased, user_remark 'CTS Manual Trade'.",
+      "extractIciciOrderId": "PASS — lines 740-752 read order_id/orderId/OrderId from the Breeze Success block (which the adapter unwraps at .Success before returning).",
+      "adapter_real_rest": "PASS — apps/api/src/brokers/icici/icici.adapter.ts request() at lines 457-494 sends real axios POST/PUT/DELETE with the SHA256 X-Checksum, X-Timestamp, X-AppKey, X-SessionToken headers to the 'order' endpoint on https://api.icicidirect.com/breezeapi/api/v1/. placeOrder (503), modifyOrder (507) and cancelOrder (511) invoke request() — no more {} stubs."
+    },
+    "issue_1_order_actions": {
+      "modify_branch": "PASS — order-actions.service.ts callMasterModify has ICICI_DIRECT branch (lines 235-252) using buildIciciAdapter, mapping quantity/orderType/price/stoploss.",
+      "cancel_branch": "PASS — callMasterCancel ICICI branch (lines 274-277) calls adapter.cancelOrder(brokerOrderId, exchange).",
+      "exit_branch": "PASS — callMasterExit ICICI branch (lines 323-342) places a reverse market order via adapter.placeOrder.",
+      "buildIciciAdapter": "PASS — helper at lines 351-369 loads api key/secret from TradingAccount and session token from decrypted BrokerSession.",
+      "helpers": "PASS — mapIciciOrderType (LIMIT/SL/SL-M/MARKET) and mapIciciProduct (CNC/MIS/NRML plus tolerant aliases) at bottom of file.",
+      "actionable_brokers": "PASS — order-action-rules.ts ACTIONABLE_BROKERS Set now includes Broker.ICICI_DIRECT (line 45)."
+    },
+    "issue_2_active_brokers_registry": {
+      "shared_registry": "PASS — packages/shared/src/index.ts exports ACTIVE_BROKERS = [ZERODHA, FYERS, ICICI_DIRECT, SHOONYA] and isActiveBroker helper, defined right after BROKER_LABELS (lines 33-42).",
+      "admin_instruments_page": "PASS — apps/admin/src/app/dashboard/instruments/page.tsx imports ACTIVE_BROKERS (line 13) and uses it to populate all three broker dropdowns: instrument-filter-broker (line 676-679), translate-from-broker (line 890-892), translate-to-broker (line 918-920). Import summaries block (lines 634-639) and IntegrityPanel per-broker counts (line 1517) also iterate ACTIVE_BROKERS.",
+      "orders_page": "PASS — apps/admin/src/app/dashboard/orders/[key]/page.tsx ACTIONABLE_BROKERS Set includes 'ICICI_DIRECT' (line 106)."
+    },
+    "issue_3_integrity": {
+      "service": "PASS — instrument-integrity.service.ts report() computes canonical count, brokerMappings count, perBroker map + perBrokerSum, and detects duplicateMappings (SQL GROUP BY broker,brokerSymbol HAVING >1), missingCanonicalMappings (LEFT JOIN instruments IS NULL), orphanInstruments (Prisma count with brokers none:{}). Invariants: canonicalEqualsUnion (orphanInstruments===0), brokerMappingsEqualsSum. fix() runs removeDuplicateMappings (keep earliest by createdAt), removeMappingsWithMissingInstrument, removeOrphanInstruments and returns before/after reports plus counts.",
+      "controller": "PASS — admin-instrument.controller.ts GET /admin/instruments/integrity (line 244-247) and POST /admin/instruments/integrity/fix (line 254-257), both under the class-level @UseGuards(JwtAuthGuard, RolesGuard) + @Roles(Role.ADMIN). Confirmed by Nest boot log — routes mapped under AdminInstrumentController.",
+      "module": "PASS — instrument.module.ts registers InstrumentIntegrityService as provider (line 30).",
+      "admin_ui": "PASS — IntegrityPanel component at instruments/page.tsx line 1413 renders the report + Fix button; api.ts exposes admin.instruments.integrity() and fixIntegrity() (lines 1017-1022)."
+    },
+    "regression": {
+      "typecheck": "PASS — `pnpm --filter @cts/api typecheck` exit 0 (prisma generate + tsc --noEmit clean).",
+      "build_all": "PASS — `pnpm -r build` exit 0 across @cts/shared, @cts/ui, @cts/api, @cts/admin, @cts/web. All Next.js routes prerender cleanly including /dashboard/instruments, /dashboard/manual-trading, /dashboard/orders/[key].",
+      "nest_boot": "PASS — `node apps/api/dist/main.js` resolves the full module graph (InstrumentModule, ManualTradingModule, OrderActionsModule, MasterAccountsModule and ~35 others), maps every controller route (including /admin/manual-trading/place, /admin/orders/:key/{modify,cancel,exit}, /admin/instruments/integrity, /admin/instruments/integrity/fix), then fails at PrismaService.onModuleInit with 'Environment variable not found: DATABASE_URL' — expected and whitelisted by task note. ioredis ECONNREFUSED 127.0.0.1:6379 is also expected (no Redis in env)."
+    }
+  },
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "adapter.cancelOrder default exchange_code='NSE' — order-actions.service.ts passes position.exchange ?? 'NSE' which is correct, but manual-trade flow does not call cancel; low risk overall.",
+    "buildIciciOrder sends quantity/price/stoploss as strings and empty-string sentinels for unused fields — matches Breeze SDK conventions.",
+    "iciciProduct maps NRML→'futures'. Breeze also supports 'options'/'eatm'/'btst' etc; if the admin ever places an options manual trade with product NRML, the payload will be 'futures'. Acceptable for equity/F&O MVP but worth documenting.",
+    "mapIciciProduct in order-actions.service.ts accepts CNC/CASH/DELIVERY/MIS/MARGIN/INTRADAY/NRML/FUTURES — good tolerance. Consider adding 'OPTIONS' alias if options exit becomes a use case.",
+    "removeDuplicateMappings keeps the earliest createdAt row. If two rows share the exact same createdAt (unlikely but possible), the DELETE self-join with '>' will keep both. Consider tie-breaker on id.",
+    "Integrity fix endpoint is idempotent — safe to call repeatedly; report() re-runs after every fix()."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (static + boot-graph verification within stated env constraints)", "frontend": "N/A (skipped per request)"},
+  "seed_data_creation": "None",
+  "test_credentials": "Admin admin@cts.local / Admin@12345 per memory/test_credentials.md — not exercised (API not connected to a DB in this env).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Live end-to-end validation (placing a real Breeze order and receiving order_id) is inherently user-local — it needs the user's daily fresh Breeze SessionToken + real api key/secret + a running Postgres+Redis, none of which exist in this pod. Everything that CAN be verified statically (adapter REST calls, DTO mapping, DI graph, route registration) is verified and correct. The user should self-validate by logging into ICICI Direct daily and placing a small test manual order via /dashboard/manual-trading against an ICICI_DIRECT master account.",
+  "rca of the issue": "Original bug: ManualTradeService.placeOnMaster only had ZERODHA and FYERS branches; ICICI_DIRECT fell through to the 'not supported for manual trade placement' BadRequestException. Additionally the ICICIDirectAdapter had placeOrder/modifyOrder/cancelOrder as {} stubs (no real Breeze REST call). Fix: added a full ICICI branch (buildIciciOrder + credentialed adapter + extractIciciOrderId) and implemented adapter.request(POST/PUT/DELETE) targeting Breeze 'order' endpoint with checksum headers; mirrored the change in OrderActionsService (modify/cancel/exit) and added ICICI_DIRECT to ACTIONABLE_BROKERS on both server (order-action-rules.ts) and client (orders/[key]/page.tsx). Broker dropdowns now source from shared ACTIVE_BROKERS registry instead of hardcoding ZERODHA/FYERS. Integrity service+controller+UI added end-to-end."
+}

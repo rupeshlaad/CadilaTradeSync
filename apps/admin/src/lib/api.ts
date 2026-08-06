@@ -151,6 +151,37 @@ export interface AdminInstrumentStatsResponse {
   lastSummaries: Record<string, AdminInstrumentImportSummary>;
 }
 
+export interface AdminInstrumentIntegrityReport {
+  counts: {
+    canonical: number;
+    brokerMappings: number;
+    perBroker: Record<string, number>;
+    perBrokerSum: number;
+  };
+  issues: {
+    duplicateMappings: number;
+    missingCanonicalMappings: number;
+    orphanInstruments: number;
+  };
+  invariants: {
+    canonicalEqualsUnion: boolean;
+    brokerMappingsEqualsSum: boolean;
+  };
+  healthy: boolean;
+  checkedAt: string;
+}
+
+export interface AdminInstrumentIntegrityFixResponse {
+  before: AdminInstrumentIntegrityReport;
+  fixed: {
+    duplicateMappingsRemoved: number;
+    orphanMappingsRemoved: number;
+    orphanInstrumentsRemoved: number;
+  };
+  after: AdminInstrumentIntegrityReport;
+}
+
+
 // -----------------------------
 // Strategy Execution (Phase 1)
 // -----------------------------
@@ -982,6 +1013,15 @@ export const api = {
 
       stats: () =>
         request<AdminInstrumentStatsResponse>(`/admin/instruments/stats`),
+
+      integrity: () =>
+        request<AdminInstrumentIntegrityReport>(`/admin/instruments/integrity`),
+
+      fixIntegrity: () =>
+        request<AdminInstrumentIntegrityFixResponse>(
+          `/admin/instruments/integrity/fix`,
+          { method: 'POST' },
+        ),
     },
 
     strategyExecution: {

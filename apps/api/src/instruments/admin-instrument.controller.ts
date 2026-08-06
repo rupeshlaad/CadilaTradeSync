@@ -19,6 +19,7 @@ import { ZerodhaImporter } from './importers/zerodha.importer';
 import { FyersImporter } from './importers/fyers.importer';
 import { IciciImporter } from './importers/icici.importer';
 import { ShoonyaImporter } from './importers/shoonya.importer';
+import { InstrumentIntegrityService } from './instrument-integrity.service';
 
 import {
   LookupInstrumentDto,
@@ -39,6 +40,7 @@ export class AdminInstrumentController {
     private readonly fyersImporter: FyersImporter,
     private readonly iciciImporter: IciciImporter,
     private readonly shoonyaImporter: ShoonyaImporter,
+    private readonly integrity: InstrumentIntegrityService,
     private readonly stats: InstrumentStatsService,
   ) {}
 
@@ -232,5 +234,25 @@ export class AdminInstrumentController {
   @Get('stats')
   async getStats() {
     return this.stats.snapshot();
+  }
+
+  /**
+   * GET /admin/instruments/integrity
+   * Report canonical ↔ broker-mapping integrity (duplicates, missing canonical
+   * mappings, orphan instruments) plus the invariant checks. Read-only.
+   */
+  @Get('integrity')
+  async getIntegrity() {
+    return this.integrity.report();
+  }
+
+  /**
+   * POST /admin/instruments/integrity/fix
+   * Repair every repairable integrity issue (remove duplicate mappings, orphan
+   * mappings and orphan instruments) and return before/after reports.
+   */
+  @Post('integrity/fix')
+  async fixIntegrity() {
+    return this.integrity.fix();
   }
 }

@@ -103,7 +103,7 @@ function fmtDecimal(v: number | null | undefined) {
 // Action eligibility (mirrors apps/api/src/order-actions/order-action-rules.ts)
 // ---------------------------------------------------------------------------
 
-const ACTIONABLE_BROKERS = new Set(['ZERODHA', 'FYERS']);
+const ACTIONABLE_BROKERS = new Set(['ZERODHA', 'FYERS', 'ICICI_DIRECT']);
 
 function canModify(p: PositionLifecycleDetail): { ok: boolean; reason: string } {
   if (!ACTIONABLE_BROKERS.has(p.broker)) {
