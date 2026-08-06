@@ -48,6 +48,22 @@ positions/orders/trades). Dashboard UI: `packages/ui/src/follower/broker-dashboa
     Live broker calls tested locally by user against real Breeze sessions.
 
 ## Backlog / Roadmap
+### Sprint 6.2.3 (2026-06-08): ICICI Direct SDK compliance — 401 fix — COMPLETE
+- Root cause: `ensureSession()` base64-decoded the customerdetails `session_token`
+  and used the part after `:` as `X-SessionToken`. Breeze REST requires the raw
+  base64 `session_token` blob verbatim (decoded `user_id:key` split is only for
+  websocket auth). Split form → 401 on every checksum call
+  (funds/holdings/positions/orders/trades); profile worked (customerdetails has
+  no X-SessionToken).
+- Fix (adapter only): use the base64 blob verbatim for `X-SessionToken`; decode
+  only to extract `user_id`. Added per-call request/response logging
+  (endpoint/method/masked headers/body/status/raw response).
+- Live probe vs real Breeze prod confirmed: split→"Index was outside the bounds
+  of the array" (malformed); base64 blob→"Public Key does not exist" (format
+  accepted, only placeholder app key fails). Real creds will authenticate.
+- Commit 3e9ec05, merge 891f577. Full live data verification pending user run
+  with real Breeze session.
+
 - P1: Dashboard UI columns for order `product`/`filledQuantity` and trade
   `product` (normalizers already emit them; UI does not yet render).
 - P2: Orders/trades exchange + date-range filters (Breeze needs exchange_code +
