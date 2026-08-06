@@ -48,6 +48,37 @@ positions/orders/trades). Dashboard UI: `packages/ui/src/follower/broker-dashboa
     Live broker calls tested locally by user against real Breeze sessions.
 
 ## Backlog / Roadmap
+### Sprint 6.2.4 (2026-08-06): ICICI Direct standardization — COMPLETE
+- Root cause of Master vs User data divergence: the two portals called
+  different service methods. Follower `GET /trading-accounts/:id/dashboard`
+  → `getBrokerDashboard()` (normalized DTO); Master
+  `GET /admin/master-accounts/:id/dashboard` → raw `getDashboard()` (SDK
+  envelopes). The admin dashboard page then re-mapped raw broker fields itself
+  (Zerodha-shaped keys), so ICICI's `stock_code`/`current_market_price` showed
+  as blank symbols, no derived P&L/value, incomplete profile. Two pipelines, one
+  of which bypassed normalization.
+- Fix (one pipeline): Master dashboard endpoint now returns
+  `getBrokerDashboard()` + added `:id/section/:section`; admin dashboard page
+  renders the shared `@cts/ui` `BrokerDashboardPanel` fed the normalized
+  `BrokerDashboardDto` (all portal-specific mapping deleted). Both portals now
+  render identical data for every broker.
+- Add Broker standardized: shared `BrokerAccountForm` (`@cts/ui`) consumed by
+  both portals; conditional credential fields (vendorCode/password/TOTP) driven
+  by one `brokerFieldVisibility` map. Only the connect/auth action differs.
+  Master accounts now persist `vendorCode`; master `redact()` no longer leaks
+  `encryptedVendorCode`.
+- Instrument download for ICICI Direct (Breeze SecurityMaster.zip) and Shoonya
+  (`<EXCH>_symbols.txt.zip`) via a dependency-free `zip-reader.ts` (zlib
+  inflateRaw). Same importer contract/flow as Zerodha/Fyers; wired into
+  InstrumentModule, admin + legacy import controllers, stats snapshot
+  (icici/shoonya counts + lastRefresh), and the admin Instruments UI
+  (Import ICICI / Import Shoonya buttons + stat cards).
+- Verified: `pnpm --filter @cts/api typecheck` + `pnpm -r build` (5/5) + boot
+  sanity (all modules resolve) all pass. Live broker-master schema mapping for
+  ICICI/Shoonya to be confirmed on the user's local run with real endpoints.
+- Feature commit ce8b5b8, merge 954a9c3.
+
+
 ### Sprint 6.2.3 (2026-06-08): ICICI Direct SDK compliance — 401 fix — COMPLETE
 - Root cause: `ensureSession()` base64-decoded the customerdetails `session_token`
   and used the part after `:` as `X-SessionToken`. Breeze REST requires the raw
