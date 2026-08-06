@@ -41,3 +41,9 @@ docker/volumes
 CTS_AI_SYNC/
 CTS_AI_SYNC.zip
 CTS_CONTEXT/
+.env.*
+*.env
+credentials.json
+*.pem
+*.key
+.credentials

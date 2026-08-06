@@ -254,11 +254,52 @@ export class ICICIDirectAdapter implements BrokerAdapter {
   }
 
   async getHoldings() {
-    return this.get('dematholdings', {});
+    // portfolioholdings requires exchange_code (NSE covers listed equity
+    // holdings). Breeze holdings carry no live price, so LTP is enriched via
+    // the official quotes API and value/P&L are computed downstream.
+    const raw = await this.get('portfolioholdings', { exchange_code: 'NSE' });
+    const items = Array.isArray(raw) ? raw : raw ? [raw] : [];
+    await Promise.all(
+      items.map(async (h: any) => {
+        if (h && h.ltp == null) {
+          const ltp = await this.quoteLtp(h?.exchange_code ?? 'NSE', h?.stock_code);
+          if (ltp !== null) h.ltp = ltp;
+        }
+      }),
+    );
+    return items;
   }
 
   async getPositions() {
-    return this.get('portfoliopositions', {});
+    const raw = await this.get('portfoliopositions', {});
+    const items = Array.isArray(raw) ? raw : raw ? [raw] : [];
+    await Promise.all(
+      items.map(async (p: any) => {
+        if (p && p.ltp == null) {
+          const ltp = await this.quoteLtp(p?.exchange_code ?? 'NSE', p?.stock_code);
+          if (ltp !== null) p.ltp = ltp;
+        }
+      }),
+    );
+    return items;
+  }
+
+  /** Best-effort live LTP via the official Breeze quotes endpoint. */
+  private async quoteLtp(exchange: string, stock: string): Promise<number | null> {
+    if (!stock) return null;
+    try {
+      const q = await this.get('quotes', {
+        stock_code: stock,
+        exchange_code: exchange || 'NSE',
+        product_type: 'cash',
+      });
+      const first = Array.isArray(q) ? q[0] : q;
+      const ltp = first?.ltp ?? first?.last_traded_price ?? first?.close;
+      const n = Number(ltp);
+      return Number.isFinite(n) ? n : null;
+    } catch {
+      return null;
+    }
   }
 
   async getOrders() {
@@ -274,9 +315,8 @@ export class ICICIDirectAdapter implements BrokerAdapter {
   }
 
   async getPortfolio() {
-    // portfolioholdings mandates exchange_code; demat holdings is the broader
-    // cross-exchange view used by the dashboard portfolio summary.
-    return this.get('dematholdings', {});
+    // Portfolio summary is derived (shared logic) from enriched holdings.
+    return this.getHoldings();
   }
 
   async getExchanges(): Promise<string[] | null> {
