@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { createHash } from 'crypto';
+import { Logger } from '@nestjs/common';
 import {
   BrokerAdapter,
   BrokerCapabilities,
@@ -78,6 +79,7 @@ export class ICICIDirectAdapter implements BrokerAdapter {
 
   private readonly baseUrl = 'https://api.icicidirect.com/breezeapi/api/v1/';
   private readonly loginUrl = 'https://api.icicidirect.com/apiuser/login?api_key=';
+  private readonly logger = new Logger('ICICIDirectAdapter');
 
   private apiKey = '';
   private secretKey = '';
@@ -138,18 +140,23 @@ export class ICICIDirectAdapter implements BrokerAdapter {
     const data = await this.customerDetails(this.rawSessionToken);
     const success = data?.Success ?? {};
     const b64 = success.session_token;
+    // Breeze REST auth: X-SessionToken MUST be the base64 `session_token` blob
+    // returned by customerdetails, used VERBATIM. It must NOT be base64-decoded
+    // and split — the decoded "<user_id>:<key>" form is only for websocket
+    // stream auth. Sending the split part makes Breeze fail to decode the
+    // header ("Invalid length for a Base-64 char array or string" → 401) on
+    // every checksum-authenticated call (funds/holdings/positions/orders/trades)
+    // while customerdetails (which doesn't use X-SessionToken) still succeeds.
     if (b64) {
+      this.sessionKey = String(b64);
       try {
         const decoded = Buffer.from(String(b64), 'base64').toString('utf-8');
-        if (decoded.includes(':')) {
-          const [uid, ...rest] = decoded.split(':');
-          if (!this.uid) this.uid = uid;
-          this.sessionKey = rest.join(':');
-        } else {
-          this.sessionKey = String(b64);
+        if (decoded.includes(':') && !this.uid) {
+          this.uid = decoded.split(':')[0];
         }
       } catch {
-        this.sessionKey = String(b64);
+        // Base64 decode is only for extracting the user id; the raw blob is
+        // still the correct X-SessionToken value even if this fails.
       }
     }
     if (!this.sessionKey) this.sessionKey = this.rawSessionToken;
@@ -157,25 +164,69 @@ export class ICICIDirectAdapter implements BrokerAdapter {
     this.userName =
       success.idirect_user_name ?? success.user_name ?? this.uid ?? '';
     this.customer = success;
+    this.logger.log(
+      `[Breeze session] resolved uid=${this.uid || 'n/a'} sessionToken=${this.mask(
+        this.sessionKey,
+      )} (base64 blob used verbatim for X-SessionToken)`,
+    );
   }
 
   /** Bootstrap call — no checksum headers; auth is the SessionToken + AppKey. */
   private async customerDetails(rawToken: string): Promise<any> {
     const body = JSON.stringify({ SessionToken: rawToken, AppKey: this.apiKey });
-    const { data } = await axios.request({
-      method: 'GET',
-      url: `${this.baseUrl}customerdetails`,
-      data: body,
-      headers: { 'Content-Type': 'application/json' },
-    });
-    if (data && data.Error) {
-      throw new Error(String(data.Error));
+    const endpoint = 'customerdetails';
+    this.logger.log(
+      `[Breeze GET] ${this.baseUrl}${endpoint} | headers: ${JSON.stringify({
+        'Content-Type': 'application/json',
+      })} | body: ${JSON.stringify({
+        SessionToken: this.mask(rawToken),
+        AppKey: this.mask(this.apiKey),
+      })}`,
+    );
+    try {
+      const { data, status } = await axios.request({
+        method: 'GET',
+        url: `${this.baseUrl}${endpoint}`,
+        data: body,
+        headers: { 'Content-Type': 'application/json' },
+      });
+      this.logResponse(endpoint, status, data);
+      if (data && data.Error) {
+        throw new Error(String(data.Error));
+      }
+      return data;
+    } catch (err: any) {
+      this.logResponse(
+        endpoint,
+        err?.response?.status,
+        err?.response?.data ?? err?.message,
+      );
+      throw err;
     }
-    return data;
   }
 
   private timestamp(): string {
     return new Date().toISOString().split('.')[0] + '.000Z';
+  }
+
+  /** Mask a secret for logs: show first/last 4 chars only. */
+  private mask(v?: string): string {
+    if (!v) return '';
+    const s = String(v);
+    return s.length <= 8 ? '***' : `${s.slice(0, 4)}…${s.slice(-4)}`;
+  }
+
+  private logResponse(endpoint: string, status: any, data: any): void {
+    let raw: string;
+    try {
+      raw = typeof data === 'string' ? data : JSON.stringify(data);
+    } catch {
+      raw = '[unserializable]';
+    }
+    if (raw && raw.length > 1500) raw = raw.slice(0, 1500) + '…[truncated]';
+    this.logger.log(
+      `[Breeze RESP] ${endpoint} | status: ${status ?? 'n/a'} | body: ${raw}`,
+    );
   }
 
   private generateHeaders(body: string): Record<string, string> {
@@ -197,16 +248,35 @@ export class ICICIDirectAdapter implements BrokerAdapter {
     await this.ensureSession();
     const body = JSON.stringify(payload ?? {});
     const headers = this.generateHeaders(body);
-    const { data } = await axios.request({
-      method: 'GET',
-      url: `${this.baseUrl}${endpoint}`,
-      data: body,
-      headers,
-    });
-    if (data && data.Error) {
-      throw new Error(String(data.Error));
+    this.logger.log(
+      `[Breeze GET] ${this.baseUrl}${endpoint} | headers: ${JSON.stringify({
+        'Content-Type': headers['Content-Type'],
+        'X-AppKey': this.mask(headers['X-AppKey']),
+        'X-SessionToken': this.mask(headers['X-SessionToken']),
+        'X-Checksum': this.mask(headers['X-Checksum'].replace('token ', '')),
+        'X-Timestamp': headers['X-Timestamp'],
+      })} | body: ${body}`,
+    );
+    try {
+      const { data, status } = await axios.request({
+        method: 'GET',
+        url: `${this.baseUrl}${endpoint}`,
+        data: body,
+        headers,
+      });
+      this.logResponse(endpoint, status, data);
+      if (data && data.Error) {
+        throw new Error(String(data.Error));
+      }
+      return data && data.Success !== undefined ? data.Success : data;
+    } catch (err: any) {
+      this.logResponse(
+        endpoint,
+        err?.response?.status,
+        err?.response?.data ?? err?.message,
+      );
+      throw err;
     }
-    return data && data.Success !== undefined ? data.Success : data;
   }
 
   private todayRange(): { from_date: string; to_date: string } {
