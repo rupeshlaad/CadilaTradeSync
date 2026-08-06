@@ -47,16 +47,21 @@ implementation gaps. Base URL: `https://api.icicidirect.com/breezeapi/api/v1/`.
 - **Possible future solution:** Add exchange/date filters to the dashboard and
   fan out one call per exchange, then merge.
 
-## 5. Demat holdings carry no live price / P&L
+## 5. Demat holdings carry no live price / P&L (worked around)
 
 - **SDK restriction:** `dematholdings` returns quantities and ISIN/stock codes
   but not LTP, market value, or P&L.
 - **Reason:** Holdings and market data are separate Breeze endpoints.
-- **Impact:** Holdings `ltp`, `currentValue`, `pnl` are rendered as "—"
-  (never fabricated). Portfolio totals derived from holdings are therefore
-  null unless positions supply prices.
-- **Possible future solution:** Enrich holdings with a per-symbol `quotes`
-  call (rate-limit permitting).
+- **Resolution (Sprint 6.2.2):** The adapter uses `portfolioholdings`
+  (which returns `current_market_price` alongside `stock_code`, `quantity`,
+  `average_price`). When a live price is missing it is enriched via the
+  official `quotes` endpoint. Value (`qty × ltp`) and P&L
+  (`(ltp − avg) × qty`) are then derived in BrokerService — never fabricated.
+  If neither the holdings API nor the quotes API returns a price, LTP / value /
+  P&L stay null and the UI shows "Not provided by broker".
+- **Efficiency:** Breeze has no bulk-quote endpoint (single stock_code per
+  call, ~10 req/sec limit), so quote lookups are deduped/cached per symbol
+  within a request (a stock in both holdings and positions is fetched once).
 
 ## 6. GET requests carry a JSON body
 

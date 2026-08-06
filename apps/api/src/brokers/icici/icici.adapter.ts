@@ -87,6 +87,11 @@ export class ICICIDirectAdapter implements BrokerAdapter {
   private userName = '';
   private customer: any = null;
 
+  // Per-request LTP cache. Breeze has no bulk-quote endpoint, so we dedupe by
+  // symbol (a stock appearing in both holdings and positions is fetched once)
+  // to stay within the ~10 req/sec rate limit.
+  private readonly quoteCache = new Map<string, number | null>();
+
   setCredentials(apiKey: string, secretKey: string) {
     this.apiKey = apiKey;
     this.secretKey = secretKey;
@@ -255,16 +260,25 @@ export class ICICIDirectAdapter implements BrokerAdapter {
 
   async getHoldings() {
     // portfolioholdings requires exchange_code (NSE covers listed equity
-    // holdings). Breeze holdings carry no live price, so LTP is enriched via
-    // the official quotes API and value/P&L are computed downstream.
+    // holdings). Prefer the current market price the holdings API returns;
+    // otherwise enrich LTP via the official quotes API. Value/P&L are computed
+    // downstream in BrokerService (never fabricated).
     const raw = await this.get('portfolioholdings', { exchange_code: 'NSE' });
     const items = Array.isArray(raw) ? raw : raw ? [raw] : [];
     await Promise.all(
       items.map(async (h: any) => {
-        if (h && h.ltp == null) {
-          const ltp = await this.quoteLtp(h?.exchange_code ?? 'NSE', h?.stock_code);
-          if (ltp !== null) h.ltp = ltp;
+        if (!h) return;
+        const cmp = Number(h.current_market_price ?? h.ltp);
+        if (Number.isFinite(cmp) && cmp > 0) {
+          h.ltp = cmp;
+          return;
         }
+        const ltp = await this.quoteLtp(
+          h?.exchange_code ?? 'NSE',
+          h?.stock_code,
+          h?.product_type,
+        );
+        if (ltp !== null) h.ltp = ltp;
       }),
     );
     return items;
@@ -275,31 +289,50 @@ export class ICICIDirectAdapter implements BrokerAdapter {
     const items = Array.isArray(raw) ? raw : raw ? [raw] : [];
     await Promise.all(
       items.map(async (p: any) => {
-        if (p && p.ltp == null) {
-          const ltp = await this.quoteLtp(p?.exchange_code ?? 'NSE', p?.stock_code);
-          if (ltp !== null) p.ltp = ltp;
+        if (!p) return;
+        const cmp = Number(p.ltp ?? p.current_market_price ?? p.last_traded_price);
+        if (Number.isFinite(cmp) && cmp > 0) {
+          p.ltp = cmp;
+          return;
         }
+        const ltp = await this.quoteLtp(
+          p?.exchange_code ?? 'NSE',
+          p?.stock_code,
+          p?.product_type,
+        );
+        if (ltp !== null) p.ltp = ltp;
       }),
     );
     return items;
   }
 
-  /** Best-effort live LTP via the official Breeze quotes endpoint. */
-  private async quoteLtp(exchange: string, stock: string): Promise<number | null> {
+  /** Best-effort live LTP via the official Breeze quotes endpoint (cached). */
+  private async quoteLtp(
+    exchange: string,
+    stock: string,
+    productType?: string,
+  ): Promise<number | null> {
     if (!stock) return null;
+    const exch = exchange || 'NSE';
+    const product = productType ? String(productType).toLowerCase() : 'cash';
+    const key = `${exch}|${stock}|${product}`;
+    if (this.quoteCache.has(key)) return this.quoteCache.get(key) ?? null;
+    let result: number | null = null;
     try {
       const q = await this.get('quotes', {
         stock_code: stock,
-        exchange_code: exchange || 'NSE',
-        product_type: 'cash',
+        exchange_code: exch,
+        product_type: product,
       });
       const first = Array.isArray(q) ? q[0] : q;
       const ltp = first?.ltp ?? first?.last_traded_price ?? first?.close;
       const n = Number(ltp);
-      return Number.isFinite(n) ? n : null;
+      result = Number.isFinite(n) ? n : null;
     } catch {
-      return null;
+      result = null;
     }
+    this.quoteCache.set(key, result);
+    return result;
   }
 
   async getOrders() {
