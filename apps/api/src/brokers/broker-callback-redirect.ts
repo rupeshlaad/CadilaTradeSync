@@ -26,11 +26,11 @@ function stripTrailingSlash(v: string): string {
   return v.replace(/\/$/, '');
 }
 
-function adminAppBaseUrl(): string {
+export function adminAppBaseUrl(): string {
   return stripTrailingSlash(process.env.ADMIN_APP_URL ?? DEFAULT_ADMIN_URL);
 }
 
-function webAppBaseUrl(): string {
+export function webAppBaseUrl(): string {
   return stripTrailingSlash(process.env.WEB_APP_URL ?? DEFAULT_WEB_URL);
 }
 
@@ -44,7 +44,7 @@ function webAppBaseUrl(): string {
  *   - Anything else falls back to `null` and the caller uses the
  *     portal-aware default landing page.
  */
-function coerceSafeReturnTo(
+export function coerceSafeReturnTo(
   returnTo: string | undefined,
   portalBase: string,
 ): string | null {

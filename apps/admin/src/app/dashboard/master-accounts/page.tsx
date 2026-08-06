@@ -245,8 +245,10 @@ export default function MasterAccountsPage() {
                                 : r.broker === 'ICICI_DIRECT'
                                 ? 'icici'
                                 : 'zerodha';
+                            const portalParam =
+                              r.broker === 'ICICI_DIRECT' ? '&portal=master' : '';
                             window.location.href =
-                              `${api}/brokers/${brokerPath}/login?tradingAccountId=${r.id}&returnTo=${returnTo}`;
+                              `${api}/brokers/${brokerPath}/login?tradingAccountId=${r.id}&returnTo=${returnTo}${portalParam}`;
                           }}
                           data-testid={`master-accounts-connect-btn-${r.id}`}
                         >
