@@ -1,45 +1,32 @@
 import {
+  BadRequestException,
   Body,
   Controller,
-  Get,
   Post,
-  Query,
   Req,
-  Res,
+  UseGuards,
 } from '@nestjs/common';
-import { Request, Response } from 'express';
-import { randomUUID } from 'crypto';
 
+import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { PrismaService } from '../../prisma/prisma.module';
 import { EncryptionService } from '../../encryption/encryption.service';
 import { ICICIDirectAdapter } from './icici.adapter';
 import { ICICIDirectService } from './icici.service';
-import {
-  ICICIOAuthState,
-  buildICICIRedirect,
-  clearICICIStateCookie,
-  encodeICICIState,
-  readICICIStateCookie,
-  resolvePortal,
-  setICICIStateCookie,
-} from './icici-oauth-state';
 
 /**
- * Sprint 6.2.0 — ICICI Direct (Breeze) OAuth-style login flow.
+ * Sprint 6.2.1 — ICICI Direct manual API-Session authentication.
  *
- * Sprint 6.2.0 Hotfix   — routes served under both `brokers/icici` and
- *   `api/brokers/icici` (empty NestJS global prefix vs the `/api` ingress),
- *   for GET + POST (Breeze returns via a cross-site POST).
- * Sprint 6.2.0 Hotfix-2 — the full OAuth context (tradingAccountId, userId,
- *   broker, originating portal, returnTo, reconnect mode, state id) is carried
- *   inside a single HMAC-signed cookie so it survives restarts/replicas and
- *   the cross-site POST. The callback rebuilds the redirect from ONLY the
- *   stored portal + returnTo, so a login started on the Follower portal always
- *   returns to /dashboard/broker-accounts and one started on the Master portal
- *   always returns to /dashboard/master-accounts — it never infers the portal
- *   and never defaults to Master.
+ * Breeze has no reliable server-to-server OAuth callback (the interactive
+ * login returns via a cross-site POST that browsers routinely strip the state
+ * cookie from). The OAuth login/callback flow is therefore removed for ICICI
+ * and replaced with a single authenticated endpoint: the user pastes a fresh
+ * API Session generated from the ICICI Breeze Portal, and CTS exchanges it via
+ * the official `customerdetails` call to establish the BrokerSession. All
+ * other brokers (Zerodha/Fyers/Shoonya) and the shared OAuth infrastructure
+ * are untouched.
  */
 @Controller(['brokers/icici', 'api/brokers/icici'])
+@UseGuards(JwtAuthGuard)
 export class ICICIDirectController {
   constructor(
     private readonly iciciService: ICICIDirectService,
@@ -47,148 +34,72 @@ export class ICICIDirectController {
     private readonly encryption: EncryptionService,
   ) {}
 
-  @Get('login')
-  async login(
-    @Query('tradingAccountId') tradingAccountId: string,
-    @Query('returnTo') returnTo: string | undefined,
-    @Query('portal') portalParam: string | undefined,
-    @Res() res: Response,
+  @Post('connect-session')
+  async connectSession(
+    @Req() req: any,
+    @Body() body: { tradingAccountId?: string; apiSession?: string },
   ) {
-    const portal = resolvePortal(portalParam, returnTo);
+    const tradingAccountId = body?.tradingAccountId?.trim();
+    const apiSession = body?.apiSession?.trim();
 
-    const account = tradingAccountId
-      ? await this.prisma.tradingAccount.findUnique({
-          where: { id: tradingAccountId },
-        })
-      : null;
+    if (!tradingAccountId) {
+      throw new BadRequestException('tradingAccountId is required.');
+    }
+    if (!apiSession) {
+      throw new BadRequestException('API Session is required.');
+    }
 
-    if (!account || !account.encryptedApiKey) {
-      const state: ICICIOAuthState | null = tradingAccountId
-        ? {
-            stateId: randomUUID(),
-            tradingAccountId,
-            userId: account?.clientId ?? '',
-            broker: 'ICICI_DIRECT',
-            portal,
-            returnTo,
-            reconnectMode: true,
-          }
-        : null;
-      return res.redirect(
-        buildICICIRedirect({
-          state,
-          result: {
-            ok: false,
-            error:
-              'ICICI Direct API key is not configured for this account. Add the API Key and Secret first.',
-          },
-        }),
+    // 1) Load the owned TradingAccount.
+    const account = await this.prisma.tradingAccount.findFirst({
+      where: { id: tradingAccountId, userId: req.user.sub },
+    });
+    if (!account) {
+      throw new BadRequestException('Trading account not found.');
+    }
+    if (account.broker !== 'ICICI_DIRECT') {
+      throw new BadRequestException(
+        'This endpoint supports ICICI Direct accounts only.',
       );
     }
 
+    // 2) Load encrypted API Key + API Secret (Client ID stays as-is).
+    if (!account.encryptedApiKey || !account.encryptedApiSecret) {
+      throw new BadRequestException(
+        'Save the ICICI Direct API Key and API Secret on this account before connecting.',
+      );
+    }
     const apiKey = this.encryption.decrypt(account.encryptedApiKey);
+    const apiSecret = this.encryption.decrypt(account.encryptedApiSecret);
+
+    // 3) Validate the API Session via the official Breeze customerdetails call.
     const adapter = new ICICIDirectAdapter();
-    adapter.setCredentials(apiKey, '');
+    adapter.setCredentials(apiKey, apiSecret);
 
-    const state: ICICIOAuthState = {
-      stateId: randomUUID(),
-      tradingAccountId,
-      userId: account.clientId ?? '',
-      broker: 'ICICI_DIRECT',
-      portal,
-      returnTo,
-      reconnectMode: true,
-    };
-    setICICIStateCookie(res, encodeICICIState(state));
-
-    return res.redirect(adapter.getLoginUrl());
-  }
-
-  @Get('callback')
-  async callbackGet(
-    @Query('apisession') apiSessionA: string | undefined,
-    @Query('API_Session') apiSessionB: string | undefined,
-    @Query('session_token') apiSessionC: string | undefined,
-    @Req() req: Request,
-    @Res() res: Response,
-  ) {
-    const token = apiSessionA ?? apiSessionB ?? apiSessionC;
-    return this.handleCallback(token, req, res);
-  }
-
-  @Post('callback')
-  async callbackPost(
-    @Body() body: any,
-    @Query() query: any,
-    @Req() req: Request,
-    @Res() res: Response,
-  ) {
-    const token =
-      body?.apisession ??
-      body?.API_Session ??
-      body?.session_token ??
-      query?.apisession ??
-      query?.API_Session ??
-      query?.session_token;
-    return this.handleCallback(token, req, res);
-  }
-
-  private async handleCallback(
-    sessionToken: string | undefined,
-    req: Request,
-    res: Response,
-  ) {
-    const state = readICICIStateCookie(req);
-    clearICICIStateCookie(res);
-
-    if (!sessionToken) {
-      return res.redirect(
-        buildICICIRedirect({
-          state,
-          result: { ok: false, error: 'Missing session token from broker' },
-        }),
-      );
-    }
-
-    if (!state || !state.tradingAccountId) {
-      return res.redirect(
-        buildICICIRedirect({
-          state,
-          result: {
-            ok: false,
-            error: 'Reconnect context missing. Please retry from the account.',
-          },
-        }),
-      );
-    }
-
+    let session: any;
+    let profile: any;
     try {
-      const account = await this.prisma.tradingAccount.findUnique({
-        where: { id: state.tradingAccountId },
-      });
-      if (!account || !account.encryptedApiKey || !account.encryptedApiSecret) {
-        throw new Error('ICICI Direct API key/secret is not configured.');
-      }
-
-      const apiKey = this.encryption.decrypt(account.encryptedApiKey);
-      const apiSecret = this.encryption.decrypt(account.encryptedApiSecret);
-
-      const adapter = new ICICIDirectAdapter();
-      adapter.setCredentials(apiKey, apiSecret);
-
-      const session = await adapter.exchangeToken(sessionToken);
-      const profile = await adapter.getProfile();
-
-      await this.iciciService.saveSession(state.tradingAccountId, session, profile);
-
-      return res.redirect(buildICICIRedirect({ state, result: { ok: true } }));
+      session = await adapter.exchangeToken(apiSession);
+      profile = await adapter.getProfile();
     } catch (err: any) {
       const msg =
         (err && (err.message || err.error_type)) ||
-        'Broker authentication failed';
-      return res.redirect(
-        buildICICIRedirect({ state, result: { ok: false, error: String(msg) } }),
+        'Invalid API Session or credentials.';
+      // 4) Invalid → proper error.
+      throw new BadRequestException(
+        `ICICI Direct authentication failed: ${String(msg)}`,
       );
     }
+
+    if (!profile || !profile.userId) {
+      throw new BadRequestException(
+        'ICICI Direct did not return a valid customer profile. Please generate a fresh API Session from the Breeze Portal and try again.',
+      );
+    }
+
+    // 5) + 6) Persist BrokerSession and mark the TradingAccount CONNECTED.
+    await this.iciciService.saveSession(tradingAccountId, session, profile);
+
+    // 7) Return the broker profile.
+    return { ok: true, profile };
   }
 }

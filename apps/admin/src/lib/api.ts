@@ -760,6 +760,14 @@ export const api = {
 
   me: () => request<PublicUser>('/auth/me'),
 
+  icici: {
+    connectSession: (tradingAccountId: string, apiSession: string) =>
+      request<{ ok: boolean; profile: any }>('/brokers/icici/connect-session', {
+        method: 'POST',
+        body: JSON.stringify({ tradingAccountId, apiSession }),
+      }),
+  },
+
   admin: {
     listUsers: () => request<PublicUser[]>('/admin/users'),
 
