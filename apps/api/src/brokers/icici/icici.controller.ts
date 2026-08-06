@@ -1,39 +1,43 @@
-import { Body, Controller, Get, Post, Query, Req, Res } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Post,
+  Query,
+  Req,
+  Res,
+} from '@nestjs/common';
 import { Request, Response } from 'express';
 import { randomUUID } from 'crypto';
 
 import { PrismaService } from '../../prisma/prisma.module';
 import { EncryptionService } from '../../encryption/encryption.service';
-import { RedisService } from '../../redis/redis.module';
 import { ICICIDirectAdapter } from './icici.adapter';
 import { ICICIDirectService } from './icici.service';
-import { buildBrokerCallbackRedirect } from '../broker-callback-redirect';
-import { putOAuthState, takeOAuthState } from '../oauth-state.store';
-import { putICICIState, readICICIState } from './icici-oauth-state';
 import {
-  OAUTH_STATE_COOKIE,
-  clearOAuthStateCookie,
-  readCookie,
-  setOAuthStateCookie,
-} from '../oauth-cookie';
+  ICICIOAuthState,
+  buildICICIRedirect,
+  clearICICIStateCookie,
+  encodeICICIState,
+  readICICIStateCookie,
+  resolvePortal,
+  setICICIStateCookie,
+} from './icici-oauth-state';
 
 /**
  * Sprint 6.2.0 — ICICI Direct (Breeze) OAuth-style login flow.
  *
- * Reuses the exact shared OAuth plumbing already used by Zerodha/Fyers
- * (server-side state store + HttpOnly state cookie + shared callback
- * redirect builder). Because Breeze's registered redirect URL may return the
- * API session token either as a query param (GET) or a form POST, both a GET
- * and a POST callback are wired to the same handler.
- *
- * Sprint 6.2.0 Hotfix — the routes are registered under BOTH `brokers/icici`
- * and `api/brokers/icici`. The NestJS API runs with an empty global prefix
- * (`setGlobalPrefix('')`), but the production ingress exposes the API under
- * `/api`. GET flows reached NestJS fine, but Breeze delivers this callback as
- * a cross-site POST to `/api/brokers/icici/callback` which NestJS had no route
- * for → "Cannot POST /api/brokers/icici/callback". Serving both prefixes makes
- * the callback resolve whether or not the `/api` segment is stripped upstream,
- * without touching the shared global prefix or any other broker.
+ * Sprint 6.2.0 Hotfix   — routes served under both `brokers/icici` and
+ *   `api/brokers/icici` (empty NestJS global prefix vs the `/api` ingress),
+ *   for GET + POST (Breeze returns via a cross-site POST).
+ * Sprint 6.2.0 Hotfix-2 — the full OAuth context (tradingAccountId, userId,
+ *   broker, originating portal, returnTo, reconnect mode, state id) is carried
+ *   inside a single HMAC-signed cookie so it survives restarts/replicas and
+ *   the cross-site POST. The callback rebuilds the redirect from ONLY the
+ *   stored portal + returnTo, so a login started on the Follower portal always
+ *   returns to /dashboard/broker-accounts and one started on the Master portal
+ *   always returns to /dashboard/master-accounts — it never infers the portal
+ *   and never defaults to Master.
  */
 @Controller(['brokers/icici', 'api/brokers/icici'])
 export class ICICIDirectController {
@@ -41,15 +45,17 @@ export class ICICIDirectController {
     private readonly iciciService: ICICIDirectService,
     private readonly prisma: PrismaService,
     private readonly encryption: EncryptionService,
-    private readonly redis: RedisService,
   ) {}
 
   @Get('login')
   async login(
     @Query('tradingAccountId') tradingAccountId: string,
     @Query('returnTo') returnTo: string | undefined,
+    @Query('portal') portalParam: string | undefined,
     @Res() res: Response,
   ) {
+    const portal = resolvePortal(portalParam, returnTo);
+
     const account = tradingAccountId
       ? await this.prisma.tradingAccount.findUnique({
           where: { id: tradingAccountId },
@@ -57,10 +63,20 @@ export class ICICIDirectController {
       : null;
 
     if (!account || !account.encryptedApiKey) {
+      const state: ICICIOAuthState | null = tradingAccountId
+        ? {
+            stateId: randomUUID(),
+            tradingAccountId,
+            userId: account?.clientId ?? '',
+            broker: 'ICICI_DIRECT',
+            portal,
+            returnTo,
+            reconnectMode: true,
+          }
+        : null;
       return res.redirect(
-        await buildBrokerCallbackRedirect(this.prisma, {
-          tradingAccountId,
-          returnTo,
+        buildICICIRedirect({
+          state,
           result: {
             ok: false,
             error:
@@ -74,15 +90,17 @@ export class ICICIDirectController {
     const adapter = new ICICIDirectAdapter();
     adapter.setCredentials(apiKey, '');
 
-    const stateId = randomUUID();
-    // Durable across restarts/replicas (Redis) + same-process fallback
-    // (in-memory) so the multi-minute Breeze login cannot lose the context.
-    putOAuthState(stateId, { tradingAccountId, returnTo });
-    await putICICIState(this.redis?.client, stateId, { tradingAccountId, returnTo });
-    // Sprint 6.2.0 Hotfix — Breeze returns via a cross-site POST, on which a
-    // SameSite=Lax cookie is NOT sent. Use SameSite=None (Secure) so the OAuth
-    // state cookie survives the POST callback and state validation works.
-    setOAuthStateCookie(res, stateId, 'None');
+    const state: ICICIOAuthState = {
+      stateId: randomUUID(),
+      tradingAccountId,
+      userId: account.clientId ?? '',
+      broker: 'ICICI_DIRECT',
+      portal,
+      returnTo,
+      reconnectMode: true,
+    };
+    setICICIStateCookie(res, encodeICICIState(state));
+
     return res.redirect(adapter.getLoginUrl());
   }
 
@@ -120,34 +138,22 @@ export class ICICIDirectController {
     req: Request,
     res: Response,
   ) {
-    const stateId = readCookie(req, OAUTH_STATE_COOKIE);
-    // Resolve OAuth context: durable Redis first (survives restarts/replicas
-    // and the cross-site POST), then the in-memory store as a same-process
-    // fallback. Redis reads are non-destructive so a GET+POST double callback
-    // both resolve.
-    let entry: { tradingAccountId: string; returnTo?: string } | undefined =
-      await readICICIState(this.redis?.client, stateId);
-    if (!entry) entry = takeOAuthState(stateId);
-    clearOAuthStateCookie(res, 'None');
-
-    const tradingAccountId = entry?.tradingAccountId;
-    const returnTo = entry?.returnTo;
+    const state = readICICIStateCookie(req);
+    clearICICIStateCookie(res);
 
     if (!sessionToken) {
       return res.redirect(
-        await buildBrokerCallbackRedirect(this.prisma, {
-          tradingAccountId,
-          returnTo,
+        buildICICIRedirect({
+          state,
           result: { ok: false, error: 'Missing session token from broker' },
         }),
       );
     }
 
-    if (!tradingAccountId) {
+    if (!state || !state.tradingAccountId) {
       return res.redirect(
-        await buildBrokerCallbackRedirect(this.prisma, {
-          tradingAccountId: undefined,
-          returnTo,
+        buildICICIRedirect({
+          state,
           result: {
             ok: false,
             error: 'Reconnect context missing. Please retry from the account.',
@@ -158,7 +164,7 @@ export class ICICIDirectController {
 
     try {
       const account = await this.prisma.tradingAccount.findUnique({
-        where: { id: tradingAccountId },
+        where: { id: state.tradingAccountId },
       });
       if (!account || !account.encryptedApiKey || !account.encryptedApiSecret) {
         throw new Error('ICICI Direct API key/secret is not configured.');
@@ -173,25 +179,15 @@ export class ICICIDirectController {
       const session = await adapter.exchangeToken(sessionToken);
       const profile = await adapter.getProfile();
 
-      await this.iciciService.saveSession(tradingAccountId, session, profile);
+      await this.iciciService.saveSession(state.tradingAccountId, session, profile);
 
-      return res.redirect(
-        await buildBrokerCallbackRedirect(this.prisma, {
-          tradingAccountId,
-          returnTo,
-          result: { ok: true },
-        }),
-      );
+      return res.redirect(buildICICIRedirect({ state, result: { ok: true } }));
     } catch (err: any) {
       const msg =
         (err && (err.message || err.error_type)) ||
         'Broker authentication failed';
       return res.redirect(
-        await buildBrokerCallbackRedirect(this.prisma, {
-          tradingAccountId,
-          returnTo,
-          result: { ok: false, error: String(msg) },
-        }),
+        buildICICIRedirect({ state, result: { ok: false, error: String(msg) } }),
       );
     }
   }
