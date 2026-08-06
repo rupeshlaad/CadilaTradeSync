@@ -17,6 +17,8 @@ import { InstrumentResolverService } from './instrument-resolver.service';
 import { InstrumentStatsService } from './instrument-stats.service';
 import { ZerodhaImporter } from './importers/zerodha.importer';
 import { FyersImporter } from './importers/fyers.importer';
+import { IciciImporter } from './importers/icici.importer';
+import { ShoonyaImporter } from './importers/shoonya.importer';
 
 import {
   LookupInstrumentDto,
@@ -35,6 +37,8 @@ export class AdminInstrumentController {
     private readonly resolver: InstrumentResolverService,
     private readonly zerodhaImporter: ZerodhaImporter,
     private readonly fyersImporter: FyersImporter,
+    private readonly iciciImporter: IciciImporter,
+    private readonly shoonyaImporter: ShoonyaImporter,
     private readonly stats: InstrumentStatsService,
   ) {}
 
@@ -183,6 +187,14 @@ export class AdminInstrumentController {
       const summary = await this.fyersImporter.import();
       return { success: true, broker: Broker.FYERS, summary };
     }
+    if (normalised === Broker.ICICI_DIRECT) {
+      const summary = await this.iciciImporter.import();
+      return { success: true, broker: Broker.ICICI_DIRECT, summary };
+    }
+    if (normalised === Broker.SHOONYA) {
+      const summary = await this.shoonyaImporter.import();
+      return { success: true, broker: Broker.SHOONYA, summary };
+    }
     throw new NotFoundException(
       `No importer registered for broker "${broker}"`,
     );
@@ -194,14 +206,21 @@ export class AdminInstrumentController {
    */
   @Post('import')
   async triggerImportAll() {
-    const [zerodha, fyers] = await Promise.all([
+    const [zerodha, fyers, icici, shoonya] = await Promise.all([
       this.zerodhaImporter.import(),
       this.fyersImporter.import(),
+      this.iciciImporter.import(),
+      this.shoonyaImporter.import(),
     ]);
     return {
       success: true,
-      brokers: [Broker.ZERODHA, Broker.FYERS],
-      summaries: { ZERODHA: zerodha, FYERS: fyers },
+      brokers: [Broker.ZERODHA, Broker.FYERS, Broker.ICICI_DIRECT, Broker.SHOONYA],
+      summaries: {
+        ZERODHA: zerodha,
+        FYERS: fyers,
+        ICICI_DIRECT: icici,
+        SHOONYA: shoonya,
+      },
     };
   }
 

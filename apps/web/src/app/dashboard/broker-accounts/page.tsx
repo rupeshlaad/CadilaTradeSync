@@ -5,6 +5,7 @@ import { useSearchParams } from 'next/navigation';
 
 import {
   BrokerAccountCard,
+  BrokerAccountForm,
   BrokerDashboardPanel,
   type BrokerAccountCardData,
 } from '@cts/ui';
@@ -22,10 +23,8 @@ import {
 
 import { api } from '@/lib/api';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
-import { Select } from '@/components/ui/select';
 import {
   Card,
   CardContent,
@@ -619,130 +618,12 @@ export default function BrokerAccountsPage() {
             className="space-y-4"
             data-testid="broker-accounts-form"
           >
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1.5">
-                <Label>Broker</Label>
-                <Select
-                  value={form.broker}
-                  onChange={(e) =>
-                    setForm({ ...form, broker: e.target.value as Broker })
-                  }
-                  data-testid="broker-accounts-form-broker"
-                >
-                  {Object.values(Broker).map((b) => (
-                    <option key={b} value={b}>
-                      {BROKER_LABELS[b]}
-                    </option>
-                  ))}
-                </Select>
-              </div>
-              <div className="space-y-1.5">
-                <Label>Platform</Label>
-                <Input
-                  value={form.platform}
-                  onChange={(e) =>
-                    setForm({ ...form, platform: e.target.value })
-                  }
-                  required
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label>Nickname</Label>
-                <Input
-                  value={form.nickname}
-                  onChange={(e) =>
-                    setForm({ ...form, nickname: e.target.value })
-                  }
-                  required
-                  data-testid="broker-accounts-form-nickname"
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label>Client ID</Label>
-                <Input
-                  value={form.clientId}
-                  onChange={(e) =>
-                    setForm({ ...form, clientId: e.target.value })
-                  }
-                  required
-                  data-testid="broker-accounts-form-client-id"
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label>API Key</Label>
-                <Input
-                  type="password"
-                  value={form.apiKey ?? ''}
-                  onChange={(e) =>
-                    setForm({ ...form, apiKey: e.target.value })
-                  }
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label>API Secret</Label>
-                <Input
-                  type="password"
-                  value={form.apiSecret ?? ''}
-                  onChange={(e) =>
-                    setForm({ ...form, apiSecret: e.target.value })
-                  }
-                />
-              </div>
-              {form.broker === Broker.SHOONYA && (
-                <div className="space-y-1.5">
-                  <Label>Vendor Code</Label>
-                  <Input
-                    value={form.vendorCode ?? ''}
-                    onChange={(e) =>
-                      setForm({ ...form, vendorCode: e.target.value })
-                    }
-                  />
-                </div>
-              )}
-              {(form.broker === Broker.SHOONYA ||
-                form.broker === Broker.ANGEL_ONE) && (
-                <>
-                  <div className="space-y-1.5">
-                    <Label>Password</Label>
-                    <Input
-                      type="password"
-                      value={form.password ?? ''}
-                      onChange={(e) =>
-                        setForm({ ...form, password: e.target.value })
-                      }
-                    />
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label>TOTP Secret</Label>
-                    <Input
-                      type="password"
-                      value={form.totpSecret ?? ''}
-                      onChange={(e) =>
-                        setForm({ ...form, totpSecret: e.target.value })
-                      }
-                    />
-                  </div>
-                </>
-              )}
-              <div className="space-y-1.5">
-                <Label>Static IP (primary)</Label>
-                <Input
-                  value={form.staticIpPrimary ?? ''}
-                  onChange={(e) =>
-                    setForm({ ...form, staticIpPrimary: e.target.value })
-                  }
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label>Static IP (secondary)</Label>
-                <Input
-                  value={form.staticIpSecondary ?? ''}
-                  onChange={(e) =>
-                    setForm({ ...form, staticIpSecondary: e.target.value })
-                  }
-                />
-              </div>
-            </div>
+            <BrokerAccountForm
+              value={form}
+              onChange={(patch) => setForm({ ...form, ...patch })}
+              editing={!!editingId}
+              testIdPrefix="broker-accounts-form"
+            />
             <DialogFooter>
               <Button
                 type="button"

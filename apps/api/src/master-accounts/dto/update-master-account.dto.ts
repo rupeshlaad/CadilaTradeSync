@@ -8,6 +8,7 @@ export class UpdateMasterAccountDto {
   @IsOptional() @IsString() clientId?: string;
   @IsOptional() @IsString() apiKey?: string;
   @IsOptional() @IsString() apiSecret?: string;
+  @IsOptional() @IsString() vendorCode?: string;
   @IsOptional() @IsString() password?: string;
   @IsOptional() @IsString() totpSecret?: string;
   @IsOptional() @IsString() staticIpPrimary?: string;

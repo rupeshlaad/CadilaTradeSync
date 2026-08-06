@@ -10,6 +10,8 @@ import { InstrumentStatsService } from './instrument-stats.service';
 
 import { ZerodhaImporter } from './importers/zerodha.importer';
 import { FyersImporter } from './importers/fyers.importer';
+import { IciciImporter } from './importers/icici.importer';
+import { ShoonyaImporter } from './importers/shoonya.importer';
 
 @Module({
   imports: [
@@ -26,6 +28,8 @@ import { FyersImporter } from './importers/fyers.importer';
     InstrumentStatsService,
     ZerodhaImporter,
     FyersImporter,
+    IciciImporter,
+    ShoonyaImporter,
   ],
   exports: [
     InstrumentService,

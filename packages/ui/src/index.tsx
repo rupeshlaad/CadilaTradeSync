@@ -4,3 +4,4 @@
 export * from './strategy/strategy-intelligence';
 export * from './follower/broker-and-onboarding';
 export * from './follower/broker-dashboard';
+export * from './follower/broker-account-form';

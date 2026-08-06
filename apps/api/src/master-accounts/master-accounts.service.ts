@@ -16,6 +16,7 @@ export class MasterAccountsService {
     const {
       encryptedApiKey,
       encryptedApiSecret,
+      encryptedVendorCode,
       encryptedPassword,
       encryptedTotpSecret,
       ...safe
@@ -24,6 +25,7 @@ export class MasterAccountsService {
       ...safe,
       hasApiKey: !!encryptedApiKey,
       hasApiSecret: !!encryptedApiSecret,
+      hasVendorCode: !!encryptedVendorCode,
       hasPassword: !!encryptedPassword,
       hasTotpSecret: !!encryptedTotpSecret,
       createdAt: safe.createdAt.toISOString(),
@@ -51,6 +53,7 @@ export class MasterAccountsService {
         clientId: dto.clientId,
         encryptedApiKey: dto.apiKey ? this.enc.encrypt(dto.apiKey) : null,
         encryptedApiSecret: dto.apiSecret ? this.enc.encrypt(dto.apiSecret) : null,
+        encryptedVendorCode: dto.vendorCode ? this.enc.encrypt(dto.vendorCode) : null,
         encryptedPassword: dto.password ? this.enc.encrypt(dto.password) : null,
         encryptedTotpSecret: dto.totpSecret ? this.enc.encrypt(dto.totpSecret) : null,
         staticIpPrimary: dto.staticIpPrimary ?? null,
@@ -83,6 +86,7 @@ export class MasterAccountsService {
     if (dto.clientId !== undefined) data.clientId = dto.clientId;
     if (dto.apiKey !== undefined) data.encryptedApiKey = dto.apiKey ? this.enc.encrypt(dto.apiKey) : null;
     if (dto.apiSecret !== undefined) data.encryptedApiSecret = dto.apiSecret ? this.enc.encrypt(dto.apiSecret) : null;
+    if (dto.vendorCode !== undefined) data.encryptedVendorCode = dto.vendorCode ? this.enc.encrypt(dto.vendorCode) : null;
     if (dto.password !== undefined) data.encryptedPassword = dto.password ? this.enc.encrypt(dto.password) : null;
     if (dto.totpSecret !== undefined) data.encryptedTotpSecret = dto.totpSecret ? this.enc.encrypt(dto.totpSecret) : null;
     if (dto.staticIpPrimary !== undefined) data.staticIpPrimary = dto.staticIpPrimary || null;

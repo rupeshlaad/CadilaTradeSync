@@ -1,4 +1,15 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Req, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  ForbiddenException,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Req,
+  UseGuards,
+} from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -52,9 +63,28 @@ export class MasterAccountsController {
     return this.service.setEnabled(id, false);
   }
 
+  /**
+   * Sprint 6.2.4 — Master Portal now consumes the SAME normalized, SDK-driven
+   * dashboard DTO as the Follower Portal (getBrokerDashboard, not the raw
+   * getDashboard). One normalization pipeline → identical data in both
+   * portals for every broker (no portal-specific mapping).
+   */
   @Get(':id/dashboard')
   async dashboard(@Param('id') id: string) {
-    return this.brokerService.getDashboard(id);
+    return this.brokerService.getBrokerDashboard(id);
+  }
+
+  /**
+   * Sprint 6.2.4 — Granular per-section live refresh, identical to the
+   * Follower Portal endpoint. Same shared BrokerService, same normalizers.
+   */
+  @Get(':id/section/:section')
+  async section(@Param('id') id: string, @Param('section') section: string) {
+    const allowed = ['profile', 'funds', 'holdings', 'positions', 'orders', 'trades'];
+    if (!allowed.includes(section)) {
+      throw new ForbiddenException('Unknown broker section');
+    }
+    return this.brokerService.getBrokerSection(id, section as any);
   }
 
   @Get(':id/session-health')
