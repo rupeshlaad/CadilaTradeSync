@@ -55,6 +55,15 @@ export const api = {
     request<AuthResponse>('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) }),
   me: () => request<PublicUser>('/auth/me'),
 
+  // ---------- ICICI Direct (Sprint 6.2.1 manual API-Session auth) ----------
+  icici: {
+    connectSession: (tradingAccountId: string, apiSession: string) =>
+      request<{ ok: boolean; profile: any }>('/brokers/icici/connect-session', {
+        method: 'POST',
+        body: JSON.stringify({ tradingAccountId, apiSession }),
+      }),
+  },
+
   // ---------- Trading Accounts ----------
   tradingAccounts: {
     list: () => request<TradingAccountDto[]>('/trading-accounts'),

@@ -5,6 +5,7 @@ import { api } from '@/lib/api';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { Select } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
@@ -52,6 +53,37 @@ export default function MasterAccountsPage() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<FormState>(emptyForm);
   const [saving, setSaving] = useState(false);
+
+  // Sprint 6.2.1 — ICICI Direct manual API-Session connect modal.
+  const [sessionModal, setSessionModal] = useState<{
+    open: boolean;
+    row: TradingAccountDto | null;
+  }>({ open: false, row: null });
+  const [sessionToken, setSessionToken] = useState('');
+  const [sessionSubmitting, setSessionSubmitting] = useState(false);
+  const [sessionError, setSessionError] = useState<string | null>(null);
+
+  function openIciciSession(row: TradingAccountDto) {
+    setSessionModal({ open: true, row });
+    setSessionToken('');
+    setSessionError(null);
+  }
+
+  async function submitIciciSession() {
+    if (!sessionModal.row) return;
+    setSessionSubmitting(true);
+    setSessionError(null);
+    try {
+      await api.icici.connectSession(sessionModal.row.id, sessionToken.trim());
+      setSessionModal({ open: false, row: null });
+      setSessionToken('');
+      await load();
+    } catch (e: any) {
+      setSessionError(e?.message ?? 'Connection failed');
+    } finally {
+      setSessionSubmitting(false);
+    }
+  }
 
   async function load() {
     try {
@@ -227,6 +259,11 @@ export default function MasterAccountsPage() {
                         <Button
                           size="sm"
                           onClick={() => {
+                            if (r.broker === 'ICICI_DIRECT') {
+                              // Sprint 6.2.1 — no OAuth redirect for ICICI.
+                              openIciciSession(r);
+                              return;
+                            }
                             const api =
                               process.env.NEXT_PUBLIC_API_URL ??
                               'http://localhost:4000';
@@ -242,13 +279,9 @@ export default function MasterAccountsPage() {
                                 ? 'fyers'
                                 : r.broker === 'SHOONYA'
                                 ? 'shoonya'
-                                : r.broker === 'ICICI_DIRECT'
-                                ? 'icici'
                                 : 'zerodha';
-                            const portalParam =
-                              r.broker === 'ICICI_DIRECT' ? '&portal=master' : '';
                             window.location.href =
-                              `${api}/brokers/${brokerPath}/login?tradingAccountId=${r.id}&returnTo=${returnTo}${portalParam}`;
+                              `${api}/brokers/${brokerPath}/login?tradingAccountId=${r.id}&returnTo=${returnTo}`;
                           }}
                           data-testid={`master-accounts-connect-btn-${r.id}`}
                         >
@@ -352,6 +385,68 @@ export default function MasterAccountsPage() {
               <Button type="submit" disabled={saving}>{saving ? 'Saving…' : editingId ? 'Save changes' : 'Create'}</Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={sessionModal.open}
+        onOpenChange={(v) => !v && setSessionModal({ open: false, row: null })}
+      >
+        <DialogContent data-testid="icici-session-modal">
+          <DialogHeader>
+            <DialogTitle>Connect ICICI Direct</DialogTitle>
+            <DialogDescription>
+              Generate a fresh API Session from the ICICI Breeze Portal and paste it below.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Label htmlFor="icici-api-session-admin">
+              API Session (from ICICI Breeze Portal)
+            </Label>
+            <Textarea
+              id="icici-api-session-admin"
+              rows={3}
+              placeholder="Paste your API Session here"
+              value={sessionToken}
+              onChange={(e) => setSessionToken(e.target.value)}
+              data-testid="icici-session-input"
+            />
+            <p className="text-xs text-muted-foreground">
+              Generate a new API Session from the{' '}
+              <a
+                href="https://api.icicidirect.com/apiuser/login"
+                target="_blank"
+                rel="noreferrer"
+                className="underline"
+              >
+                ICICI Breeze portal
+              </a>{' '}
+              after logging in. This session expires daily.
+            </p>
+            {sessionError && (
+              <p className="text-sm text-destructive" data-testid="icici-session-error">
+                {sessionError}
+              </p>
+            )}
+          </div>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setSessionModal({ open: false, row: null })}
+              data-testid="icici-session-cancel"
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              onClick={submitIciciSession}
+              disabled={sessionSubmitting || !sessionToken.trim()}
+              data-testid="icici-session-connect"
+            >
+              {sessionSubmitting ? 'Connecting…' : 'Connect'}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>
