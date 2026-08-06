@@ -32,12 +32,17 @@ export class InstrumentStatsService {
   }
 
   async snapshot() {
-    const [canonical, brokerMappings, zerodha, fyers] = await Promise.all([
-      this.prisma.instrument.count(),
-      this.prisma.instrumentBroker.count(),
-      this.prisma.instrumentBroker.count({ where: { broker: Broker.ZERODHA } }),
-      this.prisma.instrumentBroker.count({ where: { broker: Broker.FYERS } }),
-    ]);
+    const [canonical, brokerMappings, zerodha, fyers, icici, shoonya] =
+      await Promise.all([
+        this.prisma.instrument.count(),
+        this.prisma.instrumentBroker.count(),
+        this.prisma.instrumentBroker.count({ where: { broker: Broker.ZERODHA } }),
+        this.prisma.instrumentBroker.count({ where: { broker: Broker.FYERS } }),
+        this.prisma.instrumentBroker.count({
+          where: { broker: Broker.ICICI_DIRECT },
+        }),
+        this.prisma.instrumentBroker.count({ where: { broker: Broker.SHOONYA } }),
+      ]);
 
     const summaries = this.getAllSummaries();
 
@@ -53,11 +58,15 @@ export class InstrumentStatsService {
         brokerMappings,
         zerodha,
         fyers,
+        icici,
+        shoonya,
       },
       lastRefresh: {
         overall,
         zerodha: summaries[Broker.ZERODHA]?.finishedAt ?? null,
         fyers: summaries[Broker.FYERS]?.finishedAt ?? null,
+        icici: summaries[Broker.ICICI_DIRECT]?.finishedAt ?? null,
+        shoonya: summaries[Broker.SHOONYA]?.finishedAt ?? null,
       },
       lastSummaries: summaries,
     };

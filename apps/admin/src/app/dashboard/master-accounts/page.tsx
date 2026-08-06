@@ -4,10 +4,8 @@ import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
-import { Select } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
 import {
@@ -21,6 +19,7 @@ import {
 import { Plus, Pencil, Trash2, Power, LineChart } from 'lucide-react';
 import Link from 'next/link';
 import { Broker, BROKER_LABELS, type TradingAccountDto, type CreateTradingAccountPayload } from '@cts/shared';
+import { BrokerAccountForm } from '@cts/ui';
 
 type FormState = CreateTradingAccountPayload;
 
@@ -154,6 +153,7 @@ export default function MasterAccountsPage() {
       };
       if (form.apiKey) payload.apiKey = form.apiKey;
       if (form.apiSecret) payload.apiSecret = form.apiSecret;
+      if (form.vendorCode) payload.vendorCode = form.vendorCode;
       if (form.password) payload.password = form.password;
       if (form.totpSecret) payload.totpSecret = form.totpSecret;
       if (form.staticIpPrimary) payload.staticIpPrimary = form.staticIpPrimary;
@@ -334,52 +334,12 @@ export default function MasterAccountsPage() {
             </DialogDescription>
           </DialogHeader>
           <form onSubmit={handleSubmit} className="space-y-4">
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1.5">
-                <Label>Broker</Label>
-                <Select value={form.broker} onChange={(e) => setForm({ ...form, broker: e.target.value as Broker })}>
-                  {Object.values(Broker).map((b) => (
-                    <option key={b} value={b}>{BROKER_LABELS[b]}</option>
-                  ))}
-                </Select>
-              </div>
-              <div className="space-y-1.5">
-                <Label>Platform</Label>
-                <Input value={form.platform} onChange={(e) => setForm({ ...form, platform: e.target.value })} required />
-              </div>
-              <div className="space-y-1.5">
-                <Label>Nickname</Label>
-                <Input value={form.nickname} onChange={(e) => setForm({ ...form, nickname: e.target.value })} required />
-              </div>
-              <div className="space-y-1.5">
-                <Label>Client ID</Label>
-                <Input value={form.clientId} onChange={(e) => setForm({ ...form, clientId: e.target.value })} required />
-              </div>
-              <div className="space-y-1.5">
-                <Label>API Key</Label>
-                <Input type="password" value={form.apiKey ?? ''} onChange={(e) => setForm({ ...form, apiKey: e.target.value })} />
-              </div>
-              <div className="space-y-1.5">
-                <Label>API Secret</Label>
-                <Input type="password" value={form.apiSecret ?? ''} onChange={(e) => setForm({ ...form, apiSecret: e.target.value })} />
-              </div>
-              <div className="space-y-1.5">
-                <Label>Password</Label>
-                <Input type="password" value={form.password ?? ''} onChange={(e) => setForm({ ...form, password: e.target.value })} />
-              </div>
-              <div className="space-y-1.5">
-                <Label>TOTP Secret</Label>
-                <Input type="password" value={form.totpSecret ?? ''} onChange={(e) => setForm({ ...form, totpSecret: e.target.value })} />
-              </div>
-              <div className="space-y-1.5">
-                <Label>Static IP (primary)</Label>
-                <Input value={form.staticIpPrimary ?? ''} onChange={(e) => setForm({ ...form, staticIpPrimary: e.target.value })} />
-              </div>
-              <div className="space-y-1.5">
-                <Label>Static IP (secondary)</Label>
-                <Input value={form.staticIpSecondary ?? ''} onChange={(e) => setForm({ ...form, staticIpSecondary: e.target.value })} />
-              </div>
-            </div>
+            <BrokerAccountForm
+              value={form}
+              onChange={(patch) => setForm({ ...form, ...patch })}
+              editing={!!editingId}
+              testIdPrefix="master-accounts-form"
+            />
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
               <Button type="submit" disabled={saving}>{saving ? 'Saving…' : editingId ? 'Save changes' : 'Create'}</Button>

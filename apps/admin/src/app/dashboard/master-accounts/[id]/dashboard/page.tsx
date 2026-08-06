@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import { api } from '@/lib/api';
@@ -24,48 +24,27 @@ import {
   PlugZap,
   ShieldAlert,
 } from 'lucide-react';
-import { BROKER_LABELS, Broker, ConnectionStatus, type TradingAccountDto } from '@cts/shared';
+import { BrokerDashboardPanel } from '@cts/ui';
+import {
+  BROKER_LABELS,
+  ConnectionStatus,
+  type BrokerDashboardDto,
+  type BrokerDashboardSection,
+  type TradingAccountDto,
+} from '@cts/shared';
 
-// ---------- Response types (kept local to avoid touching shared package) ----------
+/**
+ * Sprint 6.2.4 — Master Portal broker dashboard.
+ *
+ * Now renders the SAME shared `BrokerDashboardPanel` the Follower Portal uses,
+ * fed by the SAME normalized `BrokerDashboardDto`
+ * (GET /admin/master-accounts/:id/dashboard → BrokerService.getBrokerDashboard).
+ * There is no portal-specific broker mapping anymore: every value (profile,
+ * funds, portfolio, holdings, positions, orders, trades) is normalized once in
+ * BrokerService and rendered identically in both portals for every broker.
+ */
 
-type SectionError = string | null;
-
-interface DashboardHealth {
-  connected: boolean;
-  connectionStatus: ConnectionStatus;
-  broker: Broker;
-  loginTime: string | null;
-  lastHeartbeat: string | null;
-  sessionActive: boolean;
-  tokenExpired: boolean | null;
-}
-
-interface BrokerProfile {
-  broker: string;
-  userId: string;
-  userName: string;
-  email?: string;
-}
-
-interface DashboardResponse {
-  profile: BrokerProfile | null;
-  margins: any | null;
-  holdings: any[] | null;
-  positions: { net?: any[]; day?: any[] } | any[] | null;
-  orders: any[] | null;
-  trades: any[] | null;
-  errors: {
-    profile: SectionError;
-    margins: SectionError;
-    holdings: SectionError;
-    positions: SectionError;
-    orders: SectionError;
-    trades: SectionError;
-  };
-  health: DashboardHealth;
-}
-
-// ---------- Helpers ----------
+type RefreshTarget = BrokerDashboardSection | 'all' | 'session' | null;
 
 function fmtDate(iso: string | null | undefined) {
   if (!iso) return '—';
@@ -74,40 +53,10 @@ function fmtDate(iso: string | null | undefined) {
   return d.toLocaleString();
 }
 
-function fmtNum(v: any, digits = 2): string {
-  if (v === null || v === undefined || v === '') return '—';
-  const n = typeof v === 'number' ? v : Number(v);
-  if (!Number.isFinite(n)) return String(v);
-  return n.toLocaleString(undefined, {
-    minimumFractionDigits: digits,
-    maximumFractionDigits: digits,
-  });
-}
-
-function extractPositions(p: DashboardResponse['positions']): any[] {
-  if (!p) return [];
-  if (Array.isArray(p)) return p;
-  return p.net ?? p.day ?? [];
-}
-
-function extractMarginsSegments(m: any): Array<{ segment: string; row: any }> {
-  if (!m || typeof m !== 'object') return [];
-  const out: Array<{ segment: string; row: any }> = [];
-  for (const key of Object.keys(m)) {
-    const row = m[key];
-    if (row && typeof row === 'object') out.push({ segment: key, row });
-  }
-  return out;
-}
-
-// ---------- Small UI atoms ----------
-
 function StatusDot({ ok }: { ok: boolean }) {
   return (
     <span
-      className={`inline-block h-2.5 w-2.5 rounded-full ${
-        ok ? 'bg-emerald-500' : 'bg-destructive'
-      }`}
+      className={`inline-block h-2.5 w-2.5 rounded-full ${ok ? 'bg-emerald-500' : 'bg-destructive'}`}
       aria-hidden
     />
   );
@@ -117,9 +66,7 @@ function ConnectionBadge({ status }: { status: ConnectionStatus }) {
   const variant =
     status === ConnectionStatus.CONNECTED
       ? 'success'
-      : status === ConnectionStatus.CONNECTING
-      ? 'warning'
-      : status === ConnectionStatus.EXPIRED
+      : status === ConnectionStatus.CONNECTING || status === ConnectionStatus.EXPIRED
       ? 'warning'
       : status === ConnectionStatus.ERROR
       ? 'destructive'
@@ -127,116 +74,14 @@ function ConnectionBadge({ status }: { status: ConnectionStatus }) {
   return <Badge variant={variant as any} data-testid="connection-status-badge">{status}</Badge>;
 }
 
-function SectionCard({
-  title,
-  description,
-  error,
-  count,
-  children,
-  testid,
-}: {
-  title: string;
-  description?: string;
-  error?: SectionError;
-  count?: number | null;
-  children: React.ReactNode;
-  testid: string;
-}) {
-  return (
-    <Card data-testid={testid}>
-      <CardHeader className="pb-3">
-        <div className="flex items-start justify-between gap-3">
-          <div className="space-y-1">
-            <CardTitle className="text-lg">{title}</CardTitle>
-            {description && <CardDescription>{description}</CardDescription>}
-          </div>
-          <div className="flex items-center gap-2 shrink-0">
-            {count !== undefined && count !== null && (
-              <Badge variant="secondary">{count}</Badge>
-            )}
-            {error ? (
-              <Badge variant="destructive" className="gap-1">
-                <XCircle className="h-3 w-3" /> Failed
-              </Badge>
-            ) : (
-              <Badge variant="success" className="gap-1">
-                <CheckCircle2 className="h-3 w-3" /> OK
-              </Badge>
-            )}
-          </div>
-        </div>
-      </CardHeader>
-      <CardContent className="pt-0">
-        {error ? (
-          <div className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
-            <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
-            <span className="break-words">{error}</span>
-          </div>
-        ) : (
-          children
-        )}
-      </CardContent>
-    </Card>
-  );
-}
-
-function DataTable({
-  columns,
-  rows,
-  emptyLabel,
-}: {
-  columns: Array<{ key: string; label: string; align?: 'left' | 'right'; render?: (row: any) => React.ReactNode }>;
-  rows: any[];
-  emptyLabel: string;
-}) {
-  if (!rows || rows.length === 0) {
-    return <p className="text-sm text-muted-foreground py-2">{emptyLabel}</p>;
-  }
-  return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-sm">
-        <thead>
-          <tr className="text-left text-muted-foreground border-b">
-            {columns.map((c) => (
-              <th
-                key={c.key}
-                className={`py-2 pr-4 font-medium ${c.align === 'right' ? 'text-right' : ''}`}
-              >
-                {c.label}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row, i) => (
-            <tr key={i} className="border-b last:border-none">
-              {columns.map((c) => (
-                <td
-                  key={c.key}
-                  className={`py-2 pr-4 ${c.align === 'right' ? 'text-right font-mono' : ''}`}
-                >
-                  {c.render ? c.render(row) : row?.[c.key] ?? '—'}
-                </td>
-              ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-// ---------- Page ----------
-
 export default function MasterDashboardPage() {
   const params = useParams<{ id: string }>();
   const id = params?.id;
 
   const [account, setAccount] = useState<TradingAccountDto | null>(null);
-  const [data, setData] = useState<DashboardResponse | null>(null);
+  const [data, setData] = useState<BrokerDashboardDto | null>(null);
   const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [refreshingStatus, setRefreshingStatus] = useState(false);
+  const [refreshing, setRefreshing] = useState<RefreshTarget>(null);
   const [error, setError] = useState<string | null>(null);
   const [confirmDisconnect, setConfirmDisconnect] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
@@ -246,11 +91,11 @@ export default function MasterDashboardPage() {
     if (!id) return;
     try {
       if (initial) setLoading(true);
-      else setRefreshing(true);
+      else setRefreshing('all');
       setError(null);
       const [acc, dash] = await Promise.all([
         api.admin.masterAccounts.get(id),
-        api.admin.masterAccounts.dashboard(id) as Promise<DashboardResponse>,
+        api.admin.masterAccounts.dashboard(id),
       ]);
       setAccount(acc);
       setData(dash);
@@ -258,47 +103,44 @@ export default function MasterDashboardPage() {
       setError(e?.message ?? 'Failed to load dashboard');
     } finally {
       setLoading(false);
-      setRefreshing(false);
+      setRefreshing(null);
     }
   }
 
-  async function refreshStatus() {
+  async function refreshSession() {
     if (!id) return;
+    setRefreshing('session');
     try {
-      setRefreshingStatus(true);
       setError(null);
-      const [acc, health] = await Promise.all([
-        api.admin.masterAccounts.get(id),
-        api.admin.masterAccounts.sessionHealth(id) as Promise<DashboardHealth>,
-      ]);
-      setAccount(acc);
-      // Merge the fresh health into the current dashboard payload without
-      // triggering a full broker round-trip. If we don't have a payload yet
-      // (initial disconnected load failed), synthesise a minimal one.
+      const dash = await api.admin.masterAccounts.dashboard(id);
+      setData(dash);
+    } catch (e: any) {
+      setError(e?.message ?? 'Failed to refresh session');
+    } finally {
+      setRefreshing(null);
+    }
+  }
+
+  async function refreshSection(section: BrokerDashboardSection) {
+    if (!id) return;
+    setRefreshing(section);
+    try {
+      const res = await api.admin.masterAccounts.section(id, section);
       setData((prev) => {
-        if (prev) return { ...prev, health };
-        return {
-          profile: null,
-          margins: null,
-          holdings: null,
-          positions: null,
-          orders: null,
-          trades: null,
-          errors: {
-            profile: null,
-            margins: null,
-            holdings: null,
-            positions: null,
-            orders: null,
-            trades: null,
-          },
-          health,
-        };
+        if (!prev) return prev;
+        const next: BrokerDashboardDto = { ...prev };
+        if (section === 'profile') next.profile = (res.data as any) ?? prev.profile;
+        else if (section === 'funds') next.funds = res.data as any;
+        else if (section === 'holdings') next.holdings = res.data as any;
+        else if (section === 'positions') next.positions = res.data as any;
+        else if (section === 'orders') next.orders = res.data as any;
+        else if (section === 'trades') next.trades = res.data as any;
+        return next;
       });
     } catch (e: any) {
-      setError(e?.message ?? 'Failed to refresh status');
+      setError(e?.message ?? 'Section refresh failed');
     } finally {
-      setRefreshingStatus(false);
+      setRefreshing(null);
     }
   }
 
@@ -309,7 +151,6 @@ export default function MasterDashboardPage() {
       setDisconnectError(null);
       await api.admin.masterAccounts.disconnect(id);
       setConfirmDisconnect(false);
-      // Reload account + dashboard so UI reflects the disconnected state.
       await load(false);
     } catch (e: any) {
       setDisconnectError(e?.message ?? 'Failed to disconnect broker');
@@ -323,8 +164,9 @@ export default function MasterDashboardPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
-  const positionsRows = useMemo(() => extractPositions(data?.positions ?? null), [data?.positions]);
-  const marginsRows = useMemo(() => extractMarginsSegments(data?.margins), [data?.margins]);
+  const health = data?.health ?? null;
+  const isDisconnected =
+    !health || health.connectionStatus === ConnectionStatus.DISCONNECTED;
 
   return (
     <div className="space-y-6" data-testid="master-dashboard-page">
@@ -354,21 +196,12 @@ export default function MasterDashboardPage() {
         <div className="flex items-center gap-2 flex-wrap">
           <Button
             variant="outline"
-            onClick={refreshStatus}
-            disabled={loading || refreshingStatus}
-            data-testid="refresh-status"
-          >
-            <RefreshCw className={`h-4 w-4 ${refreshingStatus ? 'animate-spin' : ''}`} />
-            {refreshingStatus ? 'Refreshing…' : 'Refresh Status'}
-          </Button>
-          <Button
-            variant="outline"
             onClick={() => load(false)}
-            disabled={loading || refreshing}
+            disabled={loading || refreshing !== null}
             data-testid="refresh-dashboard"
           >
-            <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
-            {refreshing ? 'Refreshing…' : 'Refresh'}
+            <RefreshCw className={`h-4 w-4 ${refreshing === 'all' ? 'animate-spin' : ''}`} />
+            {refreshing === 'all' ? 'Refreshing…' : 'Refresh'}
           </Button>
           <Button
             variant="destructive"
@@ -376,11 +209,7 @@ export default function MasterDashboardPage() {
               setDisconnectError(null);
               setConfirmDisconnect(true);
             }}
-            disabled={
-              loading ||
-              !data ||
-              data.health.connectionStatus === ConnectionStatus.DISCONNECTED
-            }
+            disabled={loading || isDisconnected}
             data-testid="disconnect-broker"
           >
             <PlugZap className="h-4 w-4" /> Disconnect Broker
@@ -408,7 +237,7 @@ export default function MasterDashboardPage() {
         </Card>
       )}
 
-      {data && (
+      {data && health && (
         <>
           {/* Connection Status */}
           <Card data-testid="section-connection-status">
@@ -421,30 +250,30 @@ export default function MasterDashboardPage() {
                 <div className="space-y-1">
                   <p className="text-xs uppercase tracking-wide text-muted-foreground">Live Connection</p>
                   <div className="flex items-center gap-2" data-testid="live-connection">
-                    <StatusDot ok={data.health.connected} />
+                    <StatusDot ok={health.connected} />
                     <span className="text-sm font-medium">
-                      {data.health.connected ? 'Connected' : 'Disconnected'}
+                      {health.connected ? 'Connected' : 'Disconnected'}
                     </span>
                   </div>
                 </div>
                 <div className="space-y-1">
                   <p className="text-xs uppercase tracking-wide text-muted-foreground">Broker</p>
                   <p className="text-sm font-medium" data-testid="broker-name">
-                    {BROKER_LABELS[data.health.broker] ?? data.health.broker}
+                    {BROKER_LABELS[health.broker] ?? health.broker}
                   </p>
                 </div>
                 <div className="space-y-1">
                   <p className="text-xs uppercase tracking-wide text-muted-foreground">Status</p>
-                  <ConnectionBadge status={data.health.connectionStatus} />
+                  <ConnectionBadge status={health.connectionStatus} />
                 </div>
                 <div className="space-y-1">
                   <p className="text-xs uppercase tracking-wide text-muted-foreground">Session</p>
                   <div className="flex items-center gap-2" data-testid="session-status">
-                    {data.health.sessionActive ? (
+                    {health.sessionActive ? (
                       <Badge variant="success" className="gap-1">
                         <CheckCircle2 className="h-3 w-3" /> Active
                       </Badge>
-                    ) : data.health.tokenExpired ? (
+                    ) : health.tokenExpired ? (
                       <Badge variant="warning" className="gap-1">
                         <ShieldAlert className="h-3 w-3" /> Token expired
                       </Badge>
@@ -457,15 +286,15 @@ export default function MasterDashboardPage() {
                 </div>
                 <div className="space-y-1">
                   <p className="text-xs uppercase tracking-wide text-muted-foreground">Login Time</p>
-                  <p className="text-sm font-mono" data-testid="login-time">{fmtDate(data.health.loginTime)}</p>
+                  <p className="text-sm font-mono" data-testid="login-time">{fmtDate(health.loginTime)}</p>
                 </div>
                 <div className="space-y-1">
                   <p className="text-xs uppercase tracking-wide text-muted-foreground">Last Heartbeat</p>
-                  <p className="text-sm font-mono" data-testid="last-heartbeat">{fmtDate(data.health.lastHeartbeat)}</p>
+                  <p className="text-sm font-mono" data-testid="last-heartbeat">{fmtDate(health.lastHeartbeat)}</p>
                 </div>
               </div>
 
-              {data.health.connectionStatus === ConnectionStatus.DISCONNECTED && (
+              {isDisconnected && (
                 <div
                   className="mt-4 rounded-md border border-amber-500/30 bg-amber-500/5 p-3 text-sm flex items-start gap-3 flex-wrap"
                   data-testid="reconnect-cta"
@@ -479,277 +308,25 @@ export default function MasterDashboardPage() {
                     </p>
                   </div>
                   <Button asChild size="sm" variant="outline">
-                    <Link
-                      href={`/dashboard/master-accounts`}
-                      data-testid="go-reconnect"
-                    >
+                    <Link href={`/dashboard/master-accounts`} data-testid="go-reconnect">
                       Go to Master Accounts
                     </Link>
-                  </Button>
-                </div>
-              )}
-
-              {data.health.connectionStatus === ConnectionStatus.EXPIRED && (
-                <div
-                  className="mt-4 rounded-md border border-amber-500/30 bg-amber-500/5 p-3 text-sm flex items-start gap-3 flex-wrap"
-                  data-testid="expired-cta"
-                >
-                  <ShieldAlert className="h-4 w-4 text-amber-600 dark:text-amber-400 mt-0.5 shrink-0" />
-                  <div className="flex-1 min-w-[220px]">
-                    <p className="font-medium">Session token has expired.</p>
-                    <p className="text-muted-foreground">
-                      Reconnect the broker to refresh the access token.
-                    </p>
-                  </div>
-                  <Button asChild size="sm" variant="outline">
-                    <Link href={`/dashboard/master-accounts`}>Go to Master Accounts</Link>
                   </Button>
                 </div>
               )}
             </CardContent>
           </Card>
 
-          {/* Broker-dependent widgets — hidden gracefully when disconnected */}
-          {data.health.connectionStatus === ConnectionStatus.DISCONNECTED ? null : (
-          <>
-          {/* Profile & Margins side by side */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <SectionCard
-              title="Profile"
-              description="Broker account holder"
-              error={data.errors.profile}
-              testid="section-profile"
-            >
-              {data.profile ? (
-                <div className="grid grid-cols-2 gap-3 text-sm">
-                  <div>
-                    <p className="text-xs uppercase tracking-wide text-muted-foreground">User Name</p>
-                    <p className="font-medium">{data.profile.userName || '—'}</p>
-                  </div>
-                  <div>
-                    <p className="text-xs uppercase tracking-wide text-muted-foreground">User ID</p>
-                    <p className="font-mono">{data.profile.userId || '—'}</p>
-                  </div>
-                  <div>
-                    <p className="text-xs uppercase tracking-wide text-muted-foreground">Broker</p>
-                    <p>{data.profile.broker}</p>
-                  </div>
-                  <div>
-                    <p className="text-xs uppercase tracking-wide text-muted-foreground">Email</p>
-                    <p className="break-all">{data.profile.email || '—'}</p>
-                  </div>
-                </div>
-              ) : (
-                <p className="text-sm text-muted-foreground">No profile returned.</p>
-              )}
-            </SectionCard>
-
-            <SectionCard
-              title="Margins"
-              description="Available funds by segment"
-              error={data.errors.margins}
-              testid="section-margins"
-            >
-              {marginsRows.length === 0 ? (
-                <p className="text-sm text-muted-foreground">No margins returned.</p>
-              ) : (
-                <div className="space-y-4">
-                  {marginsRows.map(({ segment, row }) => {
-                    const available = row?.available?.live_balance ?? row?.available?.cash ?? row?.net ?? row?.available;
-                    const used =
-                      row?.utilised?.debits ??
-                      row?.utilised?.total ??
-                      row?.used ??
-                      row?.utilised;
-                    const net = row?.net ?? row?.available?.live_balance;
-                    return (
-                      <div key={segment} className="rounded-md border p-3">
-                        <div className="flex items-center justify-between mb-2">
-                          <p className="text-sm font-medium uppercase tracking-wide">{segment}</p>
-                          <Badge variant="muted">{segment}</Badge>
-                        </div>
-                        <div className="grid grid-cols-3 gap-2 text-sm">
-                          <div>
-                            <p className="text-xs text-muted-foreground">Available</p>
-                            <p className="font-mono">
-                              {typeof available === 'number' || typeof available === 'string'
-                                ? fmtNum(available)
-                                : '—'}
-                            </p>
-                          </div>
-                          <div>
-                            <p className="text-xs text-muted-foreground">Used</p>
-                            <p className="font-mono">
-                              {typeof used === 'number' || typeof used === 'string' ? fmtNum(used) : '—'}
-                            </p>
-                          </div>
-                          <div>
-                            <p className="text-xs text-muted-foreground">Net</p>
-                            <p className="font-mono">
-                              {typeof net === 'number' || typeof net === 'string' ? fmtNum(net) : '—'}
-                            </p>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </SectionCard>
-          </div>
-
-          {/* Holdings */}
-          <SectionCard
-            title="Holdings"
-            description="Long-term equity holdings"
-            error={data.errors.holdings}
-            count={data.holdings?.length ?? null}
-            testid="section-holdings"
-          >
-            <DataTable
-              rows={data.holdings ?? []}
-              emptyLabel="No holdings."
-              columns={[
-                { key: 'tradingsymbol', label: 'Symbol', render: (r) => <span className="font-mono">{r.tradingsymbol ?? r.symbol ?? '—'}</span> },
-                { key: 'exchange', label: 'Exch' },
-                { key: 'quantity', label: 'Qty', align: 'right', render: (r) => fmtNum(r.quantity ?? r.qty, 0) },
-                { key: 'average_price', label: 'Avg', align: 'right', render: (r) => fmtNum(r.average_price ?? r.avgPrice) },
-                { key: 'last_price', label: 'LTP', align: 'right', render: (r) => fmtNum(r.last_price ?? r.ltp) },
-                {
-                  key: 'pnl',
-                  label: 'P&L',
-                  align: 'right',
-                  render: (r) => {
-                    const v = r.pnl ?? r.profit_and_loss;
-                    const n = typeof v === 'number' ? v : Number(v);
-                    if (!Number.isFinite(n)) return '—';
-                    return (
-                      <span className={n >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive'}>
-                        {fmtNum(n)}
-                      </span>
-                    );
-                  },
-                },
-              ]}
+          {/* Shared, normalized broker dashboard — identical to the Follower Portal. */}
+          {!isDisconnected && (
+            <BrokerDashboardPanel
+              dashboard={data}
+              loading={loading}
+              refreshing={refreshing}
+              onRefreshSection={refreshSection}
+              onRefreshAll={() => load(false)}
+              onRefreshSession={refreshSession}
             />
-          </SectionCard>
-
-          {/* Positions */}
-          <SectionCard
-            title="Positions"
-            description="Open intraday and net positions"
-            error={data.errors.positions}
-            count={positionsRows.length}
-            testid="section-positions"
-          >
-            <DataTable
-              rows={positionsRows}
-              emptyLabel="No open positions."
-              columns={[
-                { key: 'tradingsymbol', label: 'Symbol', render: (r) => <span className="font-mono">{r.tradingsymbol ?? r.symbol ?? '—'}</span> },
-                { key: 'exchange', label: 'Exch' },
-                { key: 'product', label: 'Product' },
-                { key: 'quantity', label: 'Qty', align: 'right', render: (r) => fmtNum(r.quantity ?? r.net_quantity, 0) },
-                { key: 'average_price', label: 'Avg', align: 'right', render: (r) => fmtNum(r.average_price ?? r.buy_price) },
-                { key: 'last_price', label: 'LTP', align: 'right', render: (r) => fmtNum(r.last_price ?? r.ltp) },
-                {
-                  key: 'pnl',
-                  label: 'P&L',
-                  align: 'right',
-                  render: (r) => {
-                    const v = r.pnl ?? r.profit_loss;
-                    const n = typeof v === 'number' ? v : Number(v);
-                    if (!Number.isFinite(n)) return '—';
-                    return (
-                      <span className={n >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive'}>
-                        {fmtNum(n)}
-                      </span>
-                    );
-                  },
-                },
-              ]}
-            />
-          </SectionCard>
-
-          {/* Orders */}
-          <SectionCard
-            title="Orders"
-            description="Today's order book"
-            error={data.errors.orders}
-            count={data.orders?.length ?? null}
-            testid="section-orders"
-          >
-            <DataTable
-              rows={data.orders ?? []}
-              emptyLabel="No orders."
-              columns={[
-                { key: 'order_id', label: 'Order ID', render: (r) => <span className="font-mono text-xs">{r.order_id ?? r.orderId ?? '—'}</span> },
-                { key: 'tradingsymbol', label: 'Symbol', render: (r) => <span className="font-mono">{r.tradingsymbol ?? r.symbol ?? '—'}</span> },
-                {
-                  key: 'transaction_type',
-                  label: 'Side',
-                  render: (r) => {
-                    const t = r.transaction_type ?? r.side;
-                    if (!t) return '—';
-                    return (
-                      <Badge variant={t === 'BUY' ? 'success' : 'destructive'}>{t}</Badge>
-                    );
-                  },
-                },
-                { key: 'quantity', label: 'Qty', align: 'right', render: (r) => fmtNum(r.quantity, 0) },
-                { key: 'price', label: 'Price', align: 'right', render: (r) => fmtNum(r.price) },
-                {
-                  key: 'status',
-                  label: 'Status',
-                  render: (r) => {
-                    const s = String(r.status ?? '—');
-                    const variant =
-                      s === 'COMPLETE'
-                        ? 'success'
-                        : s === 'REJECTED' || s === 'CANCELLED'
-                        ? 'destructive'
-                        : s === 'OPEN' || s === 'TRIGGER PENDING'
-                        ? 'warning'
-                        : 'muted';
-                    return <Badge variant={variant as any}>{s}</Badge>;
-                  },
-                },
-              ]}
-            />
-          </SectionCard>
-
-          {/* Trades */}
-          <SectionCard
-            title="Trades"
-            description="Executed trades today"
-            error={data.errors.trades}
-            count={data.trades?.length ?? null}
-            testid="section-trades"
-          >
-            <DataTable
-              rows={data.trades ?? []}
-              emptyLabel="No trades executed today."
-              columns={[
-                { key: 'trade_id', label: 'Trade ID', render: (r) => <span className="font-mono text-xs">{r.trade_id ?? r.tradeId ?? '—'}</span> },
-                { key: 'tradingsymbol', label: 'Symbol', render: (r) => <span className="font-mono">{r.tradingsymbol ?? r.symbol ?? '—'}</span> },
-                {
-                  key: 'transaction_type',
-                  label: 'Side',
-                  render: (r) => {
-                    const t = r.transaction_type ?? r.side;
-                    if (!t) return '—';
-                    return (
-                      <Badge variant={t === 'BUY' ? 'success' : 'destructive'}>{t}</Badge>
-                    );
-                  },
-                },
-                { key: 'quantity', label: 'Qty', align: 'right', render: (r) => fmtNum(r.quantity, 0) },
-                { key: 'average_price', label: 'Price', align: 'right', render: (r) => fmtNum(r.average_price ?? r.price) },
-                { key: 'exchange_timestamp', label: 'Time', render: (r) => fmtDate(r.exchange_timestamp ?? r.fill_timestamp ?? r.order_timestamp ?? null) },
-              ]}
-            />
-          </SectionCard>
-          </>
           )}
         </>
       )}

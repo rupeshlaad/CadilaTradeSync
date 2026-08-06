@@ -19,6 +19,7 @@ export class CreateMasterAccountDto {
 
   @IsOptional() @IsString() apiKey?: string;
   @IsOptional() @IsString() apiSecret?: string;
+  @IsOptional() @IsString() vendorCode?: string;
   @IsOptional() @IsString() password?: string;
   @IsOptional() @IsString() totpSecret?: string;
   @IsOptional() @IsString() staticIpPrimary?: string;

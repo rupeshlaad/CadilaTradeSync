@@ -9,6 +9,9 @@ import type {
   SubscriptionDto,
   CreateTradingAccountPayload,
   UpdateTradingAccountPayload,
+  BrokerDashboardDto,
+  BrokerSectionResponse,
+  BrokerDashboardSection,
 } from '@cts/shared';
 import { Broker } from '@cts/shared';
 
@@ -135,11 +138,15 @@ export interface AdminInstrumentStatsResponse {
     brokerMappings: number;
     zerodha: number;
     fyers: number;
+    icici: number;
+    shoonya: number;
   };
   lastRefresh: {
     overall: string | null;
     zerodha: string | null;
     fyers: string | null;
+    icici: string | null;
+    shoonya: string | null;
   };
   lastSummaries: Record<string, AdminInstrumentImportSummary>;
 }
@@ -860,7 +867,12 @@ export const api = {
         request<TradingAccountDto>(`/admin/master-accounts/${id}`),
 
       dashboard: (id: string) =>
-        request<any>(`/admin/master-accounts/${id}/dashboard`),
+        request<BrokerDashboardDto>(`/admin/master-accounts/${id}/dashboard`),
+
+      section: (id: string, section: BrokerDashboardSection) =>
+        request<BrokerSectionResponse>(
+          `/admin/master-accounts/${id}/section/${section}`,
+        ),
 
       sessionHealth: (id: string) =>
         request<any>(`/admin/master-accounts/${id}/session-health`),

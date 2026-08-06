@@ -50,7 +50,7 @@ interface ToastItem {
   message?: string;
 }
 
-type ImportKey = 'ZERODHA' | 'FYERS' | 'ALL';
+type ImportKey = 'ZERODHA' | 'FYERS' | 'ICICI_DIRECT' | 'SHOONYA' | 'ALL';
 
 const EXCHANGE_OPTIONS = ['', 'NSE', 'BSE', 'NFO', 'BFO', 'MCX', 'CDS'];
 const SEGMENT_OPTIONS = ['', 'NSE', 'BSE', 'NFO', 'BFO', 'MCX', 'CDS'];
@@ -239,6 +239,8 @@ export default function InstrumentsPage() {
   const [importBusy, setImportBusy] = useState<Record<ImportKey, boolean>>({
     ZERODHA: false,
     FYERS: false,
+    ICICI_DIRECT: false,
+    SHOONYA: false,
     ALL: false,
   });
   const [importSummaries, setImportSummaries] = useState<
@@ -281,8 +283,8 @@ export default function InstrumentsPage() {
   const translateSectionRef = useRef<HTMLDivElement | null>(null);
   const translateSymbolInputRef = useRef<HTMLInputElement | null>(null);
 
-  async function runImportOne(b: Broker.ZERODHA | Broker.FYERS) {
-    const key: ImportKey = b === Broker.ZERODHA ? 'ZERODHA' : 'FYERS';
+  async function runImportOne(b: Broker) {
+    const key = b as ImportKey;
     setImportBusy((s) => ({ ...s, [key]: true }));
     try {
       const res = await api.admin.instruments.importOne(b);
@@ -317,13 +319,17 @@ export default function InstrumentsPage() {
       setImportSummaries((prev) => ({ ...prev, ...merged }));
       const zTot = res.summaries?.[Broker.ZERODHA];
       const fTot = res.summaries?.[Broker.FYERS];
+      const iTot = res.summaries?.[Broker.ICICI_DIRECT];
+      const sTot = res.summaries?.[Broker.SHOONYA];
       const parts: string[] = [];
       if (zTot) parts.push(`Zerodha ${zTot.inserted + zTot.updated}`);
       if (fTot) parts.push(`Fyers ${fTot.inserted + fTot.updated}`);
+      if (iTot) parts.push(`ICICI ${iTot.inserted + iTot.updated}`);
+      if (sTot) parts.push(`Shoonya ${sTot.inserted + sTot.updated}`);
       pushToast({
         kind: 'success',
         title: 'All brokers refreshed',
-        message: parts.join(' · ') || 'Zerodha and Fyers instrument universes reloaded.',
+        message: parts.join(' · ') || 'All broker instrument universes reloaded.',
       });
       if (debouncedQ) runSearch();
       loadStats();
@@ -415,13 +421,21 @@ export default function InstrumentsPage() {
   );
 
   const anyImportRunning =
-    importBusy.ZERODHA || importBusy.FYERS || importBusy.ALL;
+    importBusy.ZERODHA ||
+    importBusy.FYERS ||
+    importBusy.ICICI_DIRECT ||
+    importBusy.SHOONYA ||
+    importBusy.ALL;
   const runningBrokerLabel = importBusy.ALL
     ? 'All brokers'
     : importBusy.ZERODHA
     ? BROKER_LABELS[Broker.ZERODHA]
     : importBusy.FYERS
     ? BROKER_LABELS[Broker.FYERS]
+    : importBusy.ICICI_DIRECT
+    ? BROKER_LABELS[Broker.ICICI_DIRECT]
+    : importBusy.SHOONYA
+    ? BROKER_LABELS[Broker.SHOONYA]
     : null;
 
   return (
@@ -472,8 +486,44 @@ export default function InstrumentsPage() {
             )}
           </Button>
           <Button
+            variant="outline"
+            onClick={() => runImportOne(Broker.ICICI_DIRECT)}
+            disabled={importBusy.ICICI_DIRECT || importBusy.ALL}
+            data-testid="import-icici-btn"
+          >
+            {importBusy.ICICI_DIRECT ? (
+              <>
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Import in Progress
+              </>
+            ) : (
+              <>
+                <Download className="h-4 w-4" />
+                Import ICICI
+              </>
+            )}
+          </Button>
+          <Button
+            variant="outline"
+            onClick={() => runImportOne(Broker.SHOONYA)}
+            disabled={importBusy.SHOONYA || importBusy.ALL}
+            data-testid="import-shoonya-btn"
+          >
+            {importBusy.SHOONYA ? (
+              <>
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Import in Progress
+              </>
+            ) : (
+              <>
+                <Download className="h-4 w-4" />
+                Import Shoonya
+              </>
+            )}
+          </Button>
+          <Button
             onClick={runImportAll}
-            disabled={importBusy.ALL || importBusy.ZERODHA || importBusy.FYERS}
+            disabled={anyImportRunning}
             data-testid="import-refresh-all-btn"
           >
             {importBusy.ALL ? (
@@ -543,6 +593,20 @@ export default function InstrumentsPage() {
           loading={statsLoading && !stats}
           icon={<Badge variant="secondary">{BROKER_LABELS[Broker.FYERS]}</Badge>}
           testId="stat-card-fyers"
+        />
+        <StatCard
+          label="ICICI Instruments"
+          value={formatCount(stats?.counts.icici)}
+          loading={statsLoading && !stats}
+          icon={<Badge variant="secondary">{BROKER_LABELS[Broker.ICICI_DIRECT]}</Badge>}
+          testId="stat-card-icici"
+        />
+        <StatCard
+          label="Shoonya Instruments"
+          value={formatCount(stats?.counts.shoonya)}
+          loading={statsLoading && !stats}
+          icon={<Badge variant="secondary">{BROKER_LABELS[Broker.SHOONYA]}</Badge>}
+          testId="stat-card-shoonya"
         />
         <StatCard
           label="Last Refresh"
