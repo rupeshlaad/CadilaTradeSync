@@ -83,3 +83,38 @@ copy fan-out. INSTRUMENT-MASTER count reconciliation (SecurityMaster.zip vs
 Instrument/InstrumentBroker) and the 100 equity/futures/options cross-broker
 mapping validation ALSO require the DB + import run — NOT done statically; still
 open. testing_agent NOT invoked: the app cannot boot past PrismaModule here.
+
+
+## Sprint 6.2.7.1 (2026-06) — ICICI instrument per-exchange mapping — DONE (static)
+User bug: "same stock TCS shows only on BSE, not NSE" in the ICICI instrument
+list; manual order also still hit "Product-type should be either 'cash','eatm'".
+
+Findings:
+- The `margin`/`"CTS Manual Trade"` in the user's live log is a STALE BINARY —
+  there is NO inline ICICI payload builder anywhere (grep-verified); only the
+  mapper produces user_remark/product, and 6.2.7's mapper already outputs `cash`
+  + `CTSManualTrade`. User must pull 6.2.7 + rebuild. Committed code is correct.
+- TCS-only-on-BSE ROOT CAUSE: `InstrumentBroker @@unique([broker, brokerSymbol])`.
+  A broker symbol is NOT globally unique (TCS lives on NSE AND BSE), so the
+  second exchange's upsert collided and only one listing survived; resolver +
+  search then returned only that exchange.
+
+Fix (feature de6670a, merge 0477cd5 on main):
+- schema: InstrumentBroker gains `exchange`; unique key = (broker, brokerSymbol,
+  exchange) + index. instrument-import.service: composite upsert incl. exchange,
+  re-point instrumentId on update (self-heal). resolver/instrument.service:
+  resolveByBrokerSymbol/findByBrokerSymbol take optional exchange (exact) with
+  NSE>BSE>any fallback. manual-trade-validator passes dto.exchange; copy-trading
+  passes event.exchange; trade-event-normalization uses exchange-preference.
+  LookupInstrumentDto gains optional exchange. Admin manual-trading FE already
+  sends the picked row's exchange (page.tsx L325/L360) — no FE gap.
+Validated: typecheck PASS; build 5/5 PASS; boot sanity PASS.
+
+USER MUST DO (local, their DB via `prisma db push`, NOT migrate — instrument
+tables are not in migration history): `pnpm --filter @cts/database exec prisma
+db push` to add the `exchange` column + new composite unique index, THEN re-run
+the ICICI import (POST /instruments/import/icici) so both NSE + BSE TCS rows are
+created. Adding a required column to a populated table: truncate
+instrument_brokers + instruments first (disposable, re-imported), or push then
+re-import. testing_agent NOT invoked / not feasible: this external repo has no
+preview URL in the pod and needs Postgres+Redis+a live daily Breeze session.
