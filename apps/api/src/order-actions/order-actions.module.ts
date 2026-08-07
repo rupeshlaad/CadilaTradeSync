@@ -3,6 +3,7 @@ import { Module } from '@nestjs/common';
 import { PrismaModule } from '../prisma/prisma.module';
 import { EncryptionModule } from '../encryption/encryption.module';
 import { PositionLifecycleModule } from '../position-lifecycle/position-lifecycle.module';
+import { InstrumentModule } from '../instruments/instrument.module';
 
 import { OrderActionsController } from './order-actions.controller';
 import { OrderActionsService } from './order-actions.service';
@@ -15,7 +16,12 @@ import { OrderActionsService } from './order-actions.service';
  * parallel execution pipeline; no follower-side controllers exposed.
  */
 @Module({
-  imports: [PrismaModule, EncryptionModule, PositionLifecycleModule],
+  imports: [
+    PrismaModule,
+    EncryptionModule,
+    PositionLifecycleModule,
+    InstrumentModule,
+  ],
   controllers: [OrderActionsController],
   providers: [OrderActionsService],
   exports: [OrderActionsService],

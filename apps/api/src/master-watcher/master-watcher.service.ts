@@ -4,18 +4,28 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.module';
-import { EncryptionService } from '../encryption/encryption.service';
-import { ZerodhaAdapter } from '../brokers/zerodha/zerodha.adapter';
+import { BrokerService } from '../brokers/broker.service';
 import { PositionLifecycleService } from '../position-lifecycle/position-lifecycle.service';
-import { AccountType, Broker } from '@prisma/client';
+import { AccountType } from '@prisma/client';
 
+/**
+ * Master Watcher — polls every CONNECTED master account's OWN broker and
+ * forwards each raw order into the position-lifecycle pipeline.
+ *
+ * Sprint 6.2.8 — previously this service was hardcoded to Zerodha (session
+ * lookup, `new ZerodhaAdapter()`, and the lifecycle `broker` tag), so ICICI /
+ * Fyers / Shoonya masters were NEVER polled — the root cause of "trades placed
+ * directly in the ICICI terminal are not detected". It now resolves the
+ * matching credentialed adapter per account via `BrokerService` and handles
+ * each broker's `getOrders()` envelope shape.
+ */
 @Injectable()
 export class MasterWatcherService implements OnModuleInit {
   private readonly logger = new Logger(MasterWatcherService.name);
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly encryption: EncryptionService,
+    private readonly brokerService: BrokerService,
     private readonly lifecycle: PositionLifecycleService,
   ) {}
 
@@ -23,7 +33,9 @@ export class MasterWatcherService implements OnModuleInit {
     this.logger.log('Master Watcher Started');
 
     setInterval(() => {
-      this.pollMasters().catch(console.error);
+      this.pollMasters().catch((err) =>
+        this.logger.error(`pollMasters failed: ${err?.message ?? err}`),
+      );
     }, 3000);
   }
 
@@ -65,49 +77,42 @@ export class MasterWatcherService implements OnModuleInit {
       return;
     }
 
-    const session = await this.prisma.brokerSession.findFirst({
-      where: {
-        tradingAccountId,
-        broker: Broker.ZERODHA,
-      },
-    });
-
-    if (!session) {
-      return;
-    }
-
-    const adapter = new ZerodhaAdapter();
-
-    adapter.setAccessToken(
-      this.encryption.decrypt(
-        session.encryptedAccessToken,
-      ),
-    );
-
-    let orders: any[] = [];
-
+    // Broker-aware adapter resolution — uses the account's OWN broker
+    // (Zerodha / Fyers / ICICI / Shoonya) with the correct credentials.
+    let resolved: Awaited<ReturnType<BrokerService['getAdapterForAccount']>>;
     try {
-      orders = await adapter.getOrders();
+      resolved = await this.brokerService.getAdapterForAccount(tradingAccountId);
     } catch (e: any) {
       this.logger.warn(
-        `Unable to fetch Zerodha orders: ${e.message}`,
+        `Unable to build adapter for master ${tradingAccountId}: ${e?.message ?? e}`,
       );
       return;
     }
 
-    // Sprint 5.3 — every broker order (regardless of status) is
-    // forwarded to the position-lifecycle manager. The manager owns
-    // deduplication (via the position registry's signature gate),
-    // state-machine validation, and the fan-out decision:
-    //   - a fresh COMPLETE_FILL still triggers CopyTradingService,
-    //     preserving pre-lifecycle entry-trade behaviour.
-    //   - modifications, cancellations and exits go through the
-    //     synchronization engine and are audited in execution_history.
-    for (const order of orders) {
-      await this.lifecycle.ingest(
-        { broker: Broker.ZERODHA, tradingAccountId },
-        order,
+    if (!resolved) {
+      // No broker session persisted for this account — nothing to poll.
+      return;
+    }
+
+    const { broker, adapter } = resolved;
+
+    let orders: any[] = [];
+    try {
+      const raw = await (adapter as any).getOrders();
+      orders = BrokerService.toOrderArray(raw);
+    } catch (e: any) {
+      this.logger.warn(
+        `Unable to fetch ${broker} orders for master ${tradingAccountId}: ${e?.message ?? e}`,
       );
+      return;
+    }
+
+    // Every broker order (regardless of status) is forwarded to the
+    // position-lifecycle manager. The manager owns deduplication (via the
+    // position registry's signature gate), state-machine validation, and the
+    // fan-out decision.
+    for (const order of orders) {
+      await this.lifecycle.ingest({ broker, tradingAccountId }, order);
     }
   }
 }

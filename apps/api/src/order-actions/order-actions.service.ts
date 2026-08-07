@@ -11,6 +11,9 @@ import { EncryptionService } from '../encryption/encryption.service';
 import { ZerodhaAdapter } from '../brokers/zerodha/zerodha.adapter';
 import { FyersAdapter } from '../brokers/fyers/fyers.adapter';
 import { ICICIDirectAdapter } from '../brokers/icici/icici.adapter';
+import { InstrumentResolverService } from '../instruments/instrument-resolver.service';
+import { buildIciciPlaceOrder } from '../brokers/order-mapping/icici-order.mapper';
+import { ResolvedInstrument } from '../brokers/order-mapping/instrument-context';
 
 import { PositionLifecycleService } from '../position-lifecycle/position-lifecycle.service';
 import { PositionRegistryService } from '../position-lifecycle/position-registry.service';
@@ -65,6 +68,7 @@ export class OrderActionsService {
     private readonly encryption: EncryptionService,
     private readonly registry: PositionRegistryService,
     private readonly lifecycle: PositionLifecycleService,
+    private readonly resolver: InstrumentResolverService,
   ) {}
 
   // -------------------------------------------------------------------------
@@ -322,22 +326,18 @@ export class OrderActionsService {
 
     if (position.broker === Broker.ICICI_DIRECT) {
       const adapter = await this.buildIciciAdapter(position, accessToken);
-      const order: Record<string, unknown> = {
-        stock_code: position.symbol,
-        exchange_code: position.exchange ?? 'NSE',
-        product: mapIciciProduct(position.productType),
-        action: position.side === 'BUY' ? 'sell' : 'buy',
-        order_type: 'market',
-        quantity: String(exitQuantity),
-        price: '',
-        stoploss: '',
-        validity: 'day',
-        disclosed_quantity: '0',
-        expiry_date: '',
-        right: '',
-        strike_price: '',
-        user_remark: 'CTS Exit',
-      };
+      const instrument = await this.resolveInstrumentForPosition(position);
+      const order = buildIciciPlaceOrder({
+        stockCode: position.symbol,
+        exchange: position.exchange ?? 'NSE',
+        // An exit is the opposite side of the open position.
+        side: position.side === 'BUY' ? 'SELL' : 'BUY',
+        orderType: 'MARKET',
+        quantity: exitQuantity,
+        validity: 'DAY',
+        instrument,
+        remark: 'CTS Exit',
+      });
       return adapter.placeOrder(order);
     }
 
@@ -368,6 +368,34 @@ export class OrderActionsService {
     return adapter;
   }
 
+  /**
+   * Resolve the broker-neutral instrument facts for a tracked position so the
+   * shared ICICI mapper can pick the correct product / right / strike / expiry.
+   * Best-effort: a missing mapping falls back to cash-equity defaults inside
+   * the mapper. Sprint 6.2.8.
+   */
+  private async resolveInstrumentForPosition(
+    position: PositionRecord,
+  ): Promise<ResolvedInstrument | null> {
+    const mapping = await this.resolver.resolveByBrokerSymbol(
+      position.broker,
+      position.symbol,
+      position.exchange,
+    );
+    if (!mapping) return null;
+    return {
+      contractKey: mapping.instrument.contractKey,
+      exchange: mapping.instrument.exchange,
+      segment: mapping.instrument.segment,
+      instrumentType: mapping.instrument.instrumentType,
+      optionType: mapping.instrument.optionType ?? null,
+      strike: mapping.instrument.strike ?? null,
+      expiry: mapping.instrument.expiry
+        ? mapping.instrument.expiry.toISOString()
+        : null,
+      underlying: mapping.instrument.underlying,
+    };
+  }
 
   private async loadAccessToken(position: PositionRecord): Promise<string> {
     const session = await this.prisma.brokerSession.findFirst({
@@ -474,24 +502,6 @@ function mapIciciOrderType(orderType: string | null): string {
     case 'MARKET':
     default:
       return 'market';
-  }
-}
-
-function mapIciciProduct(productType: string | null): string {
-  switch ((productType ?? '').toUpperCase()) {
-    case 'CNC':
-    case 'CASH':
-    case 'DELIVERY':
-      return 'cash';
-    case 'MIS':
-    case 'MARGIN':
-    case 'INTRADAY':
-      return 'margin';
-    case 'NRML':
-    case 'FUTURES':
-      return 'futures';
-    default:
-      return 'cash';
   }
 }
 

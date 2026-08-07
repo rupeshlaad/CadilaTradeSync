@@ -4,6 +4,7 @@ import { AccountType, Broker, ConnectionStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.module';
 import { BrokerService } from '../brokers/broker.service';
 import { InstrumentResolverService } from '../instruments/instrument-resolver.service';
+import { ResolvedInstrument } from '../brokers/order-mapping/instrument-context';
 
 import {
   ManualTradeValidationCheck,
@@ -59,6 +60,11 @@ export class ManualTradeValidatorService {
         name: string;
         followerCount: number;
       };
+      /**
+       * Populated when the instrument mapping resolves — broker-neutral facts
+       * the order mappers need (product / right / strike / expiry). Sprint 6.2.8.
+       */
+      resolvedInstrument?: ResolvedInstrument;
     }
   > {
     const checks: ManualTradeValidationCheck[] = [];
@@ -68,6 +74,7 @@ export class ManualTradeValidatorService {
     let resolvedStrategy:
       | { id: string; name: string; followerCount: number }
       | undefined;
+    let resolvedInstrument: ResolvedInstrument | undefined;
 
     // 1) Required fields — order-type-specific requirements.
     const fieldErrors = requiredFieldErrors(dto);
@@ -234,6 +241,7 @@ export class ManualTradeValidatorService {
       const mapping = await this.resolver.resolveByBrokerSymbol(
         master.broker,
         dto.symbol,
+        dto.exchange,
       );
       instrumentOk = !!mapping;
       mappingOk = !!mapping;
@@ -257,6 +265,18 @@ export class ManualTradeValidatorService {
           exchange: mapping.instrument.exchange,
           segment: mapping.instrument.segment,
           instrumentType: mapping.instrument.instrumentType,
+        };
+        resolvedInstrument = {
+          contractKey: mapping.instrument.contractKey,
+          exchange: mapping.instrument.exchange,
+          segment: mapping.instrument.segment,
+          instrumentType: mapping.instrument.instrumentType,
+          optionType: mapping.instrument.optionType ?? null,
+          strike: mapping.instrument.strike ?? null,
+          expiry: mapping.instrument.expiry
+            ? mapping.instrument.expiry.toISOString()
+            : null,
+          underlying: mapping.instrument.underlying,
         };
       }
     } else {
@@ -342,6 +362,7 @@ export class ManualTradeValidatorService {
       validatedAt: new Date().toISOString(),
       resolvedMaster,
       resolvedStrategy,
+      resolvedInstrument,
     };
   }
 }

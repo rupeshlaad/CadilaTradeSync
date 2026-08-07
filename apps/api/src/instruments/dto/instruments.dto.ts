@@ -42,6 +42,11 @@ export class LookupInstrumentDto {
 
   @IsString()
   symbol!: string;
+
+  /** Optional exchange to disambiguate dual-listed symbols (e.g. TCS NSE/BSE). Sprint 6.2.8. */
+  @IsOptional()
+  @IsString()
+  exchange?: string;
 }
 
 export class TranslateInstrumentDto {
@@ -53,6 +58,11 @@ export class TranslateInstrumentDto {
 
   @IsEnum(Broker)
   toBroker!: Broker;
+
+  /** Optional master-side exchange preference for the translation. Sprint 6.2.8. */
+  @IsOptional()
+  @IsString()
+  exchange?: string;
 }
 
 export class ResolveByContractKeyDto {

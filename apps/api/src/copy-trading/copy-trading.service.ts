@@ -7,6 +7,9 @@ import { InstrumentResolverService } from '../instruments/instrument-resolver.se
 
 import { TradeEvent } from './dto/trade-event.dto';
 import { FyersAdapter } from '../brokers/fyers/fyers.adapter';
+import { ICICIDirectAdapter } from '../brokers/icici/icici.adapter';
+import { buildIciciPlaceOrder } from '../brokers/order-mapping/icici-order.mapper';
+import { ResolvedInstrument } from '../brokers/order-mapping/instrument-context';
 import {
   ExecutionEventRecorderService,
 } from './execution-event.recorder';
@@ -121,31 +124,37 @@ export class CopyTradingService {
         try {
 
           //-----------------------------------------
-          // Only FYERS for MVP
+          // Supported follower brokers: FYERS + ICICI Direct.
+          // (Zerodha / Shoonya copy execution remain future work.)
           //-----------------------------------------
 
-          if (follower.tradingAccount.broker !== Broker.FYERS) {
+          const followerBroker = follower.tradingAccount.broker;
+
+          if (
+            followerBroker !== Broker.FYERS &&
+            followerBroker !== Broker.ICICI_DIRECT
+          ) {
 
             this.logger.warn(
-              `Skipping ${follower.followerUser.email} (${follower.tradingAccount.broker})`,
+              `Skipping ${follower.followerUser.email} (${followerBroker})`,
             );
 
             rec.skip(
               'BROKER_UNSUPPORTED',
-              `Broker ${follower.tradingAccount.broker} is not supported for copy execution (Fyers only, MVP)`,
+              `Broker ${followerBroker} is not supported for copy execution (Fyers + ICICI Direct)`,
             );
 
             continue;
           }
 
           //-----------------------------------------
-          // Broker Session
+          // Broker Session (follower's OWN broker)
           //-----------------------------------------
 
           const session = await this.prisma.brokerSession.findFirst({
             where: {
               tradingAccountId: follower.tradingAccount.id,
-              broker: Broker.FYERS,
+              broker: followerBroker,
             },
           });
 
@@ -163,16 +172,8 @@ export class CopyTradingService {
             continue;
           }
 
-          //-----------------------------------------
-          // Adapter
-          //-----------------------------------------
-
-          const adapter = new FyersAdapter();
-
-          adapter.setAccessToken(
-            this.encryption.decrypt(
-              session.encryptedAccessToken,
-            ),
+          const accessToken = this.encryption.decrypt(
+            session.encryptedAccessToken,
           );
 
           //-----------------------------------------
@@ -186,12 +187,13 @@ export class CopyTradingService {
           rec.setQuantity(qty);
 
           //-----------------------------------------
-          // Symbol Resolution
+          // Symbol Resolution (exchange-aware — Sprint 6.2.8)
           //-----------------------------------------
 
           const instrument = await this.resolver.resolveByBrokerSymbol(
             event.broker as Broker,
             event.symbol,
+            event.exchange || null,
           );
 
           if (!instrument) {
@@ -209,21 +211,23 @@ export class CopyTradingService {
 
           }
 
+          // Prefer the follower listing on the SAME exchange as the master.
           const followerSymbol =
             await this.resolver.getBrokerSymbol(
               instrument.instrument.id,
-              follower.tradingAccount.broker,
+              followerBroker,
+              instrument.instrument.exchange,
             );
 
           if (!followerSymbol) {
 
             this.logger.warn(
-              `No mapping found for ${event.symbol} -> ${follower.tradingAccount.broker}`,
+              `No mapping found for ${event.symbol} -> ${followerBroker}`,
             );
 
             rec.fail(
               'SYMBOL_MAPPING_MISSING',
-              `No InstrumentBroker mapping for ${event.symbol} -> ${follower.tradingAccount.broker}`,
+              `No InstrumentBroker mapping for ${event.symbol} -> ${followerBroker}`,
             );
 
             continue;
@@ -232,71 +236,110 @@ export class CopyTradingService {
 
           rec.setBrokerSymbol(followerSymbol.brokerSymbol);
 
-          //-----------------------------------------
-          // FYERS Order
-          //-----------------------------------------
-
-          const order = {
-
-            symbol: followerSymbol.brokerSymbol,
-
-            qty,
-
-            type: 2,
-
-            side: event.side === 'BUY' ? 1 : -1,
-
-            productType: 'INTRADAY',
-
-            limitPrice: 0,
-
-            stopPrice: 0,
-
-            disclosedQty: 0,
-
-            validity: 'DAY',
-
-            offlineOrder: false,
-
-          };
-
           this.logger.log(
-            `Executing FYERS Order -> ${follower.followerUser.email}`,
+            `Executing ${followerBroker} Order -> ${follower.followerUser.email}`,
           );
-
-          this.logger.log(
-            `MASTER SYMBOL  : ${event.symbol}`,
-          );
-
-          this.logger.log(
-            `FOLLOWER SYMBOL: ${followerSymbol.brokerSymbol}`,
-          );
-
-          this.logger.log(
-            `BROKER         : ${follower.tradingAccount.broker}`,
-          );
-
-          this.logger.log(
-            JSON.stringify(order, null, 2),
-          );
+          this.logger.log(`MASTER SYMBOL  : ${event.symbol}`);
+          this.logger.log(`FOLLOWER SYMBOL: ${followerSymbol.brokerSymbol}`);
+          this.logger.log(`BROKER         : ${followerBroker}`);
 
           rec.setStatus('EXECUTING');
-          const result = await adapter.placeOrder(order);
 
-          if (result.s === 'ok') {
+          //-----------------------------------------
+          // Place on the follower broker
+          //-----------------------------------------
+
+          let result: any;
+          let ok = false;
+          let brokerMessage: string | null = null;
+
+          if (followerBroker === Broker.FYERS) {
+
+            const adapter = new FyersAdapter();
+            adapter.setAccessToken(accessToken);
+
+            const order = {
+              symbol: followerSymbol.brokerSymbol,
+              qty,
+              type: 2,
+              side: event.side === 'BUY' ? 1 : -1,
+              productType: 'INTRADAY',
+              limitPrice: 0,
+              stopPrice: 0,
+              disclosedQty: 0,
+              validity: 'DAY',
+              offlineOrder: false,
+            };
+
+            this.logger.log(JSON.stringify(order, null, 2));
+            result = await adapter.placeOrder(order);
+            ok = result?.s === 'ok';
+            brokerMessage =
+              (result as any)?.message ??
+              (typeof result === 'string' ? result : null);
+
+          } else {
+
+            // ICICI Direct — build the compliant Breeze payload via the shared
+            // mapper (instrument-aware product / right / strike / expiry).
+            const account = follower.tradingAccount;
+            const adapter = new ICICIDirectAdapter();
+            adapter.setCredentials(
+              account.encryptedApiKey
+                ? this.encryption.decrypt(account.encryptedApiKey)
+                : '',
+              account.encryptedApiSecret
+                ? this.encryption.decrypt(account.encryptedApiSecret)
+                : '',
+            );
+            adapter.setSessionToken(accessToken);
+
+            const resolvedInstrument: ResolvedInstrument = {
+              contractKey: instrument.instrument.contractKey,
+              exchange: instrument.instrument.exchange,
+              segment: instrument.instrument.segment,
+              instrumentType: instrument.instrument.instrumentType,
+              optionType: instrument.instrument.optionType ?? null,
+              strike: instrument.instrument.strike ?? null,
+              expiry: instrument.instrument.expiry
+                ? instrument.instrument.expiry.toISOString()
+                : null,
+              underlying: instrument.instrument.underlying,
+            };
+
+            const order = buildIciciPlaceOrder({
+              stockCode: followerSymbol.brokerSymbol,
+              exchange: followerSymbol.exchange ?? instrument.instrument.exchange,
+              side: event.side,
+              orderType: 'MARKET',
+              quantity: qty,
+              validity: 'DAY',
+              instrument: resolvedInstrument,
+              remark: 'CTS Copy',
+            });
+
+            this.logger.log(JSON.stringify(order, null, 2));
+            result = await adapter.placeOrder(order);
+            const orderId =
+              result?.order_id ?? result?.orderId ?? result?.OrderId ?? null;
+            ok = !!orderId;
+            brokerMessage =
+              (result as any)?.message ??
+              (result as any)?.Error ??
+              (typeof result === 'string' ? result : null);
+          }
+
+          if (ok) {
             this.logger.log(`SUCCESS -> ${JSON.stringify(result)}`);
             rec.succeed(result);
           } else {
             this.logger.error(`BROKER ERROR -> ${JSON.stringify(result)}`);
             rec.fail(
               classifyFailure({
-                message: (result as any)?.message,
+                message: brokerMessage ?? undefined,
                 response: result,
               }),
-              (result as any)?.message ??
-                (typeof result === 'string'
-                  ? result
-                  : 'Broker returned non-ok response'),
+              brokerMessage ?? 'Broker returned non-ok response',
               result,
             );
           }

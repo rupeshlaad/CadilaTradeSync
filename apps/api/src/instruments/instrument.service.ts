@@ -17,15 +17,20 @@ export class InstrumentService {
 
   /**
    * Exact broker-symbol lookup. Retained from Sprint 1 so existing callers
-   * (import service, resolver) keep working.
+   * (import service, resolver) keep working. Sprint 6.2.8: a broker symbol is
+   * not unique across exchanges, so an optional `exchange` pins the listing;
+   * otherwise the first match (by insertion order) is returned.
    */
-  async findByBrokerSymbol(broker: Broker, brokerSymbol: string) {
-    return this.prisma.instrumentBroker.findUnique({
+  async findByBrokerSymbol(
+    broker: Broker,
+    brokerSymbol: string,
+    exchange?: string | null,
+  ) {
+    return this.prisma.instrumentBroker.findFirst({
       where: {
-        broker_brokerSymbol: {
-          broker,
-          brokerSymbol,
-        },
+        broker,
+        brokerSymbol,
+        ...(exchange ? { exchange } : {}),
       },
       include: {
         instrument: true,
