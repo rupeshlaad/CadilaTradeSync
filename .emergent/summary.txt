@@ -1,0 +1,138 @@
+I would ADD these mandatory rules (this is the important part)
+1. Broker Onboarding Standard (Highest Priority)
+This project now has ONE broker onboarding standard.
+
+Every broker (Zerodha, Fyers, ICICI Direct, Shoonya, AngelOne, Dhan, Upstox) must follow the same architecture.
+
+Broker SDK
+      ↓
+Broker Adapter
+      ↓
+Shared BrokerService
+      ↓
+Shared DTO
+      ↓
+Shared Dashboard
+
+Only the authentication flow may differ according to the official SDK.
+
+No broker-specific dashboard.
+No broker-specific UI.
+No broker-specific DTO.
+No duplicate mapping logic.
+2. SDK Compliance Rule
+Before writing ANY code:
+
+Research the complete official SDK.
+
+Audit:
+
+Authentication
+Session Management
+Order APIs
+Trade APIs
+Position APIs
+Holdings APIs
+Funds APIs
+Portfolio APIs
+Instrument APIs
+WebSocket APIs
+Rate Limits
+Product Types
+Order Types
+Enums
+Field Names
+
+Prepare the SDK mapping internally before modifying CTS.
+
+Never guess any field mapping.
+3. Zerodha = Gold Standard
+Zerodha implementation is the production reference.
+
+Every broker must expose identical functionality.
+
+Profile
+Funds
+Portfolio
+Holdings
+Positions
+Orders
+Trades
+Dashboard
+Copy Trading
+Manual Trading
+Instruments
+
+must behave exactly the same.
+4. Instrument Rule
+All brokers use ONE Instrument Database.
+
+SDK Instrument File
+        ↓
+Importer
+        ↓
+Shared Instrument Service
+        ↓
+Instrument DB
+
+Never lookup symbols directly from SDK.
+
+Only Instrument Service is allowed.
+5. Manual Trade Rule
+Before modifying any order payload:
+
+Compare the outgoing payload field-by-field with the official SDK.
+
+Produce a compliance matrix.
+
+CTS Field
+↓
+
+SDK Field
+
+↓
+
+Status
+
+↓
+
+Fix
+
+Do not modify until the comparison is complete.
+6. Root Cause Rule
+
+This is probably the biggest lesson.
+
+Never apply multiple speculative fixes.
+
+When a production issue is reported:
+
+1. Reproduce.
+2. Collect logs.
+3. Compare SDK request.
+4. Compare SDK response.
+5. Identify exact root cause.
+6. Fix root cause only.
+7. Validate.
+
+No trial-and-error development.
+7. Git Rule
+Never ask the user to test after every tiny fix.
+
+Complete the entire feature.
+
+Then:
+
+Typecheck
+
+Build
+
+Boot sanity
+
+Merge
+
+Save to GitHub
+
+One complete Manual Validation
+
+Only then hand back to the user.
