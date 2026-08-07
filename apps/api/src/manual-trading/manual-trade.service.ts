@@ -30,6 +30,11 @@ import {
   marketProtectionPercent,
   supportsMarketProtection,
 } from './broker-rules';
+import {
+  buildIciciPlaceOrder,
+  resolveIciciProduct,
+} from '../brokers/order-mapping/icici-order.mapper';
+import { ResolvedInstrument } from '../brokers/order-mapping/instrument-context';
 
 const BUFFER_CAPACITY = 100;
 const MANUAL_TRADE_SOURCE = 'MANUAL';
@@ -150,12 +155,19 @@ export class ManualTradeService implements OnModuleInit {
     }
 
     const master = validation.resolvedMaster!;
+    const instrument: ResolvedInstrument | null =
+      validation.resolvedInstrument ?? null;
 
     // 2) Place on master broker via the existing adapter.
     let placementResponse: unknown;
     let brokerOrderId: string | null = null;
     try {
-      const result = await this.placeOnMaster(master.id, master.broker, dto);
+      const result = await this.placeOnMaster(
+        master.id,
+        master.broker,
+        dto,
+        instrument,
+      );
       placementResponse = result.response;
       brokerOrderId = result.brokerOrderId;
     } catch (err: any) {
@@ -251,6 +263,7 @@ export class ManualTradeService implements OnModuleInit {
           brokerOrderId,
           placementResponse,
           master.broker,
+          instrument,
         );
 
       await this.lifecycle.ingest(
@@ -295,6 +308,7 @@ export class ManualTradeService implements OnModuleInit {
     tradingAccountId: string,
     broker: Broker,
     dto: PlaceManualTradeDto,
+    instrument?: ResolvedInstrument | null,
   ): Promise<{ response: unknown; brokerOrderId: string | null }> {
     const session = await this.prisma.brokerSession.findFirst({
       where: { tradingAccountId, broker },
@@ -338,7 +352,18 @@ export class ManualTradeService implements OnModuleInit {
           : '',
       );
       adapter.setSessionToken(accessToken);
-      const order = buildIciciOrder(dto);
+      const order = buildIciciPlaceOrder({
+        stockCode: dto.symbol,
+        exchange: dto.exchange,
+        side: dto.side,
+        orderType: dto.orderType,
+        quantity: dto.quantity,
+        price: dto.price ?? null,
+        triggerPrice: dto.triggerPrice ?? null,
+        validity: dto.validity ?? 'DAY',
+        instrument: instrument ?? null,
+        remark: 'CTS Manual Trade',
+      });
       const response = await adapter.placeOrder(order);
       return { response, brokerOrderId: extractIciciOrderId(response) };
     }
@@ -424,6 +449,7 @@ export class ManualTradeService implements OnModuleInit {
     brokerOrderId: string,
     placementResponse: unknown,
     broker: Broker,
+    instrument?: ResolvedInstrument | null,
   ): any {
     const nowIso = new Date().toISOString();
     // MARKET orders are assumed instantly filled so the lifecycle
@@ -466,7 +492,7 @@ export class ManualTradeService implements OnModuleInit {
         average_price: isMarket ? dto.price ?? 0 : 0,
         stoploss: dto.triggerPrice ?? 0,
         order_type: iciciOrderType(dto.orderType),
-        product: iciciProduct(dto.product),
+        product: resolveIciciProduct(instrument),
         validity: (dto.validity ?? 'DAY').toLowerCase(),
         order_datetime: nowIso,
         message: extractRejectionReason(placementResponse) ?? null,
@@ -681,23 +707,10 @@ function extractFyersOrderId(response: unknown): string | null {
 }
 
 // ---------------------------------------------------------------------------
-// ICICI Direct (Breeze) order shaping — mirrors the Zerodha/Fyers builders,
-// mapping the shared manual-trade DTO onto the official Breeze place_order
-// parameters. Supports BUY/SELL · MARKET/LIMIT/SL/SL-M · CNC/MIS/NRML.
+// ICICI Direct (Breeze) order shaping — the Breeze place_order payload is now
+// produced by the shared `buildIciciPlaceOrder` mapper (single source of
+// truth). Only the lifecycle-surrogate order_type helper remains local.
 // ---------------------------------------------------------------------------
-
-function iciciProduct(product: PlaceManualTradeDto['product']): string {
-  switch (product) {
-    case 'CNC':
-      return 'cash';
-    case 'MIS':
-      return 'margin';
-    case 'NRML':
-      return 'futures';
-    default:
-      return 'cash';
-  }
-}
 
 function iciciOrderType(orderType: PlaceManualTradeDto['orderType']): string {
   switch (orderType) {
@@ -710,31 +723,6 @@ function iciciOrderType(orderType: PlaceManualTradeDto['orderType']): string {
     default:
       return 'market';
   }
-}
-
-function buildIciciOrder(dto: PlaceManualTradeDto): Record<string, unknown> {
-  const wantsPrice = dto.orderType === 'LIMIT' || dto.orderType === 'SL';
-  const wantsTrigger = dto.orderType === 'SL' || dto.orderType === 'SL-M';
-  return {
-    stock_code: dto.symbol,
-    exchange_code: dto.exchange,
-    product: iciciProduct(dto.product),
-    action: dto.side === 'BUY' ? 'buy' : 'sell',
-    order_type: iciciOrderType(dto.orderType),
-    quantity: String(dto.quantity),
-    price: wantsPrice && dto.price !== undefined ? String(dto.price) : '',
-    stoploss:
-      wantsTrigger && dto.triggerPrice !== undefined
-        ? String(dto.triggerPrice)
-        : '',
-    validity: (dto.validity ?? 'DAY').toLowerCase(),
-    validity_date: '',
-    disclosed_quantity: '0',
-    expiry_date: '',
-    right: '',
-    strike_price: '',
-    user_remark: 'CTS Manual Trade',
-  };
 }
 
 function extractIciciOrderId(response: unknown): string | null {

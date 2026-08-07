@@ -118,3 +118,84 @@ created. Adding a required column to a populated table: truncate
 instrument_brokers + instruments first (disposable, re-imported), or push then
 re-import. testing_agent NOT invoked / not feasible: this external repo has no
 preview URL in the pod and needs Postgres+Redis+a live daily Breeze session.
+
+
+## Sprint 6.2.8 (2026-08) — ICICI Direct production stabilization (FINAL) — DONE (static)
+
+IMPORTANT CONTEXT / CORRECTION: sprints 6.2.6, 6.2.7 and 6.2.7.1 above were
+recorded as DONE but the described code was NOT present in the repository on
+`origin/main` (verified by grep on a fresh clone + on /app). There is no
+`brokers/order-mapping` dir, the lifecycle normalizer had no ICICI branch, the
+master-watcher was still hardcoded to Zerodha, and InstrumentBroker had no
+`exchange` column. Those changes were lost / never committed, so ALL three
+reported production bugs were genuinely unfixed. Sprint 6.2.8 actually
+implements them.
+
+ROOT CAUSES (all confirmed by reading committed code):
+1. Manual trade "product: margin" + "user_remark: CTS Manual Trade" — the real
+   payload source is `manual-trade.service.ts::buildIciciOrder()` (inline), not
+   any mapper. `iciciProduct()` mapped MIS→'margin' (Breeze rejects margin for
+   NSE/BSE cash without entitlement — the exact error) and the remark literal
+   "CTS Manual Trade" (spaces) was sent verbatim. `order-actions.service.ts`
+   had the same bug (mapIciciProduct + "CTS Exit").
+2. ICICI copy NOT detected — TWO breaks: `master-watcher.service.ts` polled
+   ONLY `Broker.ZERODHA` (session + adapter + ingest tag), and
+   `broker-lifecycle-normalizer.ts::normalizeRawOrder` had NO ICICI branch
+   (returned null) — so even ICICI manual trades never fanned out.
+3. ICICI copy execution — `copy-trading.service.ts` skipped every non-FYERS
+   follower ("Fyers only, MVP").
+4. TCS on BSE only, NSE missing — `InstrumentBroker @@unique([broker,
+   brokerSymbol])` had no exchange; the BSE upsert collided with NSE and
+   overwrote it.
+
+FIX (feature branch `feature/icici-production-stabilization`):
+- NEW shared `apps/api/src/brokers/order-mapping/`: `user-remark.ts`
+  (`sanitizeUserRemark`, alphanumeric ≤20), `instrument-context.ts`
+  (`ResolvedInstrument` + classify), `icici-order.mapper.ts`
+  (`buildIciciPlaceOrder` — SINGLE Breeze payload producer: instrument-aware
+  product cash/futures/options, right call/put/others, strike/expiry for
+  derivatives, SL-M emulated as marketable stoploss, sanitized remark,
+  UPPER exchange_code). manual-trade + order-actions + copy-trading follower
+  ALL now build ICICI orders through this one mapper (ICICI dedup done;
+  working Zerodha/Fyers builders left untouched per "don't rewrite working
+  modules").
+- Validator now surfaces `resolvedInstrument`; manual-trade threads it into the
+  mapper. order-actions resolves instrument for the exit.
+- master-watcher: broker-aware via new `BrokerService.getAdapterForAccount()` +
+  `BrokerService.toOrderArray()` envelope helper (polls the account's OWN
+  broker for all 4). normalizer: added `normalizeIcici` + `mapIciciStatus`
+  (Executed→COMPLETE, Ordered/Requested/Queued→OPEN, Partially Executed→PARTIAL,
+  Cancelled→CANCELLED, Rejected/Expired→REJECTED; filled = qty − pending).
+- copy-trading: FYERS + ICICI followers supported; symbol resolution is
+  exchange-aware (prefers master's exchange).
+- Schema: `InstrumentBroker.exchange String` + `@@unique([broker, brokerSymbol,
+  exchange])` + index. import service composite upsert incl. exchange +
+  self-heal instrumentId on update. resolver/instrument.service/trade-event
+  normalization all exchange-aware (NSE>BSE>… preference). Lookup/Translate
+  DTOs gained optional exchange.
+
+Validated (this pod, after `pnpm install --frozen-lockfile` — existing lockfile,
+no new deps): `@cts/api` typecheck PASS; `pnpm -r build` 5/5 PASS; boot sanity
+PASS (full Nest DI graph + all routes resolve; Prisma connects lazily).
+
+NOT verified (impossible in this pod — no Postgres/Redis, no live daily Breeze
+session, no preview URL; testing_agent not applicable/not invoked): live ICICI
+manual BUY/SELL against Breeze prod, live ICICI-terminal detection + copy
+fan-out, live ICICI follower execution, dashboard parity, and the instrument
+count reconciliation — all require the user's local DB + broker session.
+
+LOCAL DATABASE ACTION REQUIRED (user runs locally — I did NOT touch any DB):
+Reason: InstrumentBroker gained a required `exchange` column + new composite
+unique key. Instrument tables are managed by `prisma db push` (they are NOT in
+migration history), so DO NOT `prisma migrate`.
+Commands:
+  1. (disposable data) truncate first so the required column can be added:
+     `psql "$DATABASE_URL" -c 'TRUNCATE TABLE instrument_brokers, instruments RESTART IDENTITY CASCADE;'`
+  2. `pnpm --filter @cts/database exec prisma db push`
+  3. re-run imports so both listings persist: POST /instruments/import/icici
+     (and the other brokers you use).
+Verify: search TCS → expect BOTH NSE and BSE rows; place a manual ICICI cash
+BUY → Breeze payload shows product=cash, user_remark=CTSManualTrade (no spaces).
+
+Feature commit: see git log. Merge (--no-ff) into local `main`; NOT pushed
+(user publishes via Save to GitHub).

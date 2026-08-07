@@ -239,6 +239,12 @@ model InstrumentBroker {
 
   brokerSymbol   String
 
+  // Sprint 6.2.8 — a broker symbol is NOT globally unique. The same tradingsymbol
+  // (e.g. "TCS") is listed on both NSE and BSE. Without exchange in the unique key
+  // the second exchange's upsert collided with the first and only one listing
+  // survived — the root cause of "TCS shows only on BSE, NSE missing".
+  exchange       String
+
   brokerToken    String?
 
   exchangeSymbol String?
@@ -247,11 +253,13 @@ model InstrumentBroker {
 
   createdAt      DateTime @default(now())
 
-  @@unique([broker, brokerSymbol])
+  @@unique([broker, brokerSymbol, exchange])
 
   @@index([instrumentId])
 
   @@index([broker])
+
+  @@index([broker, brokerSymbol])
 
   @@map("instrument_brokers")
 }

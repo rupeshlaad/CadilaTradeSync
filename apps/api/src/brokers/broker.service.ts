@@ -162,6 +162,49 @@ export class BrokerService {
   }
 
   /**
+   * Sprint 6.2.8 — Broker-aware adapter factory for a trading account.
+   *
+   * The single place any polling/execution engine (e.g. MasterWatcherService)
+   * obtains a live, credentialed adapter for an account's OWN broker. This
+   * replaces the previously hardcoded `new ZerodhaAdapter()` in the master
+   * watcher, which meant ICICI / Fyers / Shoonya masters were never polled.
+   *
+   * Returns null when the account has no persisted broker session (nothing to
+   * poll). ICICI receives its api key/secret + session token; Shoonya receives
+   * its uid; Zerodha/Fyers receive the access token — identical wiring to the
+   * dashboard path in `loadContext` + `buildAdapter`.
+   */
+  async getAdapterForAccount(
+    accountId: string,
+  ): Promise<{ broker: Broker; adapter: AnyAdapter } | null> {
+    const { account, session } = await this.loadContext(accountId);
+    if (!session) return null;
+    const accessToken = this.encryption.decrypt(session.encryptedAccessToken);
+    const adapter = this.buildAdapter(
+      account.broker,
+      accessToken,
+      session.userId ?? account.clientId,
+      this.iciciCreds(account),
+    );
+    return { broker: account.broker, adapter };
+  }
+
+  /**
+   * Normalize the various broker `getOrders()` envelopes into a flat array.
+   * Zerodha → array; Fyers → { orderBook | data }; Shoonya → array; ICICI →
+   * the Breeze `Success` block (array or single object). Sprint 6.2.8.
+   */
+  static toOrderArray(orders: any): any[] {
+    if (!orders) return [];
+    if (Array.isArray(orders)) return orders;
+    if (Array.isArray(orders.orderBook)) return orders.orderBook;
+    if (Array.isArray(orders.data)) return orders.data;
+    if (Array.isArray(orders.Success)) return orders.Success;
+    if (typeof orders === 'object') return [orders];
+    return [];
+  }
+
+  /**
    * Sprint 6.1.3 — Static broker-data capabilities, read straight from the
    * adapter classes (no instantiation → no env dependency). The single place
    * every module (broker cards today; Holdings / Positions / Orders / Trades /

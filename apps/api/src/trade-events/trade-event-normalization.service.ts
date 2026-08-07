@@ -98,13 +98,19 @@ export class TradeEventNormalizationService {
     // ---- best-effort resolution ------------------------------------------
     let instrumentId: string | null = null;
     let contractKey: string | null = null;
+    const exchange =
+      typeof (raw as any).exchange === 'string'
+        ? String((raw as any).exchange).trim() || null
+        : null;
     try {
-      const mapping = await this.prisma.instrumentBroker.findUnique({
+      // Sprint 6.2.8 — (broker, brokerSymbol) is no longer unique (exchange is
+      // part of the key). Prefer the event's own exchange, then fall back to
+      // the first match so normalization stays best-effort.
+      const mapping = await this.prisma.instrumentBroker.findFirst({
         where: {
-          broker_brokerSymbol: {
-            broker,
-            brokerSymbol,
-          },
+          broker,
+          brokerSymbol,
+          ...(exchange ? { exchange } : {}),
         },
         include: { instrument: true },
       });

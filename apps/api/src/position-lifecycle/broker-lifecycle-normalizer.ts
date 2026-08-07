@@ -71,6 +71,7 @@ export function normalizeRawOrder(
   if (broker === Broker.ZERODHA) return normalizeZerodha(raw);
   if (broker === Broker.FYERS) return normalizeFyers(raw);
   if (broker === Broker.SHOONYA) return normalizeShoonya(raw);
+  if (broker === Broker.ICICI_DIRECT) return normalizeIcici(raw);
   return null;
 }
 
@@ -351,6 +352,64 @@ function mapShoonyaStatus(status: string): NormalizedStatus | null {
   if (status === 'REJECTED') return 'REJECTED';
   if (status === 'OPEN' || status === 'TRIGGER_PENDING') return 'OPEN';
   if (status === 'PARTIALLY_FILLED') return 'PARTIAL';
+  return null;
+}
+
+/**
+ * ICICI Direct (Breeze) order shape mapping. Sprint 6.2.8 — this branch was
+ * MISSING entirely, so every ICICI order (including manual placements routed
+ * through the lifecycle) normalized to null and never reached the copy engine.
+ * That was the root cause of "trades executed directly in ICICI are not
+ * detected" AND of ICICI manual trades never fanning out to followers.
+ *
+ * Breeze `order` (order_list) fields: order_id, stock_code, exchange_code,
+ * action (Buy/Sell), quantity, pending_quantity, price, average_price,
+ * stoploss, order_type, product, validity, status, order_datetime.
+ * filledQuantity = quantity − pending_quantity.
+ */
+function normalizeIcici(raw: any): NormalizedRawOrder | null {
+  const orderId = raw.order_id != null ? String(raw.order_id) : null;
+  if (!orderId) return null;
+
+  const side = normalizeSide(raw.action ?? raw.side);
+  if (!side) return null;
+
+  const quantity = safeNumber(raw.quantity);
+  const pending = safeNumber(raw.pending_quantity);
+  const filled = Math.max(0, quantity - pending);
+
+  return {
+    brokerOrderId: orderId,
+    status: mapIciciStatus(String(raw.status ?? '').trim()),
+    symbol: String(raw.stock_code ?? raw.symbol ?? '').trim(),
+    exchange: raw.exchange_code ? String(raw.exchange_code) : null,
+    side,
+    quantity,
+    filledQuantity: filled,
+    price: nullableNumber(raw.average_price ?? raw.price),
+    triggerPrice: nullableNumber(raw.stoploss),
+    orderType: raw.order_type ? String(raw.order_type) : null,
+    productType: raw.product ? String(raw.product) : null,
+    brokerUpdatedAt: firstIso(raw.order_datetime, raw.exchange_acknowledgement_date),
+    reason:
+      typeof raw.message === 'string' && raw.message.trim()
+        ? raw.message.trim()
+        : typeof raw.reject_reason === 'string' && raw.reject_reason.trim()
+        ? raw.reject_reason.trim()
+        : null,
+    raw,
+  };
+}
+
+function mapIciciStatus(status: string): NormalizedStatus | null {
+  const s = status.toUpperCase();
+  if (!s) return null;
+  if (s === 'EXECUTED' || s === 'COMPLETE') return 'COMPLETE';
+  if (s === 'PARTIALLY EXECUTED' || s.includes('PARTIAL')) return 'PARTIAL';
+  if (s === 'CANCELLED' || s === 'CANCELED') return 'CANCELLED';
+  if (s === 'REJECTED' || s === 'EXPIRED') return 'REJECTED';
+  if (s === 'ORDERED' || s === 'REQUESTED' || s === 'QUEUED' || s === 'FRESH')
+    return 'OPEN';
   return null;
 }
 

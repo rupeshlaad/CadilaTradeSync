@@ -125,6 +125,7 @@ export class AdminInstrumentController {
     const row = await this.instrumentService.findByBrokerSymbol(
       query.broker,
       query.symbol,
+      query.exchange,
     );
     if (!row) {
       throw new NotFoundException(
@@ -160,6 +161,7 @@ export class AdminInstrumentController {
       query.fromBroker,
       query.fromSymbol,
       query.toBroker,
+      query.exchange,
     );
   }
 

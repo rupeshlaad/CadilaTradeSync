@@ -71,11 +71,17 @@ export class InstrumentImportService {
     // can report an accurate summary. The Instrument row is upserted
     // above regardless (contractKey is shared across brokers), so mapping
     // presence is the correct signal for "did we add a new row?".
+    //
+    // Sprint 6.2.8 — the unique key is now (broker, brokerSymbol, exchange) so
+    // the same broker symbol on NSE and BSE both persist. On update we also
+    // re-point instrumentId to the freshly-upserted Instrument (self-heal for
+    // rows created under the old collapsed key).
     const existingMapping = await this.prisma.instrumentBroker.findUnique({
       where: {
-        broker_brokerSymbol: {
+        broker_brokerSymbol_exchange: {
           broker: instrument.broker,
           brokerSymbol: instrument.brokerSymbol,
+          exchange: instrument.exchange,
         },
       },
       select: { id: true },
@@ -85,17 +91,21 @@ export class InstrumentImportService {
 
       where: {
 
-        broker_brokerSymbol: {
+        broker_brokerSymbol_exchange: {
 
           broker: instrument.broker,
 
           brokerSymbol: instrument.brokerSymbol,
+
+          exchange: instrument.exchange,
 
         },
 
       },
 
       update: {
+
+        instrumentId: dbInstrument.id,
 
         brokerToken: instrument.brokerToken,
 
@@ -108,6 +118,8 @@ export class InstrumentImportService {
         broker: instrument.broker,
 
         brokerSymbol: instrument.brokerSymbol,
+
+        exchange: instrument.exchange,
 
         brokerToken: instrument.brokerToken,
 
