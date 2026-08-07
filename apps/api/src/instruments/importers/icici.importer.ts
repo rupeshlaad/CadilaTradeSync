@@ -157,8 +157,14 @@ export class IciciImporter {
     const strike = this.parseNumber(
       this.pick(row, ['StrikePrice', 'Strike', 'STRIKE']),
     );
-    const underlying =
-      this.pick(row, ['CompanyName', 'ShortName', 'Symbol']) ?? brokerSymbol;
+    // Sprint 6.2.10 — for CASH equity the searchable underlying MUST be the
+    // ticker (brokerSymbol, e.g. "TCS"), NOT the company name. Storing the
+    // company name made the manual-trade ranker score cash equity only at the
+    // brokerSymbol-prefix tier, so the NFO chain (underlying-exact) buried it
+    // below the result cap. Derivatives keep their underlying resolution.
+    const underlying = isFno
+      ? this.pick(row, ['CompanyName', 'ShortName', 'Symbol']) ?? brokerSymbol
+      : brokerSymbol;
 
     const instrumentType = isFno ? optionType ?? 'FUT' : 'EQ';
     const contractKey = isFno

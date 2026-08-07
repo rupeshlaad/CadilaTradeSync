@@ -52,7 +52,11 @@ export class ZerodhaImporter {
         exchange: row.exchange,
         segment: row.segment,
         underlying:
-          row.name && row.name.trim() !== '' ? row.name : row.tradingsymbol,
+          row.instrument_type === 'EQ'
+            ? row.tradingsymbol
+            : row.name && row.name.trim() !== ''
+            ? row.name
+            : row.tradingsymbol,
         instrumentType: row.instrument_type,
         expiry:
           row.expiry && row.expiry !== '' ? new Date(row.expiry) : null,
