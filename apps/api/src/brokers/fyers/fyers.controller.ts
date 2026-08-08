@@ -1,4 +1,4 @@
-import { Controller, Get, Query, Req, Res } from '@nestjs/common';
+import { Controller, Get, Logger, Query, Req, Res } from '@nestjs/common';
 import { Request, Response } from 'express';
 import { randomUUID } from 'crypto';
 
@@ -14,9 +14,17 @@ import {
   setOAuthStateCookie,
 } from '../oauth-cookie';
 
+/** Mask a secret for DEBUG logs — never log full tokens/secrets. */
+function maskSecret(v?: string | null): string {
+  if (!v) return 'none';
+  const s = String(v);
+  return s.length <= 6 ? '***' : `${s.slice(0, 3)}…${s.slice(-3)}`;
+}
+
 @Controller('brokers/fyers')
 export class FyersController {
   private readonly adapter = new FyersAdapter();
+  private readonly logger = new Logger('FyersController');
 
   constructor(
     private readonly fyersService: FyersService,
@@ -82,12 +90,63 @@ export class FyersController {
       );
     }
 
+    // Sprint 6.2.13 (Fyers reconnect fix) — DEBUG trace of the persistence
+    // handshake. Secrets are always masked.
+    this.logger.debug(
+      `[Fyers OAuth] callback started | broker=FYERS masterAccountId=${tradingAccountId}`,
+    );
+
     try {
       const session = await this.adapter.exchangeToken(authCode);
+      this.logger.debug(
+        `[Fyers OAuth] token received | access_token=${maskSecret(
+          session?.access_token,
+        )} refresh_token=${maskSecret(session?.refresh_token)}`,
+      );
+
       const profile = await this.adapter.getProfile();
+      this.logger.debug(
+        `[Fyers OAuth] profile resolved | userId=${profile?.userId ?? 'n/a'}`,
+      );
 
+      // 1) Persist credentials — completes BEFORE any redirect.
+      this.logger.debug(
+        `[Fyers OAuth] credential persistence started | masterAccountId=${tradingAccountId}`,
+      );
       await this.fyersService.saveSession(tradingAccountId, session, profile);
+      this.logger.debug(
+        `[Fyers OAuth] credential persistence completed | masterAccountId=${tradingAccountId}`,
+      );
 
+      // 2) Validate persistence by reloading exactly as the adapter does.
+      this.logger.debug(
+        `[Fyers OAuth] credential validation started | masterAccountId=${tradingAccountId}`,
+      );
+      const validation =
+        await this.fyersService.validatePersistedSession(tradingAccountId);
+      if (!validation.ok) {
+        this.logger.error(
+          `[Fyers OAuth] credential validation FAILED | masterAccountId=${tradingAccountId} reason=${validation.reason}`,
+        );
+        return res.redirect(
+          await buildBrokerCallbackRedirect(this.prisma, {
+            tradingAccountId,
+            returnTo,
+            result: {
+              ok: false,
+              error: `Fyers reconnect failed: ${validation.reason}`,
+            },
+          }),
+        );
+      }
+      this.logger.debug(
+        `[Fyers OAuth] credentials successfully reloaded | masterAccountId=${tradingAccountId} userId=${validation.userId}`,
+      );
+
+      // 3) Only now is the reconnect a success.
+      this.logger.debug(
+        `[Fyers OAuth] redirect initiated (success) | masterAccountId=${tradingAccountId}`,
+      );
       return res.redirect(
         await buildBrokerCallbackRedirect(this.prisma, {
           tradingAccountId,
@@ -99,6 +158,11 @@ export class FyersController {
       const msg =
         (err && (err.message || err.error_type)) ||
         'Broker authentication failed';
+      this.logger.error(
+        `[Fyers OAuth] callback failed | masterAccountId=${tradingAccountId} reason=${String(
+          msg,
+        )}`,
+      );
       return res.redirect(
         await buildBrokerCallbackRedirect(this.prisma, {
           tradingAccountId,

@@ -1,0 +1,53 @@
+{
+  "summary": "Backend-only verification of the Sprint 6.2.13 Fyers OAuth reconnect fix (apps/api/src/brokers/fyers/). PostgreSQL is NOT installed in this pod (no postgres/psql/initdb binaries, no DATABASE_URL, no docker), so live HTTP tests against GET /brokers/fyers/callback are impossible. Instead I drove the COMPILED production classes (dist/brokers/fyers/fyers.controller.js + fyers.service.js, real PlaceholderEncryptionService, real oauth-state.store / oauth-cookie / buildBrokerCallbackRedirect) against an in-memory Prisma double that reproduces Prisma upsert semantics on the (tradingAccountId, broker) compound unique key and the 'undefined fields are skipped on update' rule. 10 scenarios / 30 runtime assertions plus static invariants and a git-diff scope check: 21/21 pytest tests PASS. Also re-verified boot: pnpm --filter @cts/api build exit 0 and node dist/main.js maps /brokers/fyers/login + /brokers/fyers/callback, crashing only at the expected missing DATABASE_URL. No real Fyers login attempted (dummy keys).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /brokers/fyers/callback", "issue": "On validation failure the account is left connectionStatus=CONNECTED with a freshly bumped lastHeartbeat (saveSession already committed those before validatePersistedSession runs). The redirect correctly says ok:false, but the Master Accounts UI/session-health will show the account as CONNECTED with a corrupt session. Consider rolling back to DISCONNECTED / REAUTHENTICATION_REQUIRED in the !validation.ok branch."},
+      {"endpoint": "FyersService.saveSession", "issue": "Coercing userId/userName to '' is destructive on a partial-profile reconnect: a previously VALID persisted userId is overwritten with '' before validation runs, so the user loses the working session and must reconnect again. Safer: validate the live profile (throw before the upsert) instead of writing an empty NOT-NULL value."},
+      {"endpoint": "FyersService.saveSession", "issue": "expiresAt is never written for FYERS (ICICI writes nextICICIExpiry()). Fyers v3 access tokens expire daily, so the shared session-health engine can never mark a Fyers session EXPIRED from persisted data — it will only surface via a runtime token error."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "verification_details": {
+    "callback_ordering": "PASS — runtime call trace on the happy path is adapter.exchangeToken -> adapter.getProfile -> brokerSession.upsert (+ tradingAccount.update) -> brokerSession.findUnique (validation) -> res.redirect. Asserted index(upsert) < index(findUnique) < index(redirect). Static assert also confirms saveSession( < validatePersistedSession( < if (!validation.ok) < result: { ok: true } in controller source, so `connected=1` is unreachable without a passing validation.",
+    "success_redirect": "PASS — http://localhost:3001/dashboard/master-accounts/<id>/dashboard?connected=1&accountId=<id>, no error param.",
+    "validation_failure_redirect": "PASS — profile without userId => .../dashboard/master-accounts?error=Fyers+reconnect+failed%3A+Persisted+broker+user+id+%28API+ID%29+is+empty (never connected=1). Empty access_token => 'Fyers reconnect failed: Persisted access token is empty'.",
+    "create_path": "PASS — row created with encrypted token (enc.v0. prefix), userId/userName from profile, loginTime set, account connectionStatus=CONNECTED and lastHeartbeat set.",
+    "update_path_reconnect": "PASS — pre-existing stale row (loginTime 2020-01-01, userId OLDUSER, STALE-TOKEN) is updated in place (same row id, no duplicate): token replaced with the new token, userId/userName refreshed, loginTime refreshed to now, account lastHeartbeat refreshed. This is exactly the regression the sprint targeted.",
+    "failure_only_paths": "PASS — missing auth_code => error=Missing+auth+code+from+broker with NOTHING persisted; missing/expired state cookie => error=Reconnect+context+missing...; s!=ok => error=Broker+login+error; exchangeToken throw => error=<broker message>, nothing persisted. No unhandled exception / 500 in any path.",
+    "validatePersistedSession_unit": "PASS — no row => ok:false 'No persisted Fyers session found after save'; valid row => ok:true with userId echoed; lookup for a different tradingAccountId does not return another account's row (ok:false). Reload uses the same tradingAccountId_broker unique key that BrokerService.loadContext/buildAdapter uses (verified against broker.service.ts lines 84-102/113-117).",
+    "persistence_failure": "PASS — when tradingAccount.update throws (account row missing) the callback catch block redirects with an error, never success.",
+    "other_brokers_untouched": "PASS — git status shows only apps/api/src/brokers/fyers/{fyers.controller.ts,fyers.service.ts} modified (plus .emergent/emergent.yml). Zerodha/ICICI services, broker.service.ts and all adapters are byte-identical to HEAD.",
+    "boot_and_routes": "PASS — build exit 0; node dist/main.js logs 'Mapped {/brokers/fyers/login, GET}' and 'Mapped {/brokers/fyers/callback, GET}', then PrismaClientInitializationError P1012 'Environment variable not found: DATABASE_URL' (expected/whitelisted); ioredis ECONNREFUSED 6379 expected."
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_fyers_reconnect.py",
+    "/app/backend/tests/fyers_reconnect_harness.cjs",
+    "/app/test_reports/pytest/fyers_reconnect.xml"
+  ],
+  "action_items": [
+    "Decide whether the !validation.ok branch should also reset TradingAccount.connectionStatus (currently left CONNECTED with a fresh lastHeartbeat after a failed reconnect).",
+    "IMPORTANT RCA gap: FyersAdapter is built from the GLOBAL env FYERS_APP_ID/FYERS_SECRET_ID (fyers.adapter.ts lines 66,80) and BrokerService.buildAdapter ignores the per-account creds for Broker.FYERS. validatePersistedSession only proves the row is present/decryptable — it does NOT prove the token works. If the user's 'API ID / credential' error actually originates from an app-id mismatch between env FYERS_APP_ID and the master account's stored apiKey, this fix will still redirect success and the error will reappear. Consider (a) using the per-account apiKey/apiSecret for Fyers like ICICI does, and/or (b) making validatePersistedSession do one live adapter.getProfile() with the RELOADED token.",
+    "Optionally persist expiresAt for Fyers sessions so session-health can mark them EXPIRED."
+  ],
+  "critical_code_review_comments": [
+    "fyers.controller.ts — success path is provably gated: the only `result: { ok: true }` literal appears after the `if (!validation.ok) return res.redirect(...)` early return; there is no other return of ok:true. Correct.",
+    "fyers.service.ts saveSession — loginTime: now is present in BOTH update and create (2 occurrences) and tradingAccount lastHeartbeat: now is set unconditionally, matching icici.service.ts exactly (Zerodha does not set lastHeartbeat, so Fyers is now strictly stronger).",
+    "The upsert + tradingAccount.update pair is NOT in a prisma.$transaction. If the account update fails after the session upsert, the session row is already rewritten while the account stays stale; the callback correctly fails the redirect but the DB is half-written. Low risk, but a $transaction would make reconnect atomic.",
+    "publicToken: null is written for Fyers (correct — Fyers has no public token) and no refresh-token column exists in schema.prisma, so session.refresh_token from exchangeToken is only used for a masked debug log and is otherwise discarded. Fine for this sprint; note that Fyers v3 refresh flow therefore cannot be implemented without a schema change.",
+    "maskSecret() truncates to 3+3 chars and returns 'none' for falsy — no full token is logged anywhere in the new code (verified all logger calls).",
+    "validatePersistedSession's `session.broker !== 'FYERS'` and `session.tradingAccountId !== tradingAccountId` checks are logically unreachable because findUnique is keyed on exactly those two columns — harmless defensive code, not a defect."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_fyers_reconnect.py (new)",
+    "/app/backend/tests/fyers_reconnect_harness.cjs (new)"
+  ],
+  "success_rate": {"backend": "100% of executable checks (21/21 pytest, 30/30 harness assertions)", "frontend": "N/A (skipped per request)"},
+  "seed_data_creation": "None persisted — in-memory Prisma double only (TEST_acct_fyers_1). No DB in this pod.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "admin@cts.local / Admin@12345 — NOT exercised; the API cannot boot past Prisma (no PostgreSQL installed in this pod, `service postgresql start` -> 'unrecognized service').",
+  "context_for_next_testing_agent": "No PostgreSQL/Redis/docker in this pod, so /app/backend/tests/test_oauth_callback_redirect.py (pre-existing, hits http://localhost:4000) fails with ConnectionError — environment limitation, NOT a regression. The new /app/backend/tests/test_fyers_reconnect.py needs no DB: it shells out to fyers_reconnect_harness.cjs which loads apps/api/dist and injects a fake Prisma; re-run `pnpm --filter @cts/api build` first if fyers sources changed, since the harness tests the COMPILED output. The harness is a reusable pattern for testing other broker callbacks (Zerodha/ICICI/Shoonya) without a database.",
+  "rca_of_the_issue": "Original bug: FyersService.saveSession left loginTime and TradingAccount.lastHeartbeat untouched on the update (reconnect) branch, and passed possibly-undefined profile.userId/userName which Prisma silently skips on update — so a reconnect could leave the previous (stale/mismatched) API ID and login time in broker_sessions while the callback had already redirected `connected=1`. Fix verified: userId/userName are now coerced and always written, loginTime + lastHeartbeat refresh on both branches, and the callback reloads the row through the same (tradingAccountId, broker=FYERS) unique key the adapter factory uses, decrypts the token and only redirects ok:true when access token + userId are present; otherwise it redirects ok:false with the reason. Remaining exposure (see action_items): validation is DB-level only, and the Fyers adapter still uses the global env app id rather than the per-account key, so an app-id/secret mismatch would still produce a false success."
+}
