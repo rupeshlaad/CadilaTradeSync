@@ -250,3 +250,20 @@ Prisma, migrations or payload mapping. Validated: `@cts/api` typecheck PASS;
 `pnpm -r build` PASS (admin + web compiled); boot sanity PASS (/masters/:id/sync
 mapped, crash only at PrismaModule/DATABASE_URL). Feature branch
 `feature/master-sync-ui` → `--no-ff` merge into `main`; published via Save to GitHub.
+
+## Sprint 6.2.14 (2026-08) — ICICI Breeze API optimization (no functional change) — DONE (static)
+Scope: apps/api/src/brokers/icici/icici.adapter.ts ONLY.
+- Process-wide Breeze session cache (`breezeSessionCache`, key apiKey:rawSessionToken;
+  fields sessionKey/uid/userName/customer/fetchedAt). `ensureSession(force?)` reuses a
+  cached session across adapter instances; refreshes ONLY when missing, >12h old, or
+  forced. customerdetails is no longer called for every manual trade / sync / dashboard
+  adapter — one resolution per daily session.
+- "No Data Found" (Status 200, Success null, Error "No Data Found") now treated as a
+  successful EMPTY result: get() returns [] (no throw, no warning, sync not failed) for
+  orders/trades/positions/holdings.
+- One-shot session refresh + retry on Unauthorized/invalid-session for idempotent reads
+  (get only); writes/placeOrder untouched (no double-order risk).
+Unchanged: payloads, checksum, headers, authentication, order placement, response parsing
+(except No Data Found). No DB/Prisma/migration/other-adapter/mapping changes.
+Validated: `@cts/api` typecheck PASS; `pnpm -r build` PASS (api+web+admin); boot PASS
+(/masters/:id/sync mapped, crash only at PrismaModule/DATABASE_URL).

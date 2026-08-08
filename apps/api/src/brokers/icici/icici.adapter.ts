@@ -34,6 +34,28 @@ import {
  * getProfile()/funds/holdings/… on the same request without re-plumbing the
  * session key through the shared BrokerService.
  */
+
+/**
+ * Sprint 6.2.14 — process-wide Breeze session cache.
+ *
+ * Breeze `customerdetails` resolves the working session key from the raw daily
+ * API session token. That resolution is stable for the life of the daily
+ * session, so it is memoized ACROSS adapter instances (every manual trade,
+ * Sync Broker cycle and dashboard call builds a fresh adapter). The cache is
+ * refreshed ONLY when it is missing, older than 12h, or a request comes back
+ * Unauthorized / invalid-session — never before every request.
+ */
+interface CachedBreezeSession {
+  sessionKey: string;
+  uid: string;
+  userName: string;
+  customer: any;
+  fetchedAt: number;
+}
+
+const BREEZE_SESSION_TTL_MS = 12 * 60 * 60 * 1000; // 12 hours
+const breezeSessionCache = new Map<string, CachedBreezeSession>();
+
 export class ICICIDirectAdapter implements BrokerAdapter {
   /** Breeze exposes the full account-data surface officially. */
   static readonly capabilities: BrokerCapabilities = {
@@ -129,14 +151,31 @@ export class ICICIDirectAdapter implements BrokerAdapter {
 
   /**
    * Resolve (and memoize) the working session key + user id from the raw API
-   * session token. Idempotent within an adapter instance so getProfile() and
-   * the data calls only hit customerdetails once per request.
+   * session token. Idempotent within an adapter instance AND across instances
+   * via the process-wide `breezeSessionCache` (Sprint 6.2.14) so
+   * customerdetails is hit at most once per daily session (or on a forced
+   * refresh), not once per adapter/request.
    */
-  private async ensureSession(): Promise<void> {
-    if (this.sessionKey) return;
+  private async ensureSession(force = false): Promise<void> {
+    if (this.sessionKey && !force) return;
     if (!this.rawSessionToken) {
       throw new Error('ICICI Direct session token missing. Please reconnect.');
     }
+
+    // Reuse a still-valid cached session (shared across every adapter instance)
+    // before falling back to a customerdetails round-trip.
+    const cacheKey = this.sessionCacheKey();
+    if (!force) {
+      const cached = breezeSessionCache.get(cacheKey);
+      if (cached && Date.now() - cached.fetchedAt < BREEZE_SESSION_TTL_MS) {
+        this.sessionKey = cached.sessionKey;
+        if (!this.uid) this.uid = cached.uid;
+        this.userName = this.userName || cached.userName;
+        this.customer = cached.customer;
+        return;
+      }
+    }
+
     const data = await this.customerDetails(this.rawSessionToken);
     const success = data?.Success ?? {};
     const b64 = success.session_token;
@@ -164,11 +203,32 @@ export class ICICIDirectAdapter implements BrokerAdapter {
     this.userName =
       success.idirect_user_name ?? success.user_name ?? this.uid ?? '';
     this.customer = success;
+
+    // Persist the resolved session for reuse by later adapter instances.
+    breezeSessionCache.set(cacheKey, {
+      sessionKey: this.sessionKey,
+      uid: this.uid,
+      userName: this.userName,
+      customer: this.customer,
+      fetchedAt: Date.now(),
+    });
+
     this.logger.log(
       `[Breeze session] resolved uid=${this.uid || 'n/a'} sessionToken=${this.mask(
         this.sessionKey,
       )} (base64 blob used verbatim for X-SessionToken)`,
     );
+  }
+
+  /** Stable cache key for the current credentials + raw daily session token. */
+  private sessionCacheKey(): string {
+    return `${this.apiKey}:${this.rawSessionToken}`;
+  }
+
+  /** Drop the cached session (instance + process) so the next call re-resolves. */
+  private invalidateSession(): void {
+    this.sessionKey = '';
+    breezeSessionCache.delete(this.sessionCacheKey());
   }
 
   /** Bootstrap call — no checksum headers; auth is the SessionToken + AppKey. */
@@ -244,7 +304,11 @@ export class ICICIDirectAdapter implements BrokerAdapter {
   }
 
   /** Authenticated Breeze GET (Breeze GET requests carry a JSON body). */
-  private async get(endpoint: string, payload: Record<string, any>): Promise<any> {
+  private async get(
+    endpoint: string,
+    payload: Record<string, any>,
+    retried = false,
+  ): Promise<any> {
     await this.ensureSession();
     const body = JSON.stringify(payload ?? {});
     const headers = this.generateHeaders(body);
@@ -266,10 +330,29 @@ export class ICICIDirectAdapter implements BrokerAdapter {
       });
       this.logResponse(endpoint, status, data);
       if (data && data.Error) {
+        // Sprint 6.2.14 — "No Data Found" is an EMPTY successful result, not a
+        // failure. Return [] (no throw, no warning, sync not marked failed) so
+        // orders/trades/positions/holdings simply resolve to an empty list.
+        if (isBreezeNoDataFound(data.Error)) {
+          return [];
+        }
+        // Sprint 6.2.14 — a stale / invalid session refreshes ONCE and retries.
+        if (!retried && isBreezeSessionError(data.Error)) {
+          this.invalidateSession();
+          await this.ensureSession(true);
+          return this.get(endpoint, payload, true);
+        }
         throw new Error(String(data.Error));
       }
       return data && data.Success !== undefined ? data.Success : data;
     } catch (err: any) {
+      // Sprint 6.2.14 — refresh the cached session once on an Unauthorized /
+      // invalid-session transport error, then retry the (idempotent) read.
+      if (!retried && isBreezeSessionError(err)) {
+        this.invalidateSession();
+        await this.ensureSession(true);
+        return this.get(endpoint, payload, true);
+      }
       this.logResponse(
         endpoint,
         err?.response?.status,
@@ -514,4 +597,35 @@ export class ICICIDirectAdapter implements BrokerAdapter {
       exchange_code: exchangeCode,
     });
   }
+}
+
+// ---------------------------------------------------------------------------
+// Sprint 6.2.14 — Breeze response classifiers (no functional change to payload,
+// checksum, headers, auth or order placement).
+// ---------------------------------------------------------------------------
+
+/** Breeze "No Data Found" == a successful, empty result (not an error). */
+function isBreezeNoDataFound(errText: unknown): boolean {
+  return String(errText ?? '')
+    .trim()
+    .toLowerCase()
+    .includes('no data found');
+}
+
+/** Detect an Unauthorized / invalid-session response that warrants a refresh. */
+function isBreezeSessionError(err: unknown): boolean {
+  if (!err) return false;
+  const anyErr = err as any;
+  const status = anyErr?.response?.status;
+  if (status === 401 || status === 403) return true;
+  const msg = String(
+    anyErr?.response?.data?.Error ?? anyErr?.message ?? anyErr ?? '',
+  ).toLowerCase();
+  return (
+    msg.includes('invalid session') ||
+    msg.includes('session expired') ||
+    msg.includes('session is invalid') ||
+    msg.includes('unauthorized') ||
+    msg.includes('unauthorised')
+  );
 }
