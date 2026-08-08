@@ -18,6 +18,7 @@ import {
 import {
   ArrowLeft,
   RefreshCw,
+  RefreshCcw,
   AlertTriangle,
   CheckCircle2,
   XCircle,
@@ -25,6 +26,7 @@ import {
   ShieldAlert,
 } from 'lucide-react';
 import { BrokerDashboardPanel } from '@cts/ui';
+import type { MasterSyncResult } from '@/lib/api';
 import {
   BROKER_LABELS,
   ConnectionStatus,
@@ -86,6 +88,11 @@ export default function MasterDashboardPage() {
   const [confirmDisconnect, setConfirmDisconnect] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
   const [disconnectError, setDisconnectError] = useState<string | null>(null);
+
+  // Sprint 6.2.13 — Manual Broker Sync ("Sync Broker") state.
+  const [syncing, setSyncing] = useState(false);
+  const [syncResult, setSyncResult] = useState<MasterSyncResult | null>(null);
+  const [syncError, setSyncError] = useState<string | null>(null);
 
   async function load(initial = false) {
     if (!id) return;
@@ -156,6 +163,23 @@ export default function MasterDashboardPage() {
       setDisconnectError(e?.message ?? 'Failed to disconnect broker');
     } finally {
       setDisconnecting(false);
+    }
+  }
+
+  // Sprint 6.2.13 — one-shot manual broker sync. Consumes POST /masters/:id/sync
+  // and renders the summary exactly as returned by the backend. No polling.
+  async function handleSyncBroker() {
+    if (!id || syncing) return;
+    try {
+      setSyncing(true);
+      setSyncError(null);
+      setSyncResult(null);
+      const result = await api.admin.masterAccounts.sync(id);
+      setSyncResult(result);
+    } catch (e: any) {
+      setSyncError(e?.message ?? 'Broker sync failed');
+    } finally {
+      setSyncing(false);
     }
   }
 
@@ -242,8 +266,21 @@ export default function MasterDashboardPage() {
           {/* Connection Status */}
           <Card data-testid="section-connection-status">
             <CardHeader className="pb-3">
-              <CardTitle className="text-lg">Connection Status</CardTitle>
-              <CardDescription>Live session and broker connectivity</CardDescription>
+              <div className="flex items-start justify-between gap-4 flex-wrap">
+                <div className="space-y-1">
+                  <CardTitle className="text-lg">Connection Status</CardTitle>
+                  <CardDescription>Live session and broker connectivity</CardDescription>
+                </div>
+                <Button
+                  variant="default"
+                  onClick={handleSyncBroker}
+                  disabled={syncing || isDisconnected}
+                  data-testid="sync-broker-button"
+                >
+                  <RefreshCcw className={`h-4 w-4 ${syncing ? 'animate-spin' : ''}`} />
+                  {syncing ? 'Syncing…' : 'Sync Broker'}
+                </Button>
+              </div>
             </CardHeader>
             <CardContent className="pt-0">
               <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
@@ -312,6 +349,66 @@ export default function MasterDashboardPage() {
                       Go to Master Accounts
                     </Link>
                   </Button>
+                </div>
+              )}
+
+              {/* Sprint 6.2.13 — Manual Broker Sync result / error. */}
+              {syncError && (
+                <div
+                  className="mt-4 rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm flex items-start gap-3"
+                  data-testid="sync-broker-error"
+                >
+                  <AlertTriangle className="h-4 w-4 text-destructive mt-0.5 shrink-0" />
+                  <div>
+                    <p className="font-medium text-destructive">Broker Sync Failed</p>
+                    <p className="text-muted-foreground" data-testid="sync-broker-error-message">
+                      {syncError}
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {syncResult && !syncError && (
+                <div
+                  className="mt-4 rounded-md border border-emerald-500/30 bg-emerald-500/5 p-4 text-sm"
+                  data-testid="sync-broker-result"
+                >
+                  <div className="flex items-center gap-2 mb-3">
+                    <CheckCircle2 className="h-4 w-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                    <p className="font-medium">Broker Sync Completed</p>
+                  </div>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
+                    <div className="space-y-1">
+                      <p className="text-xs uppercase tracking-wide text-muted-foreground">New Trades</p>
+                      <p className="text-base font-semibold" data-testid="sync-new-trades">
+                        {syncResult.newTrades}
+                      </p>
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-xs uppercase tracking-wide text-muted-foreground">Modified Trades</p>
+                      <p className="text-base font-semibold" data-testid="sync-modified-trades">
+                        {syncResult.modifiedTrades}
+                      </p>
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-xs uppercase tracking-wide text-muted-foreground">Closed Trades</p>
+                      <p className="text-base font-semibold" data-testid="sync-closed-trades">
+                        {syncResult.closedTrades}
+                      </p>
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-xs uppercase tracking-wide text-muted-foreground">Copy Jobs Created</p>
+                      <p className="text-base font-semibold" data-testid="sync-copy-jobs">
+                        {syncResult.copyJobsCreated}
+                      </p>
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-xs uppercase tracking-wide text-muted-foreground">Duration</p>
+                      <p className="text-base font-semibold" data-testid="sync-duration">
+                        {(syncResult.durationMs / 1000).toFixed(1)} sec
+                      </p>
+                    </div>
+                  </div>
                 </div>
               )}
             </CardContent>

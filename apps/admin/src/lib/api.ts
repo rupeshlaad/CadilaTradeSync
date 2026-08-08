@@ -740,6 +740,22 @@ export interface PlaceManualTradePayload {
   marketProtection?: ManualTradeMarketProtection;
 }
 
+// ---------------------------------------------------------------------------
+// Sprint 6.2.13 — Manual Broker Sync ("Sync Broker") result.
+// Mirrors MasterSyncResult returned by POST /masters/:id/sync
+// (apps/api/src/master-watcher/master-watcher.service.ts).
+// ---------------------------------------------------------------------------
+
+export interface MasterSyncResult {
+  masterId: string;
+  broker: Broker | null;
+  newTrades: number;
+  modifiedTrades: number;
+  closedTrades: number;
+  copyJobsCreated: number;
+  durationMs: number;
+}
+
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
 const TOKEN_KEY = 'cts_admin_access_token';
 
@@ -913,6 +929,12 @@ export const api = {
           `/admin/master-accounts/${id}/disconnect`,
           { method: 'POST' },
         ),
+
+      // Sprint 6.2.13 — Manual Broker Sync ("Sync Broker" button, Master
+      // Portal only). Consumes the existing POST /masters/:id/sync endpoint;
+      // no business logic in the UI.
+      sync: (id: string) =>
+        request<MasterSyncResult>(`/masters/${id}/sync`, { method: 'POST' }),
 
       create: (payload: CreateTradingAccountPayload) =>
         request<TradingAccountDto>('/admin/master-accounts', {

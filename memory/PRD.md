@@ -228,3 +228,25 @@ workspaces); boot sanity PASS (full DI graph, `/masters/:id/sync` mapped, crash
 only at PrismaModule/DATABASE_URL). No polling remains. Feature branch
 `feature/manual-sync-master` → `--no-ff` merge into local `main`; published by
 the user via Save to GitHub.
+
+## Sprint 6.2.13 (2026-08) — Master Portal Manual Broker Sync UI — DONE (static)
+UI-only. Adds a "Sync Broker" button to the Master Portal broker-account page
+(admin app: master-accounts/[id]/dashboard) that consumes the existing
+POST /masters/:id/sync endpoint. No backend/business-logic changes.
+
+Changes:
+- `apps/admin/src/lib/api.ts`: `MasterSyncResult` type + `masterAccounts.sync(id)`
+  → POST /masters/:id/sync.
+- `apps/admin/.../master-accounts/[id]/dashboard/page.tsx`: "Sync Broker" button
+  in the Connection Status card (Master Portal only). Loading state (disabled +
+  spinner, prevents duplicate clicks); success renders the backend summary
+  (New/Modified/Closed Trades, Copy Jobs Created, Duration); failure shows the
+  clean backend error message. Button disabled while syncing / when disconnected.
+
+Constraints honoured: Master Portal only (Follower/web app untouched); no new
+API/endpoint; no polling/timer/scheduler/queue/worker/auto-sync; no changes to
+broker adapters, InstrumentResolver, manual-trade, copy-trading, importers, DB,
+Prisma, migrations or payload mapping. Validated: `@cts/api` typecheck PASS;
+`pnpm -r build` PASS (admin + web compiled); boot sanity PASS (/masters/:id/sync
+mapped, crash only at PrismaModule/DATABASE_URL). Feature branch
+`feature/master-sync-ui` → `--no-ff` merge into `main`; published via Save to GitHub.
