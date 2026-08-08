@@ -6,6 +6,7 @@ import { BrokersModule } from '../brokers/brokers.module';
 import { InstrumentModule } from '../instruments/instrument.module';
 import { CopyTradingModule } from '../copy-trading/copy-trading.module';
 import { PositionLifecycleModule } from '../position-lifecycle/position-lifecycle.module';
+import { MasterWatcherModule } from '../master-watcher/master-watcher.module';
 
 import { ManualTradeService } from './manual-trade.service';
 import { ManualTradeValidatorService } from './manual-trade-validator.service';
@@ -34,6 +35,7 @@ import { ManualTradeController } from './manual-trade.controller';
     InstrumentModule,
     CopyTradingModule,
     PositionLifecycleModule,
+    MasterWatcherModule,
   ],
   controllers: [ManualTradeController],
   providers: [ManualTradeValidatorService, ManualTradeService],

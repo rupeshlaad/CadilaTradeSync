@@ -1,68 +1,57 @@
-import {
-  Injectable,
-  Logger,
-  OnModuleInit,
-} from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
+import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.module';
 import { BrokerService } from '../brokers/broker.service';
 import { PositionLifecycleService } from '../position-lifecycle/position-lifecycle.service';
-import { AccountType } from '@prisma/client';
+import { Broker } from '@prisma/client';
+import { LifecycleEventType } from '../position-lifecycle/lifecycle.types';
 
 /**
- * Master Watcher — polls every CONNECTED master account's OWN broker and
- * forwards each raw order into the position-lifecycle pipeline.
+ * Master Sync — reconciles a single master account against its OWN broker
+ * on demand and forwards each raw order into the position-lifecycle pipeline.
  *
- * Sprint 6.2.8 — previously this service was hardcoded to Zerodha (session
- * lookup, `new ZerodhaAdapter()`, and the lifecycle `broker` tag), so ICICI /
- * Fyers / Shoonya masters were NEVER polled — the root cause of "trades placed
- * directly in the ICICI terminal are not detected". It now resolves the
- * matching credentialed adapter per account via `BrokerService` and handles
- * each broker's `getOrders()` envelope shape.
+ * Sprint 6.2.12 — the previous continuous background poller (an
+ * `OnModuleInit` `setInterval` loop over every connected master) has been
+ * removed. Synchronization is now strictly manual: it runs once after a
+ * successful CTS manual trade, and once whenever the operator clicks
+ * "Sync Now" (POST /masters/:id/sync). There is no timer, interval,
+ * scheduler or background execution — a sync is a single reconciliation
+ * cycle triggered explicitly.
+ *
+ * The detection logic itself is unchanged from the former `pollMaster`:
+ * resolve the account's credentialed adapter via `BrokerService`, fetch the
+ * broker order book, and push every order through
+ * `PositionLifecycleService.ingest` (which owns deduplication, state-machine
+ * validation and the follower fan-out decision). Only the trigger changed.
  */
 @Injectable()
-export class MasterWatcherService implements OnModuleInit {
+export class MasterWatcherService {
   private readonly logger = new Logger(MasterWatcherService.name);
-
-  /** Default poll cadence when MASTER_WATCHER_POLL_INTERVAL_MS is unset. */
-  private static readonly DEFAULT_POLL_INTERVAL_MS = 30000;
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly brokerService: BrokerService,
     private readonly lifecycle: PositionLifecycleService,
-    private readonly config: ConfigService,
   ) {}
 
-  onModuleInit() {
-    const intervalMs =
-      Number(this.config.get<string>('MASTER_WATCHER_POLL_INTERVAL_MS')) ||
-      MasterWatcherService.DEFAULT_POLL_INTERVAL_MS;
+  /**
+   * Run exactly one synchronization cycle for a single master account.
+   *
+   * Fetches the broker order book, discovers new / modified / closed trades
+   * and creates copy jobs through the existing lifecycle pipeline, then
+   * returns a concise summary of what the cycle produced.
+   */
+  async syncMaster(tradingAccountId: string): Promise<MasterSyncResult> {
+    const startedAt = Date.now();
+    const result: MasterSyncResult = {
+      masterId: tradingAccountId,
+      broker: null,
+      newTrades: 0,
+      modifiedTrades: 0,
+      closedTrades: 0,
+      copyJobsCreated: 0,
+      durationMs: 0,
+    };
 
-    this.logger.log(`Master Watcher Started (poll interval ${intervalMs}ms)`);
-
-    setInterval(() => {
-      this.pollMasters().catch((err) =>
-        this.logger.error(`pollMasters failed: ${err?.message ?? err}`),
-      );
-    }, intervalMs);
-  }
-
-  async pollMasters() {
-    const masters = await this.prisma.tradingAccount.findMany({
-      where: {
-        accountType: AccountType.MASTER,
-        enabled: true,
-        connectionStatus: 'CONNECTED',
-      },
-    });
-
-    for (const master of masters) {
-      await this.pollMaster(master.id);
-    }
-  }
-
-  async pollMaster(tradingAccountId: string) {
     const strategy = await this.prisma.strategy.findFirst({
       where: {
         tradingAccountId,
@@ -72,7 +61,8 @@ export class MasterWatcherService implements OnModuleInit {
     });
 
     if (!strategy) {
-      return;
+      result.durationMs = Date.now() - startedAt;
+      return result;
     }
 
     const followerCount = await this.prisma.follower.count({
@@ -83,7 +73,8 @@ export class MasterWatcherService implements OnModuleInit {
     });
 
     if (followerCount === 0) {
-      return;
+      result.durationMs = Date.now() - startedAt;
+      return result;
     }
 
     // Broker-aware adapter resolution — uses the account's OWN broker
@@ -95,15 +86,18 @@ export class MasterWatcherService implements OnModuleInit {
       this.logger.warn(
         `Unable to build adapter for master ${tradingAccountId}: ${e?.message ?? e}`,
       );
-      return;
+      result.durationMs = Date.now() - startedAt;
+      return result;
     }
 
     if (!resolved) {
-      // No broker session persisted for this account — nothing to poll.
-      return;
+      // No broker session persisted for this account — nothing to sync.
+      result.durationMs = Date.now() - startedAt;
+      return result;
     }
 
     const { broker, adapter } = resolved;
+    result.broker = broker;
 
     let orders: any[] = [];
     try {
@@ -113,7 +107,8 @@ export class MasterWatcherService implements OnModuleInit {
       this.logger.warn(
         `Unable to fetch ${broker} orders for master ${tradingAccountId}: ${e?.message ?? e}`,
       );
-      return;
+      result.durationMs = Date.now() - startedAt;
+      return result;
     }
 
     // Every broker order (regardless of status) is forwarded to the
@@ -121,7 +116,73 @@ export class MasterWatcherService implements OnModuleInit {
     // position registry's signature gate), state-machine validation, and the
     // fan-out decision.
     for (const order of orders) {
-      await this.lifecycle.ingest({ broker, tradingAccountId }, order);
+      const outcome = await this.lifecycle.ingest(
+        { broker, tradingAccountId },
+        order,
+      );
+      if (!outcome.accepted || !outcome.event) {
+        continue;
+      }
+      this.tally(result, outcome.event.type, outcome.followerSync.length);
+    }
+
+    result.durationMs = Date.now() - startedAt;
+
+    this.logger.log(
+      `Master Sync — broker=${broker} new=${result.newTrades} ` +
+        `modified=${result.modifiedTrades} closed=${result.closedTrades} ` +
+        `copyJobs=${result.copyJobsCreated} duration=${result.durationMs}ms`,
+    );
+
+    return result;
+  }
+
+  /** Bucket one accepted lifecycle transition into the summary counters. */
+  private tally(
+    result: MasterSyncResult,
+    type: LifecycleEventType,
+    followerSyncCount: number,
+  ): void {
+    switch (type) {
+      case LifecycleEventType.NEW:
+      case LifecycleEventType.PARTIAL_FILL:
+      case LifecycleEventType.COMPLETE_FILL:
+        result.newTrades += 1;
+        break;
+      case LifecycleEventType.ORDER_MODIFY:
+      case LifecycleEventType.STOP_LOSS_MODIFY:
+      case LifecycleEventType.TARGET_MODIFY:
+        result.modifiedTrades += 1;
+        break;
+      case LifecycleEventType.CANCEL:
+      case LifecycleEventType.EXIT:
+      case LifecycleEventType.POSITION_CLOSED:
+        result.closedTrades += 1;
+        break;
+      default:
+        break;
+    }
+
+    // A COMPLETE_FILL delegates the entry fan-out to CopyTradingService
+    // (one copy job); MODIFY / CANCEL / EXIT produce one follower-sync job
+    // per affected follower order.
+    if (type === LifecycleEventType.COMPLETE_FILL) {
+      result.copyJobsCreated += 1;
+    } else {
+      result.copyJobsCreated += followerSyncCount;
     }
   }
+}
+
+/**
+ * Summary returned by one `syncMaster` reconciliation cycle.
+ */
+export interface MasterSyncResult {
+  masterId: string;
+  broker: Broker | null;
+  newTrades: number;
+  modifiedTrades: number;
+  closedTrades: number;
+  copyJobsCreated: number;
+  durationMs: number;
 }

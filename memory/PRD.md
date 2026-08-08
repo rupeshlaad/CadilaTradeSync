@@ -199,3 +199,32 @@ BUY → Breeze payload shows product=cash, user_remark=CTSManualTrade (no spaces
 
 Feature commit: see git log. Merge (--no-ff) into local `main`; NOT pushed
 (user publishes via Save to GitHub).
+
+## Sprint 6.2.12 (2026-08) — Replace continuous MasterWatcher with manual Sync — DONE (static)
+Continuous background polling removed. Broker reconciliation is now strictly
+on-demand: once after a successful CTS manual trade, and via an operator
+"Sync Now" call. No timer / interval / scheduler / queue / cron / worker.
+
+Changes:
+- `master-watcher.service.ts`: removed `OnModuleInit` + `setInterval` poll loop,
+  `DEFAULT_POLL_INTERVAL_MS`, `MASTER_WATCHER_POLL_INTERVAL_MS` and the
+  `ConfigService` dependency. Renamed the reusable core to
+  `syncMaster(masterId)` — SAME detection logic (broker-aware adapter →
+  getOrders → `PositionLifecycleService.ingest`) — now returning a
+  `MasterSyncResult` summary (new/modified/closed trades, copyJobsCreated,
+  durationMs) and one concise "Master Sync" log line (no repetitive poll logs).
+- NEW `master-sync.controller.ts`: `POST /masters/:id/sync` (ADMIN-guarded),
+  runs exactly one sync cycle and returns the summary.
+- `master-watcher.module.ts`: registers `MasterSyncController`.
+- `manual-trade.service.ts`: after a successful broker placement, calls
+  `masterWatcher.syncMaster(master.id)` once (best-effort, never rolls back the
+  order). `manual-trading.module.ts` imports `MasterWatcherModule`.
+
+Constraints honoured: no DB schema / Prisma migration / seed changes; broker
+payload mappers, InstrumentResolver, importers, copy-trading execution and the
+rest of manual-trade execution all untouched; existing APIs unchanged/backward
+compatible. Validated: `@cts/api` typecheck PASS; `pnpm -r build` PASS (all
+workspaces); boot sanity PASS (full DI graph, `/masters/:id/sync` mapped, crash
+only at PrismaModule/DATABASE_URL). No polling remains. Feature branch
+`feature/manual-sync-master` → `--no-ff` merge into local `main`; published by
+the user via Save to GitHub.

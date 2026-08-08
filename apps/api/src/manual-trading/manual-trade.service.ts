@@ -18,6 +18,7 @@ import { ExecutionEventRecorderService } from '../copy-trading/execution-event.r
 import { classifyFailure } from '../copy-trading/execution-event.recorder';
 import type { ExecutionEvent } from '../copy-trading/execution-event';
 import { PositionLifecycleService } from '../position-lifecycle/position-lifecycle.service';
+import { MasterWatcherService } from '../master-watcher/master-watcher.service';
 
 import { ManualTradeValidatorService } from './manual-trade-validator.service';
 import { PlaceManualTradeDto } from './manual-trade.dto';
@@ -72,6 +73,7 @@ export class ManualTradeService implements OnModuleInit {
     private readonly encryption: EncryptionService,
     private readonly validator: ManualTradeValidatorService,
     private readonly lifecycle: PositionLifecycleService,
+    private readonly masterWatcher: MasterWatcherService,
     private readonly recorder: ExecutionEventRecorderService,
   ) {}
 
@@ -284,6 +286,19 @@ export class ManualTradeService implements OnModuleInit {
       );
       record.rejectionReason = `Lifecycle ingest error — ${err?.message ?? 'unknown'} (order placed on broker)`;
       record.updatedAt = new Date().toISOString();
+    }
+
+    // Sprint 6.2.12 — with the continuous master poller removed, run one
+    // reconciliation cycle against the master's broker right after a
+    // successful placement so the authoritative broker order state (and any
+    // resulting copy fan-out) is picked up immediately. A sync failure must
+    // never roll back the placed order.
+    try {
+      await this.masterWatcher.syncMaster(master.id);
+    } catch (err: any) {
+      this.logger.warn(
+        `Manual trade ${record.id} placed on broker but post-placement sync failed: ${err?.message ?? err}`,
+      );
     }
 
     return this.get(record.id) ?? record;
