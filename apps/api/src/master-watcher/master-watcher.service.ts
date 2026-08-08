@@ -3,6 +3,7 @@ import {
   Logger,
   OnModuleInit,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.module';
 import { BrokerService } from '../brokers/broker.service';
 import { PositionLifecycleService } from '../position-lifecycle/position-lifecycle.service';
@@ -23,20 +24,28 @@ import { AccountType } from '@prisma/client';
 export class MasterWatcherService implements OnModuleInit {
   private readonly logger = new Logger(MasterWatcherService.name);
 
+  /** Default poll cadence when MASTER_WATCHER_POLL_INTERVAL_MS is unset. */
+  private static readonly DEFAULT_POLL_INTERVAL_MS = 30000;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly brokerService: BrokerService,
     private readonly lifecycle: PositionLifecycleService,
+    private readonly config: ConfigService,
   ) {}
 
   onModuleInit() {
-    this.logger.log('Master Watcher Started');
+    const intervalMs =
+      Number(this.config.get<string>('MASTER_WATCHER_POLL_INTERVAL_MS')) ||
+      MasterWatcherService.DEFAULT_POLL_INTERVAL_MS;
+
+    this.logger.log(`Master Watcher Started (poll interval ${intervalMs}ms)`);
 
     setInterval(() => {
       this.pollMasters().catch((err) =>
         this.logger.error(`pollMasters failed: ${err?.message ?? err}`),
       );
-    }, 3000);
+    }, intervalMs);
   }
 
   async pollMasters() {
