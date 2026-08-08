@@ -128,6 +128,15 @@ export class FyersController {
         this.logger.error(
           `[Fyers OAuth] credential validation FAILED | masterAccountId=${tradingAccountId} reason=${validation.reason}`,
         );
+        // Safeguard: a failed reconnect must NOT leave the account looking
+        // CONNECTED. Force it back to DISCONNECTED so the UI/session-health
+        // prompts a fresh reconnect instead of surfacing a stale/corrupt session.
+        await this.prisma.tradingAccount
+          .update({
+            where: { id: tradingAccountId },
+            data: { connectionStatus: 'DISCONNECTED', lastHeartbeat: null },
+          })
+          .catch(() => undefined);
         return res.redirect(
           await buildBrokerCallbackRedirect(this.prisma, {
             tradingAccountId,

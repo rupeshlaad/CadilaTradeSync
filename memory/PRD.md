@@ -267,3 +267,28 @@ Unchanged: payloads, checksum, headers, authentication, order placement, respons
 (except No Data Found). No DB/Prisma/migration/other-adapter/mapping changes.
 Validated: `@cts/api` typecheck PASS; `pnpm -r build` PASS (api+web+admin); boot PASS
 (/masters/:id/sync mapped, crash only at PrismaModule/DATABASE_URL).
+
+## Sprint 6.2.13-fix (2026-08) — Fyers OAuth reconnect credential persistence — DONE (verified)
+Bug: Fyers reconnect OAuth succeeded and redirected "connected", but reopening the
+broker account raised an API-ID/credential error. Root cause: FyersService.saveSession
+left loginTime & TradingAccount.lastHeartbeat untouched on the UPDATE (reconnect) branch
+and passed possibly-undefined profile.userId/userName (Prisma skips undefined NOT-NULL
+fields on update) — so a reconnect could keep the previous stale/mismatched API ID while
+the callback had already redirected success without re-reading the row.
+
+Fix (apps/api/src/brokers/fyers/ ONLY):
+- fyers.service.ts: saveSession mirrors working Zerodha/ICICI — refresh loginTime +
+  account lastHeartbeat on BOTH create & update; write userId/userName deterministically.
+  New validatePersistedSession(tradingAccountId): reloads the BrokerSession via the same
+  (tradingAccountId, broker=FYERS) unique key the adapter factory uses, decrypts the token
+  and verifies token present/decryptable, userId (API ID) present, broker+account match.
+- fyers.controller.ts (GET /brokers/fyers/callback): exchangeToken -> getProfile ->
+  saveSession -> validatePersistedSession -> redirect success ONLY if validation.ok;
+  on failure resets account to DISCONNECTED and redirects ok:false + reason. Masked DEBUG
+  logs at each step (access/refresh tokens masked).
+No schema/Prisma/other-broker/adapter/dashboard/trading changes. Validated: typecheck PASS,
+`pnpm -r build` PASS, boot PASS. testing_agent (iteration_5): 21/21 harness assertions PASS
+(callback ordering, success gated on validation, failure redirect, create+reconnect update
+paths, other brokers byte-identical). Regression harness added under backend/tests/.
+Known follow-up (noted, not in scope): Fyers adapter uses global env FYERS_APP_ID rather
+than per-account key; a live token probe could further harden validation.
