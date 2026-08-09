@@ -1,8 +1,10 @@
 import { Controller, Get, Logger, Query, Req, Res } from '@nestjs/common';
 import { Request, Response } from 'express';
 import { randomUUID } from 'crypto';
+import { TradingAccount } from '@prisma/client';
 
 import { PrismaService } from '../../prisma/prisma.module';
+import { EncryptionService } from '../../encryption/encryption.service';
 import { FyersAdapter } from './fyers.adapter';
 import { FyersService } from './fyers.service';
 import { buildBrokerCallbackRedirect } from '../broker-callback-redirect';
@@ -23,24 +25,71 @@ function maskSecret(v?: string | null): string {
 
 @Controller('brokers/fyers')
 export class FyersController {
-  private readonly adapter = new FyersAdapter();
   private readonly logger = new Logger('FyersController');
 
   constructor(
     private readonly fyersService: FyersService,
     private readonly prisma: PrismaService,
+    private readonly encryption: EncryptionService,
   ) {}
 
+  /**
+   * Sprint 6.2.15 — account isolation. Build a Fyers adapter bound to THIS
+   * account's own App ID (api key) + Secret ID (api secret), mirroring the
+   * ICICIDirectController pattern (decrypt encryptedApiKey/encryptedApiSecret →
+   * adapter.setCredentials). A per-request adapter (never a controller-shared
+   * singleton keyed off env) is what keeps two Fyers accounts from crossing
+   * over onto the env App ID's profile.
+   */
+  private buildAccountAdapter(account: TradingAccount): FyersAdapter {
+    const adapter = new FyersAdapter();
+    const appId = this.encryption.decrypt(account.encryptedApiKey!);
+    const secretId = this.encryption.decrypt(account.encryptedApiSecret!);
+    adapter.setCredentials(appId, secretId);
+    return adapter;
+  }
+
   @Get('login')
-  login(
+  async login(
     @Query('tradingAccountId') tradingAccountId: string,
     @Query('returnTo') returnTo: string | undefined,
     @Res() res: Response,
   ) {
+    const account = tradingAccountId
+      ? await this.prisma.tradingAccount.findUnique({
+          where: { id: tradingAccountId },
+        })
+      : null;
+
+    if (!account) {
+      return res.redirect(
+        await buildBrokerCallbackRedirect(this.prisma, {
+          tradingAccountId,
+          returnTo,
+          result: { ok: false, error: 'Trading account not found.' },
+        }),
+      );
+    }
+    if (!account.encryptedApiKey || !account.encryptedApiSecret) {
+      return res.redirect(
+        await buildBrokerCallbackRedirect(this.prisma, {
+          tradingAccountId,
+          returnTo,
+          result: {
+            ok: false,
+            error:
+              'Save the Fyers API Key (App ID) and API Secret on this account before connecting.',
+          },
+        }),
+      );
+    }
+
+    // Per-account adapter → the OAuth login URL carries THIS account's App ID.
+    const adapter = this.buildAccountAdapter(account);
     const stateId = randomUUID();
     putOAuthState(stateId, { tradingAccountId, returnTo });
     setOAuthStateCookie(res, stateId);
-    return res.redirect(this.adapter.getLoginUrl());
+    return res.redirect(adapter.getLoginUrl());
   }
 
   @Get('callback')
@@ -97,14 +146,45 @@ export class FyersController {
     );
 
     try {
-      const session = await this.adapter.exchangeToken(authCode);
+      // Sprint 6.2.15 — resolve THIS account's own credentials before the token
+      // exchange. generate_access_token + the authenticated read header both
+      // use the account's App ID, so a per-account adapter is mandatory here —
+      // never the env App ID (which would authenticate the wrong Fyers user).
+      const account = await this.prisma.tradingAccount.findUnique({
+        where: { id: tradingAccountId },
+      });
+      if (!account) {
+        return res.redirect(
+          await buildBrokerCallbackRedirect(this.prisma, {
+            tradingAccountId,
+            returnTo,
+            result: { ok: false, error: 'Trading account not found.' },
+          }),
+        );
+      }
+      if (!account.encryptedApiKey || !account.encryptedApiSecret) {
+        return res.redirect(
+          await buildBrokerCallbackRedirect(this.prisma, {
+            tradingAccountId,
+            returnTo,
+            result: {
+              ok: false,
+              error:
+                'Save the Fyers API Key (App ID) and API Secret on this account before connecting.',
+            },
+          }),
+        );
+      }
+      const adapter = this.buildAccountAdapter(account);
+
+      const session = await adapter.exchangeToken(authCode);
       this.logger.debug(
         `[Fyers OAuth] token received | access_token=${maskSecret(
           session?.access_token,
         )} refresh_token=${maskSecret(session?.refresh_token)}`,
       );
 
-      const profile = await this.adapter.getProfile();
+      const profile = await adapter.getProfile();
       this.logger.debug(
         `[Fyers OAuth] profile resolved | userId=${profile?.userId ?? 'n/a'}`,
       );

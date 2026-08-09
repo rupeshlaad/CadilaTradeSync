@@ -49,6 +49,11 @@ function makePrisma(initialSession) {
     broker: 'FYERS',
     connectionStatus: 'DISCONNECTED',
     lastHeartbeat: null,
+    // Sprint 6.2.15 — per-account Fyers credentials are now required by the
+    // callback (decrypted → adapter.setCredentials). Placeholder encryption is
+    // the reversible `enc.v0.<base64>` scheme used by PlaceholderEncryptionService.
+    encryptedApiKey: 'enc.v0.' + Buffer.from('APPID-100').toString('base64'),
+    encryptedApiSecret: 'enc.v0.' + Buffer.from('SECRET-xyz').toString('base64'),
   };
   if (initialSession) store.set(`${ACCOUNT_ID}|FYERS`, { ...initialSession });
   const key = (w) =>
@@ -91,9 +96,13 @@ function makePrisma(initialSession) {
         Object.assign(account, data);
         return account;
       },
-      async findUnique() {
+      async findUnique({ where }) {
         trace.push('tradingAccount.findUnique');
-        return { accountType: account.accountType };
+        // Return the full account row (callback loads it by id for the
+        // per-account credential resolution + the redirect builder reads
+        // accountType off the same row).
+        if (where && where.id && where.id !== account.id) return null;
+        return account;
       },
     },
   };
@@ -121,8 +130,11 @@ function makeReq(stateId) {
 function buildController(prisma, adapterStub) {
   const enc = new PlaceholderEncryptionService();
   const svc = new FyersService(prisma, enc);
-  const ctrl = new FyersController(svc, prisma);
-  ctrl.adapter = adapterStub;
+  const ctrl = new FyersController(svc, prisma, enc);
+  // Sprint 6.2.15 — the controller now builds a per-account adapter internally
+  // (buildAccountAdapter → new FyersAdapter().setCredentials(...)). Stub that
+  // seam so the reconnect flow is exercised without the real Fyers SDK.
+  ctrl.buildAccountAdapter = () => adapterStub;
   // silence Nest logger noise but keep the ordering trace
   ctrl.logger = {
     debug: (m) => trace.push(`log:${String(m).split('|')[0].trim()}`),
