@@ -84,9 +84,15 @@ export class FyersAdapter implements BrokerAdapter {
    * profile instead of whichever account owns the env App ID.
    */
   setCredentials(appId: string, secretId: string) {
-    this.appId = appId;
-    this.secretId = secretId;
-    this.fyers.setAppId(appId);
+    // Sprint 6.2.18 — trim the per-account App ID + Secret. Fyers rejects a
+    // client_id with stray whitespace/newline (a common copy-paste artefact
+    // from the developer portal) as "invalid appId" on the login page. Dimple's
+    // App ID was pasted clean and works; a contaminated value (e.g. a trailing
+    // newline) is sent as client_id=...%0A and fails. Trimming is safe for
+    // every account and never alters a clean value.
+    this.appId = (appId ?? '').trim();
+    this.secretId = (secretId ?? '').trim();
+    this.fyers.setAppId(this.appId);
   }
 
   setAccessToken(accessToken: string) {

@@ -115,6 +115,17 @@ const ACCOUNTS = {
     encryptedApiKey: encCred('APPID-A'),
     encryptedApiSecret: encCred('SECRET-A'),
   },
+  // Sprint 6.2.18 — a Fyers account whose stored App ID has a trailing newline
+  // + surrounding spaces (copy-paste artefact) — the "invalid appId" cause.
+  PADDED: {
+    id: 'acct-padded',
+    accountType: 'MASTER',
+    broker: 'FYERS',
+    connectionStatus: 'DISCONNECTED',
+    lastHeartbeat: null,
+    encryptedApiKey: encCred('  APPID-A\n'),
+    encryptedApiSecret: encCred(' SECRET-A \n'),
+  },
 };
 
 function makePrisma() {
@@ -301,6 +312,20 @@ async function doCallbackViaStateNoCookie(prisma, accountId, returnTo) {
   })();
   check('no state + no cookie → reconnect context missing (fallback intact)',
     /Reconnect(\+|%20)context(\+|%20)missing/.test(noCtx || ''), noCtx);
+
+  // ---- 9. Sprint 6.2.18: App ID with whitespace/newline is trimmed ---------
+  const loginPadded = await doLogin(prisma, ACCOUNTS.PADDED.id);
+  const padUrl = new URL(loginPadded);
+  check('padded App ID login URL client_id is trimmed (== APPID-A)',
+    padUrl.searchParams.get('client_id') === 'APPID-A', loginPadded);
+  check('padded App ID login URL has NO %0A / whitespace in client_id',
+    !/client_id=[^&]*(%0A|%20|\s)/.test(loginPadded || ''), loginPadded);
+  const padCb = await doCallback(prisma, ACCOUNTS.PADDED.id);
+  check('padded App ID account authenticates (trimmed → valid) → success',
+    /connected=1/.test(padCb || ''), padCb);
+  const padSession = prisma._sessions.get(`${ACCOUNTS.PADDED.id}|FYERS`);
+  check('padded account resolves the correct profile after trim (Dimple)',
+    padSession && padSession.userId === 'DIMPLE-FY', padSession && padSession.userId);
 
   console.log(`\nRESULT: ${failures === 0 ? 'ALL PASS' : failures + ' FAILURES'}`);
   process.exit(failures === 0 ? 0 : 1);

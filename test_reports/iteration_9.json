@@ -1,0 +1,30 @@
+{
+  "summary": "Sprint 6.2.18 static verification: FyersAdapter.setCredentials() now trims whitespace/newlines from appId and secretId. (1) `pnpm --filter @cts/api build` — clean, exit 0. (2) `node backend/tests/fyers_account_isolation_harness.cjs` → 'RESULT: ALL PASS' (32/32 checks, including the four Sprint 6.2.18 padded-App-ID checks: trimmed client_id == 'APPID-A', no %0A/%20/whitespace in client_id, callback authenticates successfully with connected=1, and resolves the correct profile 'DIMPLE-FY' after trim). (3) `node backend/tests/fyers_reconnect_harness.cjs` → 'RESULT: ALL PASS' (all Sprint 6.2.13 reconnect-persistence scenarios S1–S10 intact; ordering persist→validate→redirect preserved; master-portal 3001 redirects intact). Sprint 6.2.15 isolation (per-account App ID, no A↔B crossover across 6-step A/B/A/B/B/A switching) and Sprint 6.2.17 state-only recovery (User Portal FOLLOWER→localhost:3000 with /dashboard/broker-accounts, Master Portal→localhost:3001, missing-context fallback message unchanged) both hold. Grep confirms only FyersAdapter carries the `.trim()` change; Zerodha/Shoonya adapters have no setCredentials at all, ICICIDirectAdapter.setCredentials is unchanged (no trim, plain assignment) — untouched as intended.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/fyers_account_isolation_harness.cjs",
+    "/app/backend/tests/fyers_reconnect_harness.cjs"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Fix is minimal, surgical and correct: only FyersAdapter.setCredentials() changed — appId/secretId are trimmed once at the ingress into the adapter and the trimmed value is what drives getLoginUrl (client_id), exchangeToken (client_id + secret_key) and the get_profile header, so all three OAuth touchpoints see the clean value. Null-safety via `(appId ?? '').trim()` is defensive and correct.",
+    "Constructor still uses raw `process.env.FYERS_APP_ID ?? ''` without trim (line 67-68). This is a legacy/single-account fallback only used when setCredentials() is not called; per-account flow (the only production path per Sprint 6.2.15) always overrides via setCredentials(). Low-risk, but for consistency the env fallback could also be trimmed to protect against a stray newline in the .env file itself.",
+    "As the review request itself notes: this fix addresses the whitespace class of 'invalid appId' only. If Rupesh's stored value is a WRONG string (typo/wrong App ID), no code change can fix it — operator must re-save the correct App ID. Recommend surfacing this on the failure redirect (e.g. include a hint like 'verify the App ID in the account credentials') to aid operator triage — nice-to-have, not blocking."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100%", "frontend": "N/A (skipped per request)"},
+  "test_credentials": "None required (static verification, in-memory Prisma double, patched Fyers SDK).",
+  "seed_data_creation": "None (harness builds in-memory accounts A/Dimple, B/Rupesh, NOCRED, F/FOLLOWER, PADDED with encrypted App IDs).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Sprint 6.2.18 whitespace-trim fix independently confirmed via both harnesses. Build is clean. If a future iteration needs to guard against other invalid-appId classes (e.g. inner whitespace, quoted values, hidden zero-width chars), extend the PADDED account fixture with those variants — current test only covers leading spaces + trailing newline.",
+  "rca of the issue": "RCA: PlaceholderEncryptionService.decrypt() returns whatever bytes were encrypted verbatim. If the operator pasted the App ID from the Fyers developer portal with a trailing newline or surrounding spaces, that whitespace was persisted in encryptedApiKey and re-emitted on decrypt. setCredentials() previously assigned the raw string straight to this.appId and this.fyers.setAppId(), so the OAuth login URL was built as `client_id=APPID-200%0A` — Fyers' login page rejects this as 'invalid appId' BEFORE the callback ever fires (explains why Dimple's clean paste works and Rupesh's contaminated paste fails). Fix: single-line `.trim()` on both appId and secretId in setCredentials(). Mitigation for non-whitespace typos: operator must re-save correct App ID (no code fix possible)."
+}
