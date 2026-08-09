@@ -403,3 +403,26 @@ regression ALL PASS; 100%, no issues. Published by the user via Save to GitHub.
 Follow-up (non-blocking): add an HMAC signature to the state token for
 defense-in-depth (currently base64url of raw JSON, fails safe via DB validation).
 
+
+## Sprint 6.2.18 (2026-06) — Fyers "invalid appId" (whitespace-trim) — DONE (verified)
+Symptom: Dimple's Fyers account connects; Rupesh's fails on the Fyers login page
+with "invalid appId" (before the callback). RCA: the per-account login path is
+correct (Sprint 6.2.15) — env is NOT used, no singleton, setCredentials always
+runs when creds exist — so the App ID VALUE sent for Rupesh is simply not a valid
+Fyers App ID (root cause category C: wrong/invalid stored App ID). The one
+code-fixable manifestation: decrypt() returns raw stored bytes and
+setCredentials() never trimmed, so a copy-paste artefact (trailing newline /
+spaces on the stored App ID) is sent as client_id=...%0A → "invalid appId".
+
+Fix (Fyers-only, one method): FyersAdapter.setCredentials() now
+`this.appId=(appId??'').trim(); this.secretId=(secretId??'').trim()` before
+setAppId(). Trim is a no-op for clean values (Dimple unaffected). No change to
+OAuth state/cookies/callback/routing/redirect/security/other brokers/frontend/DB.
+Test: isolation harness PADDED account (encryptedApiKey '  APPID-A\n') asserts
+trimmed client_id, no %0A/whitespace, successful auth, correct profile.
+Validated: build PASS; isolation harness 32/32 PASS; reconnect harness ALL PASS;
+testing_agent iteration_9 100%, no issues. Zerodha/Shoonya/ICICI untouched.
+IMPORTANT: if Rupesh's stored App ID is the WRONG string (typo / wrong app / raw
+secret in the App-ID field), no code fixes it — re-save the correct App ID in the
+DB. Diagnostic query provided to the user. Published via Save to GitHub.
+
