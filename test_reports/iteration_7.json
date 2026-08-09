@@ -1,0 +1,44 @@
+{
+  "summary": "Sprint 6.2.16 static verification: FyersController decorator now registers dual path prefixes ['brokers/fyers','api/brokers/fyers'], matching the ICICI reference pattern. Backend build is clean, Nest startup logs map all four expected routes, and both no-regression harnesses (account isolation, reconnect) print 'RESULT: ALL PASS'. No other broker controller was modified.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "verification_evidence": {
+    "build": "pnpm --filter @cts/api build -> exit 0 (prisma generate + nest build clean)",
+    "route_mapping": [
+      "FyersController {/brokers/fyers}: Mapped {/brokers/fyers/login, GET}",
+      "FyersController {/brokers/fyers}: Mapped {/brokers/fyers/callback, GET}",
+      "FyersController {/api/brokers/fyers}: Mapped {/api/brokers/fyers/login, GET}",
+      "FyersController {/api/brokers/fyers}: Mapped {/api/brokers/fyers/callback, GET}"
+    ],
+    "harness_account_isolation": "RESULT: ALL PASS (20+ assertions incl. per-account App ID isolation, no crossover across switches, no-cred error paths, unknown-account error)",
+    "harness_reconnect": "RESULT: ALL PASS (S2..S10 scenarios incl. token/userId/userName/heartbeat refresh, all failure redirects, heartbeat-throw path)",
+    "other_broker_controllers_unchanged": {
+      "icici": "@Controller(['brokers/icici','api/brokers/icici']) — unchanged (reference)",
+      "shoonya": "@Controller('brokers/shoonya') — unchanged",
+      "zerodha": "@Controller('brokers/zerodha') — unchanged"
+    },
+    "note_on_boot": "App does not boot past PrismaModule (no DATABASE_URL in pod) — expected per user note; route mapping logs are emitted before that failure, which is sufficient for this static verification."
+  },
+  "test_report_links": [
+    "/app/backend/tests/fyers_account_isolation_harness.cjs",
+    "/app/backend/tests/fyers_reconnect_harness.cjs"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Decorator change is minimal and surgical (single line), mirroring the ICICI pattern exactly — good consistency.",
+    "Consider standardizing Zerodha and Shoonya controllers to the same dual-prefix pattern in a future sprint so all broker callbacks work regardless of whether the ingress strips /api or not (out of scope for this sprint)."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100%", "frontend": "N/A (skipped per request)"},
+  "seed_data_creation": "None (harnesses use in-memory Prisma double).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Fyers controller now serves both /brokers/fyers/* and /api/brokers/fyers/* verbatim (global prefix is empty). If future sprints re-introduce setGlobalPrefix('api'), the dual-array decorator will produce duplicate /api/api/... routes — revisit then."
+}

@@ -23,7 +23,7 @@ function maskSecret(v?: string | null): string {
   return s.length <= 6 ? '***' : `${s.slice(0, 3)}…${s.slice(-3)}`;
 }
 
-@Controller('brokers/fyers')
+@Controller(['brokers/fyers', 'api/brokers/fyers'])
 export class FyersController {
   private readonly logger = new Logger('FyersController');
 
