@@ -178,6 +178,9 @@ export default function BrokerAccountsPage() {
   const [sessionToken, setSessionToken] = useState('');
   const [sessionSubmitting, setSessionSubmitting] = useState(false);
   const [sessionError, setSessionError] = useState<string | null>(null);
+  // Fyers connect confirmation dialog (UI-only). Holds the pending Fyers OAuth
+  // login URL; the redirect happens only after the user clicks Continue.
+  const [fyersConfirmUrl, setFyersConfirmUrl] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -303,7 +306,9 @@ export default function BrokerAccountsPage() {
         window.location.href = `${apiBaseUrl}/brokers/zerodha/login?${q}`;
         break;
       case Broker.FYERS:
-        window.location.href = `${apiBaseUrl}/brokers/fyers/login?${q}`;
+        // UI-only: confirm before redirecting so the user can avoid a reused
+        // Fyers browser session connecting the wrong account.
+        setFyersConfirmUrl(`${apiBaseUrl}/brokers/fyers/login?${q}`);
         break;
       case Broker.SHOONYA:
         window.location.href = `${apiBaseUrl}/brokers/shoonya/login?${q}`;
@@ -711,6 +716,71 @@ export default function BrokerAccountsPage() {
               data-testid="icici-session-connect"
             >
               {sessionSubmitting ? 'Connecting…' : 'Connect'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={fyersConfirmUrl !== null}
+        onOpenChange={(o) => {
+          if (!o) setFyersConfirmUrl(null);
+        }}
+      >
+        <DialogContent data-testid="fyers-connect-confirm-modal">
+          <DialogHeader>
+            <DialogTitle>Connect FYERS Account</DialogTitle>
+            <DialogDescription className="space-y-2">
+              <span className="block">
+                If another FYERS account is already logged in in this browser,
+                FYERS may reuse that session.
+              </span>
+              <span className="block">For connecting a different FYERS account:</span>
+              <span className="block">
+                • Log out from{' '}
+                <a
+                  href="https://trade.fyers.in/"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="underline"
+                  data-testid="fyers-connect-help-link"
+                >
+                  https://trade.fyers.in
+                </a>{' '}
+                first, OR
+              </span>
+              <span className="block">
+                • Open the connection in an Incognito/Private window.
+              </span>
+              <span className="block">Then continue with authentication.</span>
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <a
+              href="https://trade.fyers.in/"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mr-auto text-sm underline self-center"
+              data-testid="fyers-connect-open-login-link"
+            >
+              Open FYERS Login
+            </a>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setFyersConfirmUrl(null)}
+              data-testid="fyers-connect-cancel"
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              onClick={() => {
+                if (fyersConfirmUrl) window.location.href = fyersConfirmUrl;
+              }}
+              data-testid="fyers-connect-continue"
+            >
+              Continue
             </Button>
           </DialogFooter>
         </DialogContent>
