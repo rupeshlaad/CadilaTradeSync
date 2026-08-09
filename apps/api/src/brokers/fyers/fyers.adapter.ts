@@ -60,11 +60,33 @@ export class FyersAdapter implements BrokerAdapter {
   };
 
   private fyers: any;
+  // Sprint 6.2.15 — per-account Fyers credentials. Default to the legacy env
+  // values so an adapter built without setCredentials() is byte-identical to
+  // the previous single-account behaviour; a per-account adapter overrides them
+  // via setCredentials().
+  private appId: string = process.env.FYERS_APP_ID ?? '';
+  private secretId: string = process.env.FYERS_SECRET_ID ?? '';
 
   constructor() {
     this.fyers = new fyersModel();
-    this.fyers.setAppId(process.env.FYERS_APP_ID!);
+    this.fyers.setAppId(this.appId);
     this.fyers.setRedirectUrl(process.env.FYERS_REDIRECT_URI!);
+  }
+
+  /**
+   * Sprint 6.2.15 — account isolation. Mirrors ICICIDirectAdapter.setCredentials:
+   * every Fyers TradingAccount uses its OWN App ID (api key) + Secret ID
+   * (api secret), never the global FYERS_APP_ID/FYERS_SECRET_ID. The App ID
+   * drives the OAuth login URL, the generate_access_token exchange AND the
+   * authenticated request header (`appId:accessToken`), so it must be set on
+   * the SDK instance before any of login / exchange / read is called. This is
+   * what makes two Fyers accounts (e.g. Dimple vs Rupesh) resolve to their own
+   * profile instead of whichever account owns the env App ID.
+   */
+  setCredentials(appId: string, secretId: string) {
+    this.appId = appId;
+    this.secretId = secretId;
+    this.fyers.setAppId(appId);
   }
 
   setAccessToken(accessToken: string) {
@@ -77,8 +99,8 @@ export class FyersAdapter implements BrokerAdapter {
 
   async exchangeToken(token: string): Promise<any> {
     const session = await this.fyers.generate_access_token({
-      client_id: process.env.FYERS_APP_ID!,
-      secret_key: process.env.FYERS_SECRET_ID!,
+      client_id: this.appId,
+      secret_key: this.secretId,
       auth_code: token,
     });
     this.fyers.setAccessToken(session.access_token);

@@ -1,0 +1,32 @@
+{
+  "summary": "Sprint verification for Fyers multi-account isolation bug fix (A=Dimple, B=Rupesh crossover). Static/harness verification per PRD (no DB in pod). Build clean, both node harnesses print 'RESULT: ALL PASS', all 43 pytest cases pass. Reported crossover bug is fixed; no regressions to Sprint 6.2.13 reconnect flow or to other brokers.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/fyers_account_isolation_harness.cjs",
+    "/app/backend/tests/test_fyers_account_isolation.py",
+    "/app/backend/tests/fyers_reconnect_harness.cjs",
+    "/app/backend/tests/test_fyers_reconnect.py"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "fyers.adapter.ts still keeps env-based defaults for appId/secretId (lines 67-68) for back-compat. Harness proves the auth flow never uses them (env set to decoy 'ENVLEAK-APP' and never leaks), but consider removing the env defaults entirely in a follow-up to eliminate the last remaining foot-gun.",
+    "buildAccountAdapter in fyers.controller.ts correctly decrypts encryptedApiKey/encryptedApiSecret per account and calls setCredentials before every getLoginUrl / exchangeToken / getProfile call — matches the ICICI pattern as mandated.",
+    "broker.service.ts rename iciciCreds -> accountApiCreds now covers both ICICI_DIRECT and FYERS; FYERS branch calls setCredentials(apiKey, apiSecret) before setAccessToken so dashboard reads are also isolated."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (43/43 pytest, 20/20 isolation harness assertions, 21/21 reconnect harness assertions)", "frontend": "N/A (backend-only per request)"},
+  "test_credentials": "Not applicable — static harness verification, no live broker/DB.",
+  "seed_data_creation": "None (in-memory Prisma double + patched Fyers SDK prototype methods in harness).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Verification model for this repo is STATIC (no Postgres/Redis in pod). Steps: (1) pnpm --filter @cts/api build, (2) node backend/tests/fyers_account_isolation_harness.cjs, (3) node backend/tests/fyers_reconnect_harness.cjs, (4) pytest backend/tests/test_fyers_account_isolation.py backend/tests/test_fyers_reconnect.py -q. Booting apps/api/dist/main.js will crash at PrismaModule on missing DATABASE_URL — that is EXPECTED, not a failure. Do NOT attempt live HTTP tests.",
+  "rca_of_the_issue": "Root cause (confirmed by user + fix): FyersAdapter previously used process.env.FYERS_APP_ID / FYERS_SECRET_ID in constructor, getLoginUrl and exchangeToken. Since Fyers auth header is `appId:accessToken`, every Fyers TradingAccount resolved to whichever broker user owned the env App ID (Dimple), regardless of which account the user was reconnecting. Fix: adapter gained instance fields appId/secretId + setCredentials(); FyersController removed its shared adapter and now builds a per-account adapter (buildAccountAdapter) that decrypts encryptedApiKey/encryptedApiSecret and calls setCredentials before each SDK call — mirroring the ICICI pattern. broker.service.ts buildAdapter FYERS branch does the same for dashboard reads. Verified by 20-assertion isolation harness (env set to decoy 'ENVLEAK-APP' to trap any global leak; A->B->A->B->B->A switching never crosses profiles; two independent BrokerSession rows coexist by (tradingAccountId, broker) composite key)."
+}

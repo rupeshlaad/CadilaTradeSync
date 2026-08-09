@@ -122,6 +122,11 @@ class TestNoOtherBrokerFilesChanged:
             and not line[3:].strip().startswith("test_reports/")
         ]
         offenders = [
-            p for p in changed if not p.startswith("apps/api/src/brokers/fyers/")
+            p
+            for p in changed
+            if not p.startswith("apps/api/src/brokers/fyers/")
+            # Sprint 6.2.15 — account isolation also makes Fyers reads use the
+            # account's own App ID in the shared broker adapter factory.
+            and p != "apps/api/src/brokers/broker.service.ts"
         ]
         assert offenders == [], f"unexpected modified files: {offenders}"

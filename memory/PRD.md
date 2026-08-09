@@ -292,3 +292,55 @@ No schema/Prisma/other-broker/adapter/dashboard/trading changes. Validated: type
 paths, other brokers byte-identical). Regression harness added under backend/tests/.
 Known follow-up (noted, not in scope): Fyers adapter uses global env FYERS_APP_ID rather
 than per-account key; a live token probe could further harden validation.
+
+
+## Sprint 6.2.15 (2026-06) — Fyers multi-account isolation — DONE (verified)
+Bug (critical): two Fyers master accounts with DIFFERENT API Key (App ID) +
+Secret crossed over — Reconnect A authenticated Dimple; after disconnect A and
+Reconnect B, it STILL authenticated Dimple (even after deleting Dimple and
+recreating only Rupesh). Reconnect persistence (6.2.13-fix) was fine; account
+isolation was broken.
+
+ROOT CAUSE (confirmed): `FyersAdapter` hardcoded `process.env.FYERS_APP_ID` /
+`FYERS_SECRET_ID` in its constructor, `getLoginUrl()` (generateAuthCode) and
+`exchangeToken()` (generate_access_token). Fyers auth header is
+`appId:accessToken`, so the OAuth login URL, the token exchange AND every
+authenticated read used the SINGLE env App ID regardless of TradingAccount →
+every Fyers account resolved to whoever owns the env App ID. Zerodha "works"
+only because there is one env app; ICICI was already correct (per-account
+`setCredentials`).
+
+FIX (feature branch `feature/fyers-account-isolation`; Fyers-only + the shared
+factory's Fyers branch — mirrors ICICI, no architecture redesign, no
+dashboard/trading behaviour change):
+- `fyers.adapter.ts`: instance fields `appId`/`secretId` (default to the env
+  values for back-compat) + `setCredentials(appId, secretId)`; `exchangeToken`
+  now uses `this.appId`/`this.secretId`, never env.
+- `fyers.controller.ts`: removed the controller-shared `new FyersAdapter()`;
+  injects `EncryptionService`; new `buildAccountAdapter(account)` decrypts
+  `encryptedApiKey`/`encryptedApiSecret` → `setCredentials`. `login()` (now
+  async) and `callback()` both load the account and build a PER-ACCOUNT adapter;
+  both guard missing creds with a clean error redirect (no false success).
+- `broker.service.ts`: `iciciCreds` → `accountApiCreds` (now ICICI_DIRECT AND
+  FYERS); `buildAdapter` FYERS branch calls `setCredentials` before
+  `setAccessToken` so dashboard/master-watcher reads are isolated too.
+No schema/Prisma/migration change (encryptedApiKey/encryptedApiSecret already
+exist and are populated by onboarding). Other brokers byte-identical.
+
+Validated: `@cts/api` typecheck PASS; `pnpm -r build` 5/5 PASS; boot sanity PASS
+(full DI graph incl. FyersModule, all routes mapped; crash only at
+PrismaModule/DATABASE_URL). testing_agent iteration_6: 43/43 pytest, 20/20
+account-isolation harness, 21/21 reconnect harness — ALL PASS, no regressions
+(A=Dimple, B=Rupesh, repeated A→B→A→B switching never crosses; two independent
+BrokerSession rows by (tradingAccountId, broker); no-cred + unknown-account
+rejected). New regression suite: `backend/tests/fyers_account_isolation_harness.cjs`
++ `test_fyers_account_isolation.py`.
+
+NOT verifiable in this pod (no Postgres/Redis, no live daily Fyers session, no
+preview URL): the true live OAuth round-trip against Fyers prod with two real
+apps — confirm on local run. Follow-up (noted, not in scope): drop the env
+App ID/Secret defaults in FyersAdapter entirely to remove the last global
+fallback.
+
+Feature commit + `--no-ff` merge into local `main`; published by the user via
+Save to GitHub.

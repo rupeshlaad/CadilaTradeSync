@@ -112,6 +112,13 @@ export class BrokerService {
     switch (broker) {
       case Broker.FYERS: {
         const adapter = new FyersAdapter();
+        // Sprint 6.2.15 — account isolation: the Fyers auth header is
+        // `appId:accessToken`, so reads must use THIS account's own App ID
+        // (api key) + Secret ID, not the global env App ID. Falls back to the
+        // adapter's env defaults only when the account has no stored creds.
+        if (creds?.apiKey) {
+          adapter.setCredentials(creds.apiKey, creds.apiSecret ?? '');
+        }
         adapter.setAccessToken(accessToken);
         return adapter;
       }
@@ -142,15 +149,24 @@ export class BrokerService {
   }
 
   /**
-   * Sprint 6.2.0 — ICICI Direct needs the account's api key + secret (for the
-   * Breeze checksum headers) in addition to the session token. Returns
-   * undefined for every other broker so their adapter construction is
+   * Sprint 6.2.0 / 6.2.15 — brokers whose adapters need the account's own api
+   * key + secret (decrypted) in addition to the session/access token:
+   *   - ICICI Direct — Breeze checksum headers.
+   *   - Fyers        — App ID drives the `appId:accessToken` auth header, so
+   *                    reads must use the account's own App ID (account
+   *                    isolation), not the global env App ID.
+   * Returns undefined for every other broker so their adapter construction is
    * unchanged.
    */
-  private iciciCreds(
+  private accountApiCreds(
     account: TradingAccount,
   ): { apiKey?: string; apiSecret?: string } | undefined {
-    if (account.broker !== Broker.ICICI_DIRECT) return undefined;
+    if (
+      account.broker !== Broker.ICICI_DIRECT &&
+      account.broker !== Broker.FYERS
+    ) {
+      return undefined;
+    }
     return {
       apiKey: account.encryptedApiKey
         ? this.encryption.decrypt(account.encryptedApiKey)
@@ -184,7 +200,7 @@ export class BrokerService {
       account.broker,
       accessToken,
       session.userId ?? account.clientId,
-      this.iciciCreds(account),
+      this.accountApiCreds(account),
     );
     return { broker: account.broker, adapter };
   }
@@ -582,7 +598,7 @@ export class BrokerService {
       account.broker,
       this.encryption.decrypt(session.encryptedAccessToken),
       session.userId ?? account.clientId,
-      this.iciciCreds(account),
+      this.accountApiCreds(account),
     );
 
     const [
@@ -1230,7 +1246,7 @@ export class BrokerService {
       account.broker,
       this.encryption.decrypt(session.encryptedAccessToken),
       session.userId ?? account.clientId,
-      this.iciciCreds(account),
+      this.accountApiCreds(account),
     );
     const settled = await Promise.allSettled([
       this.safeCall(adapter, methodMap[section]),
