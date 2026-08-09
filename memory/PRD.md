@@ -369,3 +369,37 @@ main.ts, the dual-array decorator would create `/api/api/...` duplicates —
 revisit then; and Zerodha/Shoonya could optionally adopt the same dual prefix.
 Published by the user via Save to GitHub.
 
+
+## Sprint 6.2.17 (2026-06) — Fyers reconnect context via OAuth state param — DONE (verified)
+Bug: User-Portal (FOLLOWER) Fyers reconnect from localhost:3000 failed after
+auth with `localhost:3001/dashboard/master-accounts?error=Reconnect context
+missing`. Root cause: reconnect context (tradingAccountId + returnTo) was carried
+ONLY by the in-memory `stateStore` Map keyed to the HttpOnly `cts_oauth_state`
+cookie; on hot reload / multiple API instances / cross-origin redirect the
+cookie or map entry was lost → callback `if (!tradingAccountId)` fired
+(fyers.controller.ts) and, with tradingAccountId null, buildBrokerCallbackRedirect
+defaulted portalBase to `adminAppBaseUrl()` (localhost:3001).
+
+Fix (Sprint 6.2.17): carry the context in the OAuth `state` parameter that Fyers
+echoes back on the callback — self-contained, survives hot reloads, multiple
+instances and browser redirects with NO server-side memory. The cookie/map are
+retained only as a backward-compatible fallback.
+- oauth-state.store.ts: NEW `encodeOAuthState()` / `decodeOAuthState()` (base64url
+  of `{t,r}`; additive — putOAuthState/takeOAuthState untouched). Not trusted for
+  authz: returnTo stays open-redirect-guarded, tradingAccountId re-validated vs DB.
+- fyers.adapter.ts: `getLoginUrl(state?)` passes `{state}` to SDK generateAuthCode
+  (default path unchanged; BrokerAdapter interface preserved via optional param).
+- fyers.controller.ts: login() encodes the state token → getLoginUrl(stateToken)
+  (still writes cookie/map fallback); callback() gains `@Query('state')` (optional
+  5th param, back-compatible) and recovers `stateEntry ?? cookieEntry`.
+
+Scope guard: Zerodha / Shoonya / ICICI adapters + controllers UNCHANGED
+(getLoginUrl(): string signatures verified untouched). No schema/Prisma/DB change.
+Validated: `@cts/api` build PASS; boot PASS (all four Fyers routes mapped; crash
+only at Prisma/Redis). testing_agent iteration_8: isolation harness 28/28 PASS
+(incl. state-only recovery with NO cookie/map, User Portal FOLLOWER→localhost:3000,
+Master Portal→localhost:3001, missing-context fallback intact) + reconnect harness
+regression ALL PASS; 100%, no issues. Published by the user via Save to GitHub.
+Follow-up (non-blocking): add an HMAC signature to the state token for
+defense-in-depth (currently base64url of raw JSON, fails safe via DB validation).
+
