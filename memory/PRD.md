@@ -344,3 +344,28 @@ fallback.
 
 Feature commit + `--no-ff` merge into local `main`; published by the user via
 Save to GitHub.
+
+## Sprint 6.2.16 (2026-06) — Fyers callback route /api compatibility — DONE (verified)
+Bug chain resolution: after the redirect-URI env was corrected to the production
+host (`https://cts.investwithdimple.com/api/brokers/fyers/callback`), Fyers began
+redirecting to `/api/brokers/fyers/callback` but the backend returned
+`404 Cannot GET /api/brokers/fyers/callback`. Root cause: `FyersController` was
+`@Controller('brokers/fyers')` and `main.ts` uses an EMPTY global prefix
+(`setGlobalPrefix('')`), so only `/brokers/fyers/*` was registered — no `/api`
+variant. ICICI already worked because `ICICIDirectController` registers BOTH
+prefixes.
+
+Fix (routing compatibility ONLY — apps/api/src/brokers/fyers/fyers.controller.ts,
+single line): `@Controller(['brokers/fyers', 'api/brokers/fyers'])` — mirrors the
+ICICI pattern. No OAuth/auth/broker/DB/frontend/redirect-URI-generation change.
+
+Validated: `@cts/api` build PASS; Nest startup now maps all four routes
+(`/brokers/fyers/login`, `/api/brokers/fyers/login`, `/brokers/fyers/callback`,
+`/api/brokers/fyers/callback`); both Fyers harnesses (account isolation +
+reconnect) still `RESULT: ALL PASS` (no regression); Zerodha/ICICI/Shoonya
+controllers untouched. testing_agent iteration_7: 100% PASS, no issues.
+Note (future, out of scope): if a global `api` prefix is ever re-introduced in
+main.ts, the dual-array decorator would create `/api/api/...` duplicates —
+revisit then; and Zerodha/Shoonya could optionally adopt the same dual prefix.
+Published by the user via Save to GitHub.
+
