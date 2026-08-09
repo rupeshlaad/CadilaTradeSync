@@ -93,8 +93,13 @@ export class FyersAdapter implements BrokerAdapter {
     this.fyers.setAccessToken(accessToken);
   }
 
-  getLoginUrl(): string {
-    return this.fyers.generateAuthCode();
+  getLoginUrl(state?: string): string {
+    // Sprint 6.2.17 — pass the self-contained OAuth state token so the broker
+    // echoes it back on the callback (reconnect context survives without any
+    // server-side memory). When omitted, the SDK default is used (unchanged).
+    return state
+      ? this.fyers.generateAuthCode({ state })
+      : this.fyers.generateAuthCode();
   }
 
   async exchangeToken(token: string): Promise<any> {

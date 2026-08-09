@@ -1,0 +1,31 @@
+{
+  "summary": "Static-only verification of Sprint 6.2.17 Fyers OAuth reconnect fix. Ran (1) pnpm --filter @cts/api build → clean, (2) node backend/tests/fyers_account_isolation_harness.cjs → 28/28 PASS including the new Sprint 6.2.17 checks (state-only recovery with no cookie/no map, User Portal FOLLOWER → localhost:3000, Master Portal → localhost:3001, missing-context fallback), (3) node backend/tests/fyers_reconnect_harness.cjs → all Sprint 6.2.13 regression scenarios PASS. Verified other broker adapters (Zerodha/Shoonya/ICICI) still have getLoginUrl(): string unchanged; only Fyers adapter added the optional state? parameter (backward-compatible with BrokerAdapter interface).",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/fyers_account_isolation_harness.cjs",
+    "/app/backend/tests/fyers_reconnect_harness.cjs"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "encodeOAuthState/decodeOAuthState are cleanly additive; JSON.parse wrapped in try/catch, tampering fails safe because tradingAccountId is re-validated against DB and returnTo is guarded downstream — good defensive posture.",
+    "Fyers adapter getLoginUrl(state?) preserves the BrokerAdapter interface contract (optional param); Zerodha/Shoonya/ICICI signatures untouched — no interface breakage.",
+    "Controller keeps cookie/in-memory-map write on login as a backward-compatible fallback but also passes stateToken; callback correctly prefers stateEntry over cookieEntry (state param primary). Order of precedence is explicit and safe.",
+    "Note (non-blocking): OAuth state token is base64url of raw JSON with no HMAC/signature. Safety currently relies on downstream open-redirect guard for returnTo and DB-validation of tradingAccountId. This is acceptable as documented, but an HMAC would be defense-in-depth for future hardening."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100%", "frontend": "N/A (skipped per request)"},
+  "test_credentials": "N/A — no DB/Redis/live broker; harness uses in-memory Prisma double and patched Fyers SDK.",
+  "seed_data_creation": "None — harnesses self-seed in-memory.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Sprint 6.2.17 Fyers OAuth state-param reconnect fix is validated end-to-end via two node harnesses (no live services required). If regressing, always run: pnpm --filter @cts/api build && node backend/tests/fyers_account_isolation_harness.cjs && node backend/tests/fyers_reconnect_harness.cjs. Both must print 'RESULT: ALL PASS'.",
+  "rca of the issue": "Original bug: reconnect context (tradingAccountId + returnTo) was stored ONLY in an in-memory Map keyed by an HttpOnly cookie; on hot reload / multi-instance / cross-origin redirect the cookie or the map entry was lost, callback saw tradingAccountId=null, and buildBrokerCallbackRedirect defaulted to admin portal (localhost:3001). Fix: encode {tradingAccountId, returnTo} into the OAuth `state` parameter that Fyers echoes back on callback; decode in callback with precedence stateEntry ?? cookieEntry. Cookie/map retained only as fallback. Result: reconnect survives with zero server-side memory dependency; FOLLOWER accounts route back to localhost:3000; non-follower to localhost:3001; missing-context error path preserved when neither state nor cookie present."
+}

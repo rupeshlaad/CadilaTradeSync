@@ -72,3 +72,48 @@ export function getTradingAccountId(sessionId: string) {
 export function clearTradingAccountId(sessionId: string) {
   stateStore.delete(sessionId);
 }
+
+// ---------------------------------------------------------------------------
+// Sprint 6.2.17 — self-contained OAuth state token.
+//
+// The reconnect context (tradingAccountId + returnTo) is encoded into the OAuth
+// `state` parameter that the broker echoes back on the callback. This makes the
+// flow independent of the in-memory `stateStore` above (and of any cookie), so
+// it survives hot reloads, multiple API instances and browser redirects. The
+// map/cookie remain only as a backward-compatible fallback.
+//
+// The token is a URL-safe base64 of a tiny JSON payload. It is NOT trusted for
+// authorization: `returnTo` is still open-redirect-guarded downstream, and
+// `tradingAccountId` is still validated against the DB in the callback — so a
+// tampered token fails safe.
+// ---------------------------------------------------------------------------
+
+export function encodeOAuthState(entry: {
+  tradingAccountId?: string;
+  returnTo?: string;
+}): string {
+  const payload = JSON.stringify({
+    t: entry.tradingAccountId ?? '',
+    r: entry.returnTo ?? '',
+  });
+  return Buffer.from(payload, 'utf8').toString('base64url');
+}
+
+export function decodeOAuthState(
+  state: string | undefined,
+): { tradingAccountId?: string; returnTo?: string } | undefined {
+  if (!state) return undefined;
+  try {
+    const json = Buffer.from(state, 'base64url').toString('utf8');
+    const obj = JSON.parse(json);
+    if (obj && typeof obj === 'object' && obj.t) {
+      return {
+        tradingAccountId: String(obj.t),
+        returnTo: obj.r ? String(obj.r) : undefined,
+      };
+    }
+  } catch {
+    // Not our token (e.g. a broker's default "sample_state") → fall back.
+  }
+  return undefined;
+}

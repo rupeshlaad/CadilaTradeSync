@@ -21,7 +21,8 @@
 process.env.FYERS_APP_ID = 'ENVLEAK-APP';
 process.env.FYERS_SECRET_ID = 'ENVLEAK-SECRET';
 process.env.FYERS_REDIRECT_URI = 'http://localhost:4000/brokers/fyers/callback';
-process.env.ADMIN_APP_URL = process.env.ADMIN_APP_URL || 'http://localhost:3001';
+process.env.ADMIN_APP_URL = 'http://localhost:3001';
+process.env.WEB_APP_URL = 'http://localhost:3000';
 
 const DIST = '/app/apps/api/dist';
 const { FyersService } = require(`${DIST}/brokers/fyers/fyers.service.js`);
@@ -30,7 +31,7 @@ const { FyersAdapter } = require(`${DIST}/brokers/fyers/fyers.adapter.js`);
 const {
   PlaceholderEncryptionService,
 } = require(`${DIST}/encryption/encryption.service.js`);
-const { putOAuthState } = require(`${DIST}/brokers/oauth-state.store.js`);
+const { putOAuthState, encodeOAuthState } = require(`${DIST}/brokers/oauth-state.store.js`);
 const { OAUTH_STATE_COOKIE } = require(`${DIST}/brokers/oauth-cookie.js`);
 
 let failures = 0;
@@ -103,6 +104,16 @@ const ACCOUNTS = {
     lastHeartbeat: null,
     encryptedApiKey: null,
     encryptedApiSecret: null,
+  },
+  // Sprint 6.2.17 — a FOLLOWER (User Portal) account to prove portal routing.
+  F: {
+    id: 'acct-F-follower',
+    accountType: 'FOLLOWER',
+    broker: 'FYERS',
+    connectionStatus: 'DISCONNECTED',
+    lastHeartbeat: null,
+    encryptedApiKey: encCred('APPID-A'),
+    encryptedApiSecret: encCred('SECRET-A'),
   },
 };
 
@@ -195,6 +206,17 @@ async function doCallback(prisma, accountId, authCode = 'AUTHCODE') {
   return res.redirects[0];
 }
 
+// Sprint 6.2.17 — drive the callback with ONLY the OAuth `state` param (echoed
+// by Fyers): NO cookie and NO putOAuthState → proves the reconnect context no
+// longer depends on the in-memory map (hot reload / multiple instances safe).
+async function doCallbackViaStateNoCookie(prisma, accountId, returnTo) {
+  const ctrl = buildController(prisma);
+  const res = makeRes();
+  const stateToken = encodeOAuthState({ tradingAccountId: accountId, returnTo });
+  await ctrl.callback('AUTHCODE', undefined, makeReq(undefined), res, stateToken);
+  return res.redirects[0];
+}
+
 (async () => {
   const prisma = makePrisma();
 
@@ -257,6 +279,28 @@ async function doCallback(prisma, accountId, authCode = 'AUTHCODE') {
   // ---- 6. Unknown account → clean error, no crash ------------------------
   const cbUnknown = await doCallback(prisma, 'acct-does-not-exist');
   check('callback for unknown account → error redirect', /error=/.test(cbUnknown || ''), cbUnknown);
+
+  // ---- 7. Sprint 6.2.17: context survives via STATE PARAM (no cookie/map) --
+  const uUrl = await doCallbackViaStateNoCookie(prisma, ACCOUNTS.F.id, '/dashboard/broker-accounts');
+  check('state-only (no cookie, no map) recovers context → success', /connected=1/.test(uUrl || ''), uUrl);
+  check('User Portal (FOLLOWER) returns to localhost:3000', (uUrl || '').startsWith('http://localhost:3000'), uUrl);
+  check('User Portal returnTo preserved (/dashboard/broker-accounts)', /\/dashboard\/broker-accounts/.test(uUrl || ''), uUrl);
+  check('User Portal NEVER redirected to master portal 3001', !/localhost:3001/.test(uUrl || ''), uUrl);
+
+  const mUrl = await doCallbackViaStateNoCookie(prisma, ACCOUNTS.A.id, undefined);
+  check('state-only MASTER recovers context → success', /connected=1/.test(mUrl || ''), mUrl);
+  check('Master Portal returns to localhost:3001', (mUrl || '').startsWith('http://localhost:3001'), mUrl);
+  check('Master Portal NEVER lands on user portal 3000', !/localhost:3000/.test(mUrl || ''), mUrl);
+
+  // ---- 8. No state AND no cookie → unchanged missing-context fallback ------
+  const noCtx = await (async () => {
+    const ctrl = buildController(prisma);
+    const res = makeRes();
+    await ctrl.callback('AUTHCODE', undefined, makeReq(undefined), res); // no state, no cookie
+    return res.redirects[0];
+  })();
+  check('no state + no cookie → reconnect context missing (fallback intact)',
+    /Reconnect(\+|%20)context(\+|%20)missing/.test(noCtx || ''), noCtx);
 
   console.log(`\nRESULT: ${failures === 0 ? 'ALL PASS' : failures + ' FAILURES'}`);
   process.exit(failures === 0 ? 0 : 1);

@@ -8,7 +8,7 @@ import { EncryptionService } from '../../encryption/encryption.service';
 import { FyersAdapter } from './fyers.adapter';
 import { FyersService } from './fyers.service';
 import { buildBrokerCallbackRedirect } from '../broker-callback-redirect';
-import { putOAuthState, takeOAuthState } from '../oauth-state.store';
+import { putOAuthState, takeOAuthState, encodeOAuthState, decodeOAuthState } from '../oauth-state.store';
 import {
   OAUTH_STATE_COOKIE,
   clearOAuthStateCookie,
@@ -86,10 +86,15 @@ export class FyersController {
 
     // Per-account adapter → the OAuth login URL carries THIS account's App ID.
     const adapter = this.buildAccountAdapter(account);
+    // Sprint 6.2.17 — carry the reconnect context in the OAuth `state` param
+    // (echoed back by Fyers on the callback), so it no longer depends on the
+    // in-memory map surviving. The cookie/map are still written as a
+    // backward-compatible fallback.
+    const stateToken = encodeOAuthState({ tradingAccountId, returnTo });
     const stateId = randomUUID();
     putOAuthState(stateId, { tradingAccountId, returnTo });
     setOAuthStateCookie(res, stateId);
-    return res.redirect(adapter.getLoginUrl());
+    return res.redirect(adapter.getLoginUrl(stateToken));
   }
 
   @Get('callback')
@@ -98,13 +103,20 @@ export class FyersController {
     @Query('s') statusParam: string | undefined,
     @Req() req: Request,
     @Res() res: Response,
+    @Query('state') stateParam?: string,
   ) {
+    // Sprint 6.2.17 — recover the reconnect context PRIMARILY from the OAuth
+    // `state` param echoed back by Fyers (self-contained; survives hot reloads,
+    // multiple API instances and redirects with no server-side memory). The
+    // in-memory cookie/map is only a backward-compatible fallback.
+    const stateEntry = decodeOAuthState(stateParam);
     const stateId = readCookie(req, OAUTH_STATE_COOKIE);
-    const entry = takeOAuthState(stateId);
+    const cookieEntry = takeOAuthState(stateId);
     clearOAuthStateCookie(res);
 
-    const tradingAccountId = entry?.tradingAccountId;
-    const returnTo = entry?.returnTo;
+    const tradingAccountId =
+      stateEntry?.tradingAccountId ?? cookieEntry?.tradingAccountId;
+    const returnTo = stateEntry?.returnTo ?? cookieEntry?.returnTo;
 
     if (statusParam && statusParam !== 'ok') {
       return res.redirect(
