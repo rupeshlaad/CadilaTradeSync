@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { auth, api } from '@/lib/api';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { Button } from '@/components/ui/button';
-import { LayoutDashboard, Users, Shield, Server, LogOut, ShieldCheck, Database, Play, Zap } from 'lucide-react';
+import { LayoutDashboard, Users, Shield, Server, LogOut, Database, Play, Zap } from 'lucide-react';
 import { Role, type PublicUser } from '@cts/shared';
 
 const NAV = [
@@ -51,12 +51,10 @@ export default function AdminDashboardLayout({ children }: { children: React.Rea
     <div className="min-h-screen flex bg-background">
       <aside className="hidden md:flex w-64 flex-col border-r bg-card">
         <div className="h-16 flex items-center gap-2 px-6 border-b">
-          <div className="h-8 w-8 rounded-md bg-primary grid place-items-center text-primary-foreground">
-            <ShieldCheck className="h-4 w-4" />
-          </div>
+          <img src="/candila-fintech-logo.webp" alt="Candila FinTech" className="h-8 w-auto rounded-md" />
           <div>
-            <div className="font-semibold text-sm leading-tight">CTS Admin</div>
-            <div className="text-xs text-muted-foreground">Console</div>
+            <div className="font-semibold text-sm leading-tight">Candila TradeSync</div>
+            <div className="text-[10px] text-muted-foreground">Powered by Candila FinTech</div>
           </div>
         </div>
         <nav className="flex-1 px-3 py-4 space-y-1">
@@ -80,6 +78,10 @@ export default function AdminDashboardLayout({ children }: { children: React.Rea
           <Button variant="ghost" className="w-full justify-start" onClick={handleLogout}>
             <LogOut className="h-4 w-4 mr-2" /> Sign out
           </Button>
+          <div className="mt-3 px-2 text-[10px] leading-relaxed text-muted-foreground">
+            <div>© 2026 Candila FinTech</div>
+            <div>A Subsidiary of Candila Capital Pvt. Ltd.</div>
+          </div>
         </div>
       </aside>
 

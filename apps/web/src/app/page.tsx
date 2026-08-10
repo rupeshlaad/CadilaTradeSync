@@ -10,8 +10,8 @@ export default function LandingPage() {
       <header className="border-b">
         <div className="container flex h-16 items-center justify-between">
           <div className="flex items-center gap-2">
-            <div className="h-8 w-8 rounded-md bg-primary grid place-items-center text-primary-foreground font-bold">C</div>
-            <span className="font-semibold text-lg">Cadila TradeSync</span>
+            <img src="/candila-fintech-logo.webp" alt="Candila FinTech" className="h-8 w-auto rounded-md" />
+            <span className="font-semibold text-lg">Candila TradeSync</span>
           </div>
           <nav className="hidden md:flex items-center gap-6 text-sm text-muted-foreground">
             <a href="#features" className="hover:text-foreground">Features</a>
@@ -40,7 +40,7 @@ export default function LandingPage() {
           The trading infrastructure your desk deserves.
         </h1>
         <p className="mt-6 text-lg text-muted-foreground max-w-2xl mx-auto">
-          Cadila TradeSync is a next-generation fintech platform for orchestrating strategies across brokers —
+          Candila TradeSync is an enterprise multi-broker copy trading platform for orchestrating strategies across brokers —
           secure, observable and built for institutional workflows.
         </p>
         <div className="mt-8 flex items-center justify-center gap-3">
@@ -90,8 +90,11 @@ export default function LandingPage() {
 
       <footer className="border-t">
         <div className="container py-8 text-sm text-muted-foreground flex flex-col md:flex-row items-center justify-between gap-2">
-          <p>© {new Date().getFullYear()} Cadila TradeSync. All rights reserved.</p>
-          <p>v0.1.0 — Foundation build</p>
+          <div className="text-center md:text-left">
+            <p>© 2026 Candila FinTech</p>
+            <p className="text-xs">A Subsidiary of Candila Capital Pvt. Ltd.</p>
+          </div>
+          <p>Powered by Candila FinTech</p>
         </div>
       </footer>
     </div>

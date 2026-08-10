@@ -6,8 +6,9 @@ import { ThemeProvider } from '@/components/theme-provider';
 const inter = Inter({ subsets: ['latin'] });
 
 export const metadata: Metadata = {
-  title: 'CTS Admin',
-  description: 'Cadila TradeSync — Admin console',
+  title: 'Candila TradeSync',
+  description: 'Candila TradeSync — Enterprise Multi-Broker Copy Trading Platform. Powered by Candila FinTech.',
+  icons: { icon: '/candila-fintech-logo.webp', shortcut: '/candila-fintech-logo.webp', apple: '/candila-fintech-logo.webp' },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

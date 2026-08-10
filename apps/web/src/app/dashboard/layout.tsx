@@ -93,8 +93,11 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       {/* Sidebar */}
       <aside className="hidden md:flex w-64 flex-col border-r bg-card">
         <div className="h-16 flex items-center gap-2 px-6 border-b">
-          <div className="h-8 w-8 rounded-md bg-primary grid place-items-center text-primary-foreground font-bold">C</div>
-          <span className="font-semibold">CTS</span>
+          <img src="/candila-fintech-logo.webp" alt="Candila FinTech" className="h-8 w-auto rounded-md" />
+          <div>
+            <div className="font-semibold text-sm leading-tight">Candila TradeSync</div>
+            <div className="text-[10px] text-muted-foreground">Powered by Candila FinTech</div>
+          </div>
         </div>
         <nav className="flex-1 px-3 py-4 space-y-1">
           {NAV.map((n) => {
@@ -117,6 +120,10 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           <Button variant="ghost" className="w-full justify-start" onClick={handleLogout}>
             <LogOut className="h-4 w-4 mr-2" /> Sign out
           </Button>
+          <div className="mt-3 px-2 text-[10px] leading-relaxed text-muted-foreground">
+            <div>© 2026 Candila FinTech</div>
+            <div>A Subsidiary of Candila Capital Pvt. Ltd.</div>
+          </div>
         </div>
       </aside>
 
