@@ -1,0 +1,61 @@
+{
+  "summary": "Static code review of Sprint 6.1.8 Shoonya (Finvasia Noren) gateway-resilience fix. Verified shoonya.adapter.ts + shoonya.service.ts against every review checklist item. Independently reproduced the Finvasia outage via a single read-only curl to https://api.shoonya.com/NorenWClientTP/QuickAuth (HTTP 502, Content-Type text/html, nginx/1.28.0 HTML body) — confirms failure is at Finvasia's gateway, outside CTS. Confirmed via `git status` that ONLY the two Shoonya files are modified — Zerodha, FYERS, ICICI, Upstox adapters/services, broker.service.ts factory, and Prisma schema are UNTOUCHED. No runtime, no servers, no browser automation.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "static_review_verification": {
+    "a_shared_httpPost": {
+      "status": "PASS",
+      "evidence": "shoonya.adapter.ts:107 `private async httpPost(url, body)`. login() invokes it at line 213 (`await this.httpPost(`${this.baseUrl}/QuickAuth`, body)`); post() invokes it at line 174 (`await this.httpPost(`${this.baseUrl}/${path}`, body)`). Both QuickAuth AND every data endpoint share the same resilient transport."
+    },
+    "b_timeout_retry_validateStatus_transformResponse": {
+      "status": "PASS",
+      "evidence": "timeoutMs=15000 (line 69), maxAttempts=3 (line 70). axios.post options (lines 112-120): `timeout: this.timeoutMs`, `validateStatus: () => true`, `transformResponse: [(d) => d]` keeps body raw. Retry loop lines 110-161 with `await delay(attempt * 700)` backoff. Retries on status>=500 OR looksHtml (lines 130-136). Network-error retries via isRetryableNetworkError() lines 312-330 (ECONNRESET/ETIMEDOUT/ECONNABORTED/EAI_AGAIN/ENETUNREACH/ECONNREFUSED + 'timeout'/'socket hang up'/'network' substrings)."
+    },
+    "c_html_detection_and_typed_error": {
+      "status": "PASS",
+      "evidence": "HTML classification lines 125-127: `contentType.includes('text/html') || (typeof raw === 'string' && /^\\s*<(?:!doctype|html)/i.test(raw))`. gatewayUnavailableError() lines 338-362 builds an Error with human message: 'Shoonya (Finvasia Noren) API gateway at api.shoonya.com is temporarily unavailable — HTTP 502 Bad Gateway (received an HTML gateway page, not a JSON API response). This is a broker-side outage, not a problem with your UID, password, TOTP or API key. Please retry in a few minutes.' Attaches `error_type='SHOONYA_GATEWAY_UNAVAILABLE'` (359) and `brokerStatus` (360). Also thrown when a 2xx body fails JSON.parse (145) — defensive."
+    },
+    "d_baseUrl_and_login_body_unchanged": {
+      "status": "PASS",
+      "evidence": "baseUrl (line 63) is exactly `https://api.shoonya.com/NorenWClientTP` — matches official ShoonyaApi-py SDK. login() jData (lines 202-211) preserves: source='API', apkversion='1.0.0', uid, pwd (SHA-256 of password), factor2 (TOTP), vc (vendorCode), appkey (SHA-256(`${uid}|${api_secret}`)), imei='CTS_SERVER'. Body still raw `jData=${JSON.stringify(jData)}` with NO jKey (line 212) — matches Noren QuickAuth spec exactly."
+    },
+    "e_empty_book_handling_preserved": {
+      "status": "PASS",
+      "evidence": "post() lines 176-184 still detects stat!=='Ok' + emsg matching /no data|no record|not found|no.*position|no.*holding/i and returns [] instead of throwing. Empty OrderBook/TradeBook/PositionBook/Holdings responses still yield [] (regression-safe)."
+    },
+    "service_clean_error_surface": {
+      "status": "PASS",
+      "evidence": "shoonya.service.ts lines 67-85: catch reads `err.brokerStatus ?? err.response?.status` and `err.error_type ?? 'SHOONYA_LOGIN_FAILED'`, then throws BadRequestException({ broker:'SHOONYA', error_type, message: err.message, status, reason: err.message }). Grep confirms NO reference to `err.response.data` anywhere in the file — raw HTML is never leaked into `reason`. console.error (lines 70-74) only logs errorType/status/message."
+    },
+    "no_regression_other_brokers_and_factory": {
+      "status": "PASS",
+      "evidence": "`git status` shows exactly two modified source files: apps/api/src/brokers/shoonya/shoonya.adapter.ts and apps/api/src/brokers/shoonya/shoonya.service.ts. Zerodha/FYERS/ICICI/Upstox adapters+services and broker.service.ts factory are UNTOUCHED. No Prisma schema/migration file in diff. (`.emergent/emergent.yml` staged change is unrelated env config, not code.)"
+    },
+    "typecheck_build_logical_confirmation": {
+      "status": "PASS (logical)",
+      "evidence": "Cannot run `pnpm -r typecheck`/`build` under the static-only constraint, but logical compile review of both files confirms: all imports resolve (axios, BrokerAdapter/BrokerProfile/etc., PrismaService, EncryptionService, @otplib/preset-default, crypto-js, ShoonyaAdapter). transformResponse:[(d)=>d] yields res.data as string; code correctly handles both string (lines 140-148) and non-string branches. Retry loop always terminates via throw. No unreachable code, no missing await. Interface BrokerAdapter shape (capabilities/features/onboarding/all methods) is preserved. Matches main agent's stated PASS results for pnpm typecheck + build."
+    },
+    "independent_root_cause_confirmation": {
+      "status": "CONFIRMED_OUTSIDE_CTS",
+      "curl": "curl -X POST https://api.shoonya.com/NorenWClientTP/QuickAuth -H 'Content-Type: application/x-www-form-urlencoded' --data 'jData={\"uid\":\"probe\",\"source\":\"API\"}' --max-time 15",
+      "response": "HTTP 502, Content-Type: text/html, body: <html><head><title>502 Bad Gateway</title></head><body><center><h1>502 Bad Gateway</h1></center><hr><center>nginx/1.28.0</center></body></html>",
+      "conclusion": "Finvasia's nginx gateway returns HTML 502 to any caller — not credential-dependent. Host, path, body format, appkey=SHA256(uid|api_secret), pwd=SHA256(password), factor2=TOTP, vc=vendorCode all match the official ShoonyaApi-py SDK. Root cause is broker-side upstream outage; the applied fix is the correct CTS-side mitigation."
+    }
+  },
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Minor: linear backoff (700ms, 1400ms) is fine for a gateway flap; consider exponential+jitter if 3 retries prove insufficient in production.",
+    "Minor: httpPost returns `any`; could be `Promise<unknown>` for stricter downstream typing (matches axios' loose style elsewhere).",
+    "Nit: gatewayUnavailableError attaches ad-hoc props via `(err as any).error_type`. A dedicated `class ShoonyaGatewayError extends Error` would let callers use `instanceof` instead of string sniffing. Not required for this fix.",
+    "Positive: correctly avoids leaking raw HTML, preserves empty-book heuristic, and re-uses the same resilient transport for BOTH login and all data endpoints so /holdings, /orderbook, /positions, /tradebook, /logout are also HTML-safe now."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend_static_review": "100%", "frontend": "N/A"},
+  "seed_data_creation": "None (static review only).",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "pending_verification": "Live end-to-end Shoonya login cannot be verified until (a) Finvasia's gateway recovers from the ongoing 502 outage AND (b) real Shoonya credentials (uid, password, api_secret, TOTP seed, vendor code) are seeded on a tradingAccount. Once both hold, main agent/ops should hit POST /api/brokers/shoonya/login/:tradingAccountId and verify: (i) happy path returns { success:true, profile:{...} } and upserts BrokerSession; (ii) during a fresh outage the API returns 400 with { broker:'SHOONYA', error_type:'SHOONYA_GATEWAY_UNAVAILABLE', message:'...broker-side outage...retry...', status:502, reason:'<same clean message>' } and NEVER raw HTML.",
+  "context_for_next_testing_agent": "Fix is pure response/transport hardening in apps/api/src/brokers/shoonya/{shoonya.adapter.ts,shoonya.service.ts}. Endpoint, request body, hashing, TOTP, headers unchanged and match official ShoonyaApi-py SDK. No DB migration. No other broker touched. When Finvasia is healthy and credentials exist, run a live login smoke test; optionally point baseUrl at a 502-returning stub in a test build to assert SHOONYA_GATEWAY_UNAVAILABLE emission end-to-end.",
+  "rca of the issue": "Symptom: CTS Shoonya login returns 'HTTP 502 Bad Gateway, HTML page NOT JSON'. Root cause: Finvasia's Noren gateway (nginx at api.shoonya.com) is intermittently returning HTTP 5xx HTML error pages / dropping upstream connections. Reproduced independently via curl (see independent_root_cause_confirmation). CTS request format matches the official ShoonyaApi-py SDK exactly — credentials/format are NOT the cause. Mitigation (this fix): shared resilient httpPost() with 15s timeout, 3-attempt linear backoff, HTML/content-type sniffing, and a typed SHOONYA_GATEWAY_UNAVAILABLE error with a clear human message — applied to BOTH login AND every data endpoint. Users now see 'broker-side outage, retry in a few minutes' instead of raw HTML. No further CTS-side action possible; full recovery depends on Finvasia."
+}

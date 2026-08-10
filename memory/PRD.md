@@ -473,3 +473,24 @@ Corrected only the 6 audited production issues; no new features, no architecture
 
 **Remaining limitations:** Live OAuth/token probe, V3 order placement/modify/cancel/exit, and full NSE/BSE/MCX import row counts require a real Upstox account + static-IP-whitelisted host (unavailable here). Derivative cross-broker contractKey alignment remains best-effort (pre-existing, all brokers). V3 order APIs may return `UDAPI100049` for accounts not enabled for HFT order APIs (Upstox account-side enablement).
 
+
+
+---
+
+## Sprint 6.1.8 — Shoonya Login 502 Bug Fix (2026-08-10)
+
+**Reported:** Every Shoonya login fails with "HTTP 502 Bad Gateway, HTML page NOT JSON".
+
+**Root cause (PROVEN, outside CTS):** Finvasia's Noren gateway (nginx at `api.shoonya.com`) is intermittently returning HTTP 502 HTML error pages / dropping connections at its upstream. Independently reproduced with `curl` (bypassing CTS) on the exact official endpoint `POST https://api.shoonya.com/NorenWClientTP/QuickAuth` → `502 Bad Gateway`, `text/html`, `nginx/1.28.0`, mixed with connection timeouts. CTS's host, path, request body fields (uid/pwd/factor2/vc/appkey/imei/source/apkversion), `appkey=SHA256(uid|api_secret)`, `pwd=SHA256(password)`, TOTP, vendor code, UID and headers all match the official `ShoonyaApi-py` SDK + Shoonya FAQ exactly — request format is NOT the cause. Not caused by any recent (Upstox) change; Shoonya files were untouched since Sprint 6.1.7.
+
+**CTS-side fix (response/transport hardening only — endpoint/architecture/schema unchanged, no other broker touched):**
+- New resilient `httpPost()` in `shoonya.adapter.ts` used by BOTH QuickAuth login and every data endpoint: 15s timeout, 3-attempt linear backoff, retries on 5xx / HTML / network resets.
+- Detects HTML/non-JSON gateway bodies → raises typed `SHOONYA_GATEWAY_UNAVAILABLE` error with a clear human message ("broker-side outage, not your credentials … retry") instead of leaking raw HTML.
+- `shoonya.service.ts` surfaces the clean message + `error_type` + `brokerStatus` (no raw HTML in `reason`).
+- Empty-book heuristic preserved.
+
+**Files:** `apps/api/src/brokers/shoonya/shoonya.adapter.ts`, `shoonya.service.ts`.
+**Validation:** `pnpm -r typecheck` PASS, `pnpm -r build` PASS. Testing agent iteration_11: all checks PASS, root cause confirmed outside CTS, no regression to Zerodha/FYERS/ICICI/Upstox or the broker factory.
+**Fix commit:** fd2a785 · **Merge commit:** 7085e13 (fix/shoonya-gateway-resilience → main, --no-ff).
+**Production-ready?** CTS code is correct and now degrades gracefully. Live login success depends on Finvasia's gateway recovering (broker-side); it cannot be verified while the 502 outage persists and no Shoonya credentials exist in this env.
+
