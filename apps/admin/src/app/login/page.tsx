@@ -39,9 +39,12 @@ export default function AdminLoginPage() {
       <div className="absolute top-4 right-4"><ThemeToggle /></div>
       <Card className="w-full max-w-md">
         <CardHeader>
-          <div className="flex items-center gap-2 mb-2">
-            <div className="h-8 w-8 rounded-md bg-primary grid place-items-center text-primary-foreground font-bold">A</div>
-            <span className="font-semibold">CTS Admin Console</span>
+          <div className="flex flex-col items-center text-center gap-3 mb-2">
+            <img src="/candila-fintech-logo.webp" alt="Candila FinTech" className="h-14 w-auto rounded-md" />
+            <div>
+              <div className="text-xl font-bold">Candila TradeSync</div>
+              <div className="text-xs text-muted-foreground">Enterprise Multi-Broker Copy Trading Platform</div>
+            </div>
           </div>
           <CardTitle>Admin sign-in</CardTitle>
           <CardDescription>Restricted access. Admin credentials required.</CardDescription>
@@ -61,6 +64,7 @@ export default function AdminLoginPage() {
               {loading ? 'Signing in…' : 'Sign in'}
             </Button>
           </form>
+          <p className="mt-6 text-xs text-center text-muted-foreground">Powered by Candila FinTech</p>
         </CardContent>
       </Card>
     </div>

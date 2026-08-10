@@ -5,8 +5,8 @@ export default function AdminOverview() {
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-2xl font-bold">Platform Overview</h2>
-        <p className="text-muted-foreground">System health and administrative controls.</p>
+        <h2 className="text-2xl font-bold">Welcome to Candila TradeSync</h2>
+        <p className="text-muted-foreground">Enterprise Multi-Broker Copy Trading Platform</p>
       </div>
 
       <div className="grid gap-4 md:grid-cols-4">

@@ -61,6 +61,10 @@ export default function DashboardHome() {
 
   return (
     <div className="space-y-6">
+      <div>
+        <h2 className="text-2xl font-bold">Welcome to Candila TradeSync</h2>
+        <p className="text-muted-foreground">Enterprise Multi-Broker Copy Trading Platform</p>
+      </div>
       {loading ? (
         <div className="text-sm text-muted-foreground">Loading…</div>
       ) : error ? (
