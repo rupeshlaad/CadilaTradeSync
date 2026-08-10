@@ -1,0 +1,60 @@
+{
+  "summary": "Static code review only (per instructions: no servers/curl/browser). Verified all 6 Upstox fix items against Upstox official API behavior by inspecting the diff and full file bodies. All 6 fixes PASS. Confirmed no changes were made to Zerodha/Fyers/ICICI/Shoonya adapters, broker factory, DB schema, or copy-trading/manual-trading architecture — the git working tree modifies ONLY upstox.adapter.ts, upstox.service.ts, upstox.importer.ts, upstox-order.mapper.ts and adds a new upstox-rate-limiter.ts.",
+  "static_review": {
+    "typecheck_independent_inspection": "PASS — adapter/service/importer/mapper/rate-limiter compile logically: imports resolve (upstoxRateLimiter singleton exported from ./upstox-rate-limiter; UpstoxAdapter default-ctor construction in service is legal; PrismaService + EncryptionService are the same tokens used by FyersService pattern), no dangling references, all awaited promises typed, UpstoxOrderPayload extended with slice:boolean and returned object matches the type.",
+    "fixes": [
+      {
+        "id": "Fix#1_V3_HFT_order_host",
+        "result": "PASS",
+        "evidence": "upstox.adapter.ts L85 orderBaseUrl='https://api-hft.upstox.com/v3'; L81 baseUrl='https://api.upstox.com/v2' (reads); placeOrder L323-328 POST absoluteUrl=`${orderBaseUrl}/order/place`; modifyOrder L330-337 PUT `${orderBaseUrl}/order/modify`; cancelOrder L339-346 DELETE `${orderBaseUrl}/order/cancel?order_id=...`. All read/data endpoints (getProfile L231, getMargins L248, getHoldings L258, getPositions L262, getOrders L266, getTrades L270, getPortfolio L274) still use v2 via private get()."
+      },
+      {
+        "id": "Fix#2_requiresStaticIP_true",
+        "result": "PASS",
+        "evidence": "upstox.adapter.ts L73 `requiresStaticIP: true,` inside static onboarding block; comment on L69-72 explains SEBI + Upstox static-IP whitelisting requirement."
+      },
+      {
+        "id": "Fix#3_importer_NSE_BSE_MCX_segments",
+        "result": "PASS",
+        "evidence": "upstox.importer.ts L51-55 downloads NSE.json.gz, BSE.json.gz, MCX.json.gz; SEGMENT_MAP L38-45 maps NSE_EQ→NSE, NSE_FO→NFO, NSE_CD→CDS, BSE_EQ→BSE, BSE_FO→BFO, MCX_FO→MCX; parseRow L149 skips (returns null) any segment not in the map (indices skipped); brokerToken=instrument_key L175 (EQ) & L215 (derivatives); equity contractKey L163 `${map.exchange}|${tradingSymbol}` yields NSE|<sym>/BSE|<sym> (Zerodha convention); derivative contractKey L198-200 includes underlying|expiry|strike|type."
+      },
+      {
+        "id": "Fix#4_validatePersistedSession_live_probe",
+        "result": "PASS",
+        "evidence": "upstox.service.ts L85-157 first does DB checks (session existence, broker match, tradingAccountId match, decrypt, non-empty token, non-empty userId), then L128 constructs new UpstoxAdapter, L130-135 sets per-account credentials from tradingAccount, L139 setAccessToken(persisted decrypted), L143 `await adapter.validateToken()` — on catch L147-151 returns `{ok:false, reason:`Access token failed live verification against Upstox: ${msg}`}` using verbatim broker message (err.message via normalizeUpstoxError). Only returns ok:true after live probe succeeds L156. adapter.validateToken() L310-313 calls getProfile() (authenticated /user/profile) which is the correct official probe."
+      },
+      {
+        "id": "Fix#5_order_id_extraction_V3_shape",
+        "result": "PASS",
+        "evidence": "copy-trading.service.ts L315-317: `result?.data?.order_id ?? (Array.isArray(result?.data?.order_ids) ? result.data.order_ids[0] : ...)` — handles both V3 `{data:{order_ids:[...]}}` and legacy `{data:{order_id}}`. manual-trade.service.ts L855-858 same pattern in Upstox extractor: order_id then order_ids[0]. order-actions.service.ts references UPSTOX at L264/310/376/423 (exit/modify/cancel branches) and calls the adapter methods unchanged — compiles since adapter signatures (placeOrder/modifyOrder(orderId,order)/cancelOrder(orderId)) are preserved."
+      },
+      {
+        "id": "Fix#6_rate_limiter_await_on_every_call",
+        "result": "PASS",
+        "evidence": "upstox-rate-limiter.ts: LIMITS L26-29 order={perSecond:10,perMinute:500}, data={perSecond:50,perMinute:500}; acquire() L41-46 serialises via per-bucket promise chain; reserve() L48-77 implements sliding 1s + 60s windows with correct wait computation (waits for oldest slot in breached window). Singleton exported L81 `export const upstoxRateLimiter = new UpstoxRateLimiter()` — process-shared across per-request adapters. Adapter usage: get() L169 `await upstoxRateLimiter.acquire('data')` (all reads); send() L197 `await upstoxRateLimiter.acquire(bucket)` where bucket defaults to 'data' and place/modify/cancelOrder explicitly pass `bucket:'order'` (L325, L335, L341). No HTTP call bypasses the limiter. Mapper V3 field: upstox-order.mapper.ts L114 `slice: false` present in returned payload, and UpstoxOrderPayload type L57 includes `slice: boolean`; product mapping L62-64 MIS→'I', CNC/NRML→'D'; order-type mapping L67-79 MARKET/LIMIT/SL/SL-M identity."
+      }
+    ],
+    "regression_risk_other_brokers": "NONE. `git diff --stat` on working tree shows only: .emergent/cron/webhook-crons, upstox-order.mapper.ts (+3 lines for slice field), upstox.adapter.ts, upstox.service.ts, upstox.importer.ts. Untracked: upstox-rate-limiter.ts (new file). No touches to zerodha/fyers/icici/shoonya adapters, broker.factory/switch, prisma schema, copy-trading.service.ts or manual-trade.service.ts (order_id extraction with order_ids[] was already in place from Sprint 6.3 commit 78f9552). Broker enum + BrokerSession/TradingAccount schema unchanged."
+  },
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "observations_non_blocking": [
+    "Rate limiter implements only the 1s + 60s windows from spec; the 2000/30-min ceiling documented in the header comment is not enforced. Not required by the fix scope (spec says '10/s+500/min, 50/s+500/min') but worth noting for future hardening.",
+    "adapter.send() DELETE /logout uses default bucket='data' — correct (logout is not an order-book write).",
+    "In upstox.service.ts validatePersistedSession, if EncryptionService.decrypt for encryptedApiKey/Secret throws it is silently swallowed (line 130-138); acceptable because validateToken uses only the Bearer access token, but a warn-log would aid debugging.",
+    "cancelOrder passes order_id in the query string (`?order_id=...`) and no body — matches Upstox V3 DELETE contract. Good."
+  ],
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "All six fixes implemented cleanly and consistent with Upstox V3 HFT + v2 data split. No regression to other brokers. Safe to ship pending live end-to-end verification with a real Upstox sandbox/live account (out of scope here — no credentials, no runtime allowed)."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (static review of 6/6 fixes PASS)", "frontend": "N/A"},
+  "test_credentials": "N/A — no runtime testing performed per explicit review request.",
+  "seed_data_creation": "None.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "This iteration was a static-only diff review (no servers, no curl, no browser) as mandated by the review_request. All six audited fixes in the Upstox adapter/service/importer/mapper/rate-limiter verified with exact line evidence. No changes elsewhere. A future iteration with actual Upstox sandbox credentials should exercise: (1) OAuth callback + validatePersistedSession live probe, (2) placeOrder against api-hft.upstox.com/v3/order/place returning {data:{order_ids:[...]}} and confirm extraction, (3) modify/cancel V3 endpoints, (4) rate-limiter under 60+ rapid orders, (5) importer end-to-end row counts across NSE/BSE/MCX gz files.",
+  "rca of the issue": "N/A — verification task, no bug reproduction requested."
+}

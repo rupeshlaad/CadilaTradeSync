@@ -450,3 +450,26 @@ Onboarded Upstox as the 5th production broker with full lifecycle parity vs Zero
 
 **Pending (live-only, marked):** real OAuth round-trip + token exchange, live order placement/modify/cancel/exit, live copy fan-out, instrument-count reconciliation. Requires `UPSTOX_REDIRECT_URI` env + per-account Upstox API app key/secret. Derivative cross-broker contractKey alignment is best-effort (same inherent limitation as existing brokers).
 
+
+
+---
+
+## Sprint 6.3.1 — Upstox Production Hardening (FIX sprint, 2026-08-10)
+
+**Status:** Implemented, full workspace typecheck + build PASS, static verification PASS (testing agent iteration_10, 6/6 fixes, no regressions). Live end-to-end still PENDING (no Upstox credentials / runtime in this env).
+
+Corrected only the 6 audited production issues; no new features, no architecture change, no DB schema change, no changes to other brokers.
+
+1. **V3 order APIs** — place/modify/cancel now target `https://api-hft.upstox.com/v3/order/*` (v2 order APIs deprecated). Reads stay on `api.upstox.com/v2`. Mapper emits V3 `slice` field.
+2. **Static IP** — `onboarding.requiresStaticIP = true` (order APIs require whitelisted static IP per SEBI algo rules + Upstox app config).
+3. **Instruments** — importer now covers NSE + BSE + MCX (`NSE_EQ/NSE_FO/NSE_CD/BSE_EQ/BSE_FO/MCX_FO` → `NSE/NFO/CDS/BSE/BFO/MCX`), indices skipped. Reuses existing Instrument/InstrumentBroker model + Zerodha contractKey convention.
+4. **Session validation** — `validatePersistedSession` now performs a live authenticated probe (`adapter.validateToken()` → `/user/profile`) with the persisted token before marking Connected; verbatim broker error on failure.
+5. **Order history** — retained day order book (`/v2/order/retrieve-all`, not deprecated) = parity with Zerodha/Fyers.
+6. **Rate limiting** — new `upstox-rate-limiter.ts` (order 10/s·500/min·2000/30min; data 50/s·500/min·2000/30min) gates every adapter HTTP call. Copy/manual architecture untouched.
+
+**Files:** modified `brokers/upstox/upstox.adapter.ts`, `upstox.service.ts`, `instruments/importers/upstox.importer.ts`, `brokers/order-mapping/upstox-order.mapper.ts`; new `brokers/upstox/upstox-rate-limiter.ts`.
+
+**Fix commit:** 53a7563 · **Merge commit:** 47299d0 (fix/upstox-production-hardening → main, --no-ff).
+
+**Remaining limitations:** Live OAuth/token probe, V3 order placement/modify/cancel/exit, and full NSE/BSE/MCX import row counts require a real Upstox account + static-IP-whitelisted host (unavailable here). Derivative cross-broker contractKey alignment remains best-effort (pre-existing, all brokers). V3 order APIs may return `UDAPI100049` for accounts not enabled for HFT order APIs (Upstox account-side enablement).
+
