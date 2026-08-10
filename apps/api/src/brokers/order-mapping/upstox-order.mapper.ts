@@ -53,6 +53,8 @@ export interface UpstoxOrderPayload {
   transaction_type: 'BUY' | 'SELL';
   disclosed_quantity: number;
   is_amo: boolean;
+  // V3 order API fields (api-hft.upstox.com/v3/order/place).
+  slice: boolean;
   tag: string;
 }
 
@@ -109,6 +111,7 @@ export function buildUpstoxPlaceOrder(
     transaction_type: params.side,
     disclosed_quantity: 0,
     is_amo: false,
+    slice: false,
     tag: sanitizeUpstoxTag(params.tag),
   };
 }
