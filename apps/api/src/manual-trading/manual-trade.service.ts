@@ -13,6 +13,7 @@ import { EncryptionService } from '../encryption/encryption.service';
 import { ZerodhaAdapter } from '../brokers/zerodha/zerodha.adapter';
 import { FyersAdapter } from '../brokers/fyers/fyers.adapter';
 import { ICICIDirectAdapter } from '../brokers/icici/icici.adapter';
+import { UpstoxAdapter } from '../brokers/upstox/upstox.adapter';
 
 import { ExecutionEventRecorderService } from '../copy-trading/execution-event.recorder';
 import { classifyFailure } from '../copy-trading/execution-event.recorder';
@@ -35,6 +36,7 @@ import {
   buildIciciPlaceOrder,
   resolveIciciProduct,
 } from '../brokers/order-mapping/icici-order.mapper';
+import { buildUpstoxPlaceOrder } from '../brokers/order-mapping/upstox-order.mapper';
 import { ResolvedInstrument } from '../brokers/order-mapping/instrument-context';
 
 const BUFFER_CAPACITY = 100;
@@ -383,9 +385,58 @@ export class ManualTradeService implements OnModuleInit {
       return { response, brokerOrderId: extractIciciOrderId(response) };
     }
 
+    if (broker === Broker.UPSTOX) {
+      // Sprint 6.3 — Upstox uses a per-account Bearer token; the /order/place
+      // payload is keyed on the `instrument_token` (Upstox instrument key),
+      // which we persisted as InstrumentBroker.brokerToken during import.
+      const account = await this.prisma.tradingAccount.findUnique({
+        where: { id: tradingAccountId },
+      });
+      const adapter = new UpstoxAdapter();
+      adapter.setCredentials(
+        account?.encryptedApiKey
+          ? this.encryption.decrypt(account.encryptedApiKey)
+          : '',
+        account?.encryptedApiSecret
+          ? this.encryption.decrypt(account.encryptedApiSecret)
+          : '',
+      );
+      adapter.setAccessToken(accessToken);
+      const instrumentToken = await this.resolveUpstoxInstrumentToken(
+        dto.symbol,
+        dto.exchange,
+      );
+      const order = buildUpstoxPlaceOrder({
+        instrumentToken,
+        side: dto.side,
+        orderType: dto.orderType,
+        quantity: dto.quantity,
+        product: dto.product,
+        price: dto.price ?? null,
+        triggerPrice: dto.triggerPrice ?? null,
+        validity: dto.validity ?? 'DAY',
+        tag: 'CTSManual',
+      });
+      const response = await adapter.placeOrder(order);
+      return { response, brokerOrderId: extractUpstoxOrderId(response) };
+    }
+
     throw new BadRequestException(
       `Broker ${broker} not supported for manual trade placement`,
     );
+  }
+
+  private async resolveUpstoxInstrumentToken(
+    symbol: string,
+    exchange: string,
+  ): Promise<string> {
+    const mapping = await this.prisma.instrumentBroker.findFirst({
+      where: { broker: Broker.UPSTOX, brokerSymbol: symbol, exchange },
+      select: { brokerToken: true },
+    });
+    // Fall back to the raw symbol when no mapping/token exists — Upstox will
+    // reject it with an explicit message the UI surfaces verbatim.
+    return mapping?.brokerToken ?? symbol;
   }
 
   private async fetchPlacedOrder(
@@ -438,6 +489,27 @@ export class ManualTradeService implements OnModuleInit {
         adapter.setSessionToken(accessToken);
         const orders = await adapter.getOrders();
         const list = Array.isArray(orders) ? orders : orders ? [orders] : [];
+        return (
+          list.find((o: any) => String(o?.order_id) === brokerOrderId) ?? null
+        );
+      }
+
+      if (broker === Broker.UPSTOX) {
+        const account = await this.prisma.tradingAccount.findUnique({
+          where: { id: tradingAccountId },
+        });
+        const adapter = new UpstoxAdapter();
+        adapter.setCredentials(
+          account?.encryptedApiKey
+            ? this.encryption.decrypt(account.encryptedApiKey)
+            : '',
+          account?.encryptedApiSecret
+            ? this.encryption.decrypt(account.encryptedApiSecret)
+            : '',
+        );
+        adapter.setAccessToken(accessToken);
+        const orders = await adapter.getOrders();
+        const list = Array.isArray(orders?.data) ? orders.data : [];
         return (
           list.find((o: any) => String(o?.order_id) === brokerOrderId) ?? null
         );
@@ -511,6 +583,27 @@ export class ManualTradeService implements OnModuleInit {
         validity: (dto.validity ?? 'DAY').toLowerCase(),
         order_datetime: nowIso,
         message: extractRejectionReason(placementResponse) ?? null,
+      };
+    }
+
+    if (broker === Broker.UPSTOX) {
+      // Upstox order-shaped surrogate (matches getOrders() field names the
+      // Upstox lifecycle normalizer understands).
+      return {
+        order_id: brokerOrderId,
+        status: isMarket ? 'complete' : 'open',
+        tradingsymbol: dto.symbol,
+        exchange: dto.exchange,
+        transaction_type: dto.side,
+        quantity: dto.quantity,
+        filled_quantity: isMarket ? dto.quantity : 0,
+        average_price: isMarket ? dto.price ?? 0 : 0,
+        price: dto.price ?? 0,
+        trigger_price: dto.triggerPrice ?? 0,
+        order_type: dto.orderType,
+        product: dto.product === 'MIS' ? 'I' : 'D',
+        order_timestamp: nowIso,
+        status_message: extractRejectionReason(placementResponse) ?? null,
       };
     }
 
@@ -754,6 +847,19 @@ function extractIciciOrderId(response: unknown): string | null {
   return null;
 }
 
+function extractUpstoxOrderId(response: unknown): string | null {
+  if (!response || typeof response !== 'object') return null;
+  const r = response as Record<string, any>;
+  const data = r.data ?? r;
+  if (data && typeof data === 'object') {
+    if (typeof data.order_id === 'string' && data.order_id.length > 0)
+      return data.order_id;
+    if (Array.isArray(data.order_ids) && data.order_ids.length > 0)
+      return String(data.order_ids[0]);
+  }
+  return null;
+}
+
 function extractRejectionReason(response: unknown): string | null {
   if (!response) return null;
   if (typeof response === 'string') return response.trim() || null;
@@ -771,6 +877,7 @@ function extractRejectionReason(response: unknown): string | null {
     (r.data as any)?.message,
     (r.data as any)?.emsg,
     (r.data as any)?.error,
+    Array.isArray((r as any).errors) ? (r as any).errors?.[0]?.message : undefined,
   ];
   for (const c of candidates) {
     if (typeof c === 'string' && c.trim().length > 0) return c.trim();

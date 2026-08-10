@@ -72,6 +72,7 @@ export function normalizeRawOrder(
   if (broker === Broker.FYERS) return normalizeFyers(raw);
   if (broker === Broker.SHOONYA) return normalizeShoonya(raw);
   if (broker === Broker.ICICI_DIRECT) return normalizeIcici(raw);
+  if (broker === Broker.UPSTOX) return normalizeUpstox(raw);
   return null;
 }
 
@@ -414,9 +415,65 @@ function mapIciciStatus(status: string): NormalizedStatus | null {
 }
 
 // ---------------------------------------------------------------------------
+// Upstox (Uplink v2) order shape mapping. Sprint 6.3.
+//
+// Upstox `/order/retrieve-all` fields: order_id, tradingsymbol, exchange,
+// transaction_type (BUY/SELL), quantity, filled_quantity, price,
+// average_price, trigger_price, order_type, product, status, status_message,
+// order_timestamp. Status vocabulary: "open", "complete", "cancelled",
+// "rejected", "trigger pending", "validation pending", "put order req
+// received", "modify validation pending", "open pending", "after market
+// order req received".
+// ---------------------------------------------------------------------------
+function normalizeUpstox(raw: any): NormalizedRawOrder | null {
+  const orderId = raw.order_id != null ? String(raw.order_id) : null;
+  if (!orderId) return null;
+
+  const side = normalizeSide(raw.transaction_type ?? raw.side);
+  if (!side) return null;
+
+  const quantity = safeNumber(raw.quantity);
+  const filled = safeNumber(raw.filled_quantity);
+  let status = mapUpstoxStatus(String(raw.status ?? '').trim());
+  // Upstox reports partial fills as "open" with a non-zero filled_quantity.
+  if (status === 'OPEN' && filled > 0 && filled < quantity) status = 'PARTIAL';
+
+  return {
+    brokerOrderId: orderId,
+    status,
+    symbol: String(raw.tradingsymbol ?? raw.symbol ?? '').trim(),
+    exchange: raw.exchange ? String(raw.exchange) : null,
+    side,
+    quantity,
+    filledQuantity: filled,
+    price: nullableNumber(raw.average_price ?? raw.price),
+    triggerPrice: nullableNumber(raw.trigger_price),
+    orderType: raw.order_type ? String(raw.order_type) : null,
+    productType: raw.product ? String(raw.product) : null,
+    brokerUpdatedAt: firstIso(raw.order_timestamp, raw.exchange_timestamp),
+    reason:
+      typeof raw.status_message === 'string' && raw.status_message.trim()
+        ? raw.status_message.trim()
+        : null,
+    raw,
+  };
+}
+
+function mapUpstoxStatus(status: string): NormalizedStatus | null {
+  const s = status.toUpperCase();
+  if (!s) return null;
+  if (s === 'COMPLETE' || s === 'COMPLETED') return 'COMPLETE';
+  if (s.includes('CANCEL')) return 'CANCELLED';
+  if (s.includes('REJECT')) return 'REJECTED';
+  if (s.includes('MODIFY')) return 'MODIFIED';
+  if (s === 'OPEN' || s.includes('PENDING') || s.includes('RECEIVED') || s.includes('VALIDATION') || s.includes('TRIGGER'))
+    return 'OPEN';
+  return null;
+}
+
+// ---------------------------------------------------------------------------
 // Utilities
 // ---------------------------------------------------------------------------
-
 function normalizeSide(v: unknown): LifecycleSide | null {
   if (v === 1 || v === '1') return 'BUY';
   if (v === -1 || v === '-1') return 'SELL';
