@@ -65,16 +65,22 @@ export class ShoonyaService {
         appkey: appKeyHash,
       });
     } catch (err: any) {
+      const brokerStatus = err?.brokerStatus ?? err.response?.status;
+      const errorType = err?.error_type ?? 'SHOONYA_LOGIN_FAILED';
       console.error('Shoonya Login Error:', {
-        status: err.response?.status,
-        data: err.response?.data ?? err.message,
+        errorType,
+        status: brokerStatus,
+        message: err?.message,
       });
 
       throw new BadRequestException({
         broker: 'SHOONYA',
-        message: 'Shoonya login failed',
-        status: err.response?.status,
-        reason: err.response?.data ?? err.message,
+        error_type: errorType,
+        // Surface the adapter's clear, human message (broker-outage vs
+        // credential rejection) instead of a raw HTML gateway page.
+        message: err?.message ?? 'Shoonya login failed',
+        status: brokerStatus,
+        reason: err?.message ?? 'Shoonya login failed',
       });
     }
 
