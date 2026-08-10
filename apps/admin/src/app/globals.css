@@ -3,32 +3,33 @@
 @tailwind utilities;
 
 /*
- * Candila TradeSync — enterprise dark brand theme.
- * Primary Green #56B947 · Accent Green #19C37D · Dark BG #08131F
- * Secondary BG #0C1623 · White Text #FFFFFF · Muted Text #B7C2D0
- * Both :root and .dark carry the dark palette so the app is always the
- * enterprise dark theme (never the bright open-source look).
+ * Candila TradeSync — enterprise brand theme (light + dark).
+ * Brand: Primary Green #56B947 · Accent Green #19C37D
+ * Dark surfaces: BG #08131F · Secondary #0C1623 · Muted text #B7C2D0
+ *
+ * :root = LIGHT theme, .dark = DARK theme. next-themes toggles the `.dark`
+ * class; default theme is dark. Brand green primary/accent is shared by both.
  */
 @layer base {
   :root {
-    --background: 211 59% 8%;
-    --foreground: 0 0% 100%;
-    --card: 214 49% 9%;
-    --card-foreground: 0 0% 100%;
-    --popover: 214 49% 9%;
-    --popover-foreground: 0 0% 100%;
+    --background: 0 0% 100%;
+    --foreground: 211 59% 8%;
+    --card: 0 0% 100%;
+    --card-foreground: 211 59% 8%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 211 59% 8%;
     --primary: 112 45% 50%;
     --primary-foreground: 0 0% 100%;
-    --secondary: 214 49% 9%;
-    --secondary-foreground: 0 0% 100%;
-    --muted: 214 40% 14%;
-    --muted-foreground: 214 21% 77%;
+    --secondary: 214 30% 95%;
+    --secondary-foreground: 211 45% 12%;
+    --muted: 214 30% 95%;
+    --muted-foreground: 214 15% 40%;
     --accent: 155 77% 43%;
     --accent-foreground: 0 0% 100%;
     --destructive: 0 72% 51%;
     --destructive-foreground: 0 0% 100%;
-    --border: 214 30% 18%;
-    --input: 214 30% 18%;
+    --border: 214 25% 88%;
+    --input: 214 25% 88%;
     --ring: 112 45% 50%;
     --radius: 0.5rem;
   }
