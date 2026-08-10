@@ -7,26 +7,51 @@ import { InstrumentStatsService } from '../instrument-stats.service';
 import { ImportSummary, ParsedInstrument } from './broker-instrument.interface';
 
 /**
- * Sprint 6.3 — Upstox instrument-master importer.
+ * Sprint 6.3.1 — Upstox instrument-master importer (full segment coverage).
  *
- * Upstox publishes the full daily instrument master as gzipped JSON per
- * exchange (https://assets.upstox.com/market-quote/instruments/exchange/*.json.gz).
- * We import the NSE bundle (equity cash NSE_EQ + equity F&O NSE_FO) to match
- * the coverage of the Fyers importer (NSE_CM + NSE_FO). The gz is decompressed
- * with Node's built-in `zlib` (no new dependency / no lockfile change).
+ * Upstox publishes the daily instrument master as gzipped JSON per exchange
+ * (https://assets.upstox.com/market-quote/instruments/exchange/<EX>.json.gz).
+ * We import every officially-supported segment the CTS Instrument /
+ * InstrumentBroker model already represents (same exchange codes the Zerodha /
+ * Shoonya importers use — NSE, NFO, CDS, BSE, BFO, MCX):
  *
- * The Upstox `instrument_key` (e.g. "NSE_EQ|INE002A01018") is persisted as the
- * broker token — it is the exact `instrument_token` the Upstox `/order/place`
- * API requires, so the copy engine / manual trade can place orders without a
- * second lookup. The canonical `contractKey` matches the Zerodha/Fyers
- * convention (`NSE|<symbol>` for equity) so cross-broker mapping links up.
+ *   NSE.json.gz →  NSE_EQ → NSE (cash)     · NSE_FO → NFO (equity F&O)
+ *                  NSE_CD → CDS (currency)
+ *   BSE.json.gz →  BSE_EQ → BSE (cash)     · BSE_FO → BFO (equity F&O)
+ *   MCX.json.gz →  MCX_FO → MCX (commodity F&O)
+ *
+ * The gz is decompressed with Node's built-in `zlib` (no new dependency). The
+ * Upstox `instrument_key` (e.g. "NSE_EQ|INE002A01018") is persisted as the
+ * broker token — it is the exact `instrument_token` the Upstox V3
+ * `/order/place` API needs, so the copy engine / manual trade place orders
+ * without a second lookup. The canonical `contractKey` matches the
+ * Zerodha/Fyers convention so cross-broker mapping links up.
  */
+
+interface SegmentMap {
+  exchange: string;
+  segment: string;
+  kind: 'EQ' | 'FO';
+}
+
+// Upstox `segment` value → CTS exchange/segment + instrument kind.
+const SEGMENT_MAP: Record<string, SegmentMap> = {
+  NSE_EQ: { exchange: 'NSE', segment: 'NSE', kind: 'EQ' },
+  NSE_FO: { exchange: 'NFO', segment: 'NFO', kind: 'FO' },
+  NSE_CD: { exchange: 'CDS', segment: 'CDS', kind: 'FO' },
+  BSE_EQ: { exchange: 'BSE', segment: 'BSE', kind: 'EQ' },
+  BSE_FO: { exchange: 'BFO', segment: 'BFO', kind: 'FO' },
+  MCX_FO: { exchange: 'MCX', segment: 'MCX', kind: 'FO' },
+};
+
 @Injectable()
 export class UpstoxImporter {
   private readonly logger = new Logger('UpstoxImporter');
 
   private readonly files = [
     'https://assets.upstox.com/market-quote/instruments/exchange/NSE.json.gz',
+    'https://assets.upstox.com/market-quote/instruments/exchange/BSE.json.gz',
+    'https://assets.upstox.com/market-quote/instruments/exchange/MCX.json.gz',
   ];
 
   constructor(
@@ -48,9 +73,18 @@ export class UpstoxImporter {
     for (const file of this.files) {
       this.logger.log(`Downloading ${file}`);
 
-      const response = await axios.get(file, { responseType: 'arraybuffer' });
-      const json = gunzipSync(Buffer.from(response.data)).toString('utf-8');
-      const rows: any[] = JSON.parse(json);
+      let rows: any[];
+      try {
+        const response = await axios.get(file, { responseType: 'arraybuffer' });
+        const json = gunzipSync(Buffer.from(response.data)).toString('utf-8');
+        rows = JSON.parse(json);
+      } catch (err) {
+        // A single exchange file being unavailable must not abort the others.
+        this.logger.warn(
+          `Failed to download/parse ${file}: ${(err as Error).message}`,
+        );
+        continue;
+      }
 
       this.logger.log(`Downloaded : ${rows.length} rows from ${file}`);
       downloaded += rows.length;
@@ -111,24 +145,24 @@ export class UpstoxImporter {
 
   private parseRow(row: any): ParsedInstrument | null {
     const segment = String(row?.segment ?? '').toUpperCase();
+    const map = SEGMENT_MAP[segment];
+    if (!map) return null; // Index / unsupported segments are skipped.
+
     const instrumentKey = row?.instrument_key;
     const tradingSymbol = row?.trading_symbol;
-
     if (!instrumentKey || !tradingSymbol) return null;
 
     const lotSize = Number(row?.lot_size ?? 1) || 1;
     const tickSize = Number(row?.tick_size ?? 0.05) || 0.05;
 
     // -----------------------------
-    // NSE Cash Equity
+    // Cash Equity (NSE / BSE)
     // -----------------------------
-    if (segment === 'NSE_EQ') {
-      // Trade only cash equity here (skip index/ETF-only rows are still valid
-      // equity; keep them). Underlying = trading symbol to match Zerodha/Fyers.
+    if (map.kind === 'EQ') {
       return {
-        contractKey: `NSE|${tradingSymbol}`,
-        exchange: 'NSE',
-        segment: 'NSE',
+        contractKey: `${map.exchange}|${tradingSymbol}`,
+        exchange: map.exchange,
+        segment: map.segment,
         underlying: tradingSymbol,
         instrumentType: 'EQ',
         expiry: null,
@@ -143,45 +177,42 @@ export class UpstoxImporter {
     }
 
     // -----------------------------
-    // NSE Futures / Options
+    // Derivatives (NFO / BFO / CDS / MCX): FUT / CE / PE
     // -----------------------------
-    if (segment === 'NSE_FO') {
-      const type = String(row?.instrument_type ?? '').toUpperCase();
-      const optionType = type === 'CE' ? 'CE' : type === 'PE' ? 'PE' : null;
-      const instrumentType = optionType ?? 'FUT';
+    const type = String(row?.instrument_type ?? '').toUpperCase();
+    const optionType = type === 'CE' ? 'CE' : type === 'PE' ? 'PE' : null;
+    const instrumentType = optionType ?? 'FUT';
 
-      const expiry =
-        row?.expiry != null && row.expiry !== ''
-          ? new Date(Number(row.expiry))
-          : null;
-      const strike =
-        row?.strike_price != null && row.strike_price !== ''
-          ? Number(row.strike_price)
-          : null;
-      const underlying =
-        row?.underlying_symbol ?? row?.asset_symbol ?? row?.name ?? tradingSymbol;
+    const expiry =
+      row?.expiry != null && row.expiry !== ''
+        ? new Date(Number(row.expiry))
+        : null;
+    const strike =
+      row?.strike_price != null && row.strike_price !== ''
+        ? Number(row.strike_price)
+        : null;
+    const underlying =
+      row?.underlying_symbol ?? row?.asset_symbol ?? row?.name ?? tradingSymbol;
 
-      const expiryKey = expiry ? expiry.toISOString().substring(0, 10) : '';
-      const contractKey = `NFO|${underlying}|${expiryKey}|${strike ?? 0}|${instrumentType}`;
+    const expiryKey = expiry ? expiry.toISOString().substring(0, 10) : '';
+    const contractKey = `${map.exchange}|${underlying}|${expiryKey}|${
+      strike ?? 0
+    }|${instrumentType}`;
 
-      return {
-        contractKey,
-        exchange: 'NFO',
-        segment: 'NFO',
-        underlying,
-        instrumentType,
-        expiry,
-        strike,
-        optionType,
-        lotSize,
-        tickSize,
-        broker: Broker.UPSTOX,
-        brokerSymbol: tradingSymbol,
-        brokerToken: instrumentKey,
-      };
-    }
-
-    // Index / other segments are not tradable instruments — skip.
-    return null;
+    return {
+      contractKey,
+      exchange: map.exchange,
+      segment: map.segment,
+      underlying,
+      instrumentType,
+      expiry,
+      strike,
+      optionType,
+      lotSize,
+      tickSize,
+      broker: Broker.UPSTOX,
+      brokerSymbol: tradingSymbol,
+      brokerToken: instrumentKey,
+    };
   }
 }

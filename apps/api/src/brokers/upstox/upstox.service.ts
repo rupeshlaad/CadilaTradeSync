@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.module';
 import { EncryptionService } from '../../encryption/encryption.service';
+import { UpstoxAdapter } from './upstox.adapter';
 
 /**
  * Result of the post-persist credential validation (mirrors FyersService).
@@ -114,6 +115,42 @@ export class UpstoxService {
     }
     if (!session.userId) {
       return { ok: false, reason: 'Persisted broker user id is empty' };
+    }
+
+    // Sprint 6.3.1 — Do NOT trust DB persistence alone: probe an official
+    // authenticated Upstox endpoint (/user/profile) with the persisted token,
+    // exactly the way reads will use it, before reporting Connected. A revoked
+    // / expired / mismatched token fails here instead of surfacing later as a
+    // silent order failure.
+    const account = await this.prisma.tradingAccount.findUnique({
+      where: { id: tradingAccountId },
+    });
+    const adapter = new UpstoxAdapter();
+    try {
+      adapter.setCredentials(
+        account?.encryptedApiKey ? this.encryption.decrypt(account.encryptedApiKey) : '',
+        account?.encryptedApiSecret
+          ? this.encryption.decrypt(account.encryptedApiSecret)
+          : '',
+      );
+    } catch {
+      // Credentials are optional for a Bearer read; ignore decrypt issues here.
+    }
+    adapter.setAccessToken(accessToken);
+
+    let liveUserId: string | undefined;
+    try {
+      const probe = await adapter.validateToken();
+      liveUserId = probe.userId;
+    } catch (err: any) {
+      const msg = (err && (err.message || err.error_type)) || 'unknown error';
+      return {
+        ok: false,
+        reason: `Access token failed live verification against Upstox: ${msg}`,
+      };
+    }
+    if (!liveUserId) {
+      return { ok: false, reason: 'Upstox profile probe returned no user id' };
     }
 
     return { ok: true, userId: session.userId };

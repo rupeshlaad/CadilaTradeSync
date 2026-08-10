@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { Logger } from '@nestjs/common';
+import { upstoxRateLimiter } from './upstox-rate-limiter';
 import {
   BrokerAdapter,
   BrokerCapabilities,
@@ -65,7 +66,11 @@ export class UpstoxAdapter implements BrokerAdapter {
     requiresPassword: false,
     requiresPIN: false,
     requiresTOTP: false,
-    requiresStaticIP: false,
+    // Sprint 6.3.1 — Upstox order APIs (place/modify/cancel/exit) must
+    // originate from a registered static IP (SEBI algo-trading regulation +
+    // Upstox developer-console app static-IP whitelisting). Read/data APIs are
+    // not IP-restricted, but onboarding must reflect the order-API requirement.
+    requiresStaticIP: true,
     requiresRedirect: true,
     requiresVendorCode: false,
     supportsAutoLogin: false,
@@ -74,6 +79,10 @@ export class UpstoxAdapter implements BrokerAdapter {
   };
 
   private readonly baseUrl = 'https://api.upstox.com/v2';
+  // Sprint 6.3.1 — order placement/modify/cancel moved to the latest
+  // officially-supported V3 order APIs on the HFT host (v2 order APIs are
+  // deprecated per Upstox's deprecation notice). Data/read APIs stay on v2.
+  private readonly orderBaseUrl = 'https://api-hft.upstox.com/v3';
   private readonly logger = new Logger('UpstoxAdapter');
 
   // Per-account OAuth credentials (never env-based). Default to the optional
@@ -155,8 +164,9 @@ export class UpstoxAdapter implements BrokerAdapter {
     return s.length <= 8 ? '***' : `${s.slice(0, 4)}…${s.slice(-4)}`;
   }
 
-  /** Authenticated Upstox GET. Returns the raw `{ status, data }` envelope. */
+  /** Authenticated Upstox GET (data API — rate-limited). Returns `{status,data}`. */
   private async get(path: string): Promise<any> {
+    await upstoxRateLimiter.acquire('data');
     this.logger.log(
       `[Upstox GET] ${this.baseUrl}${path} | token=${this.mask(this.accessToken)}`,
     );
@@ -172,20 +182,29 @@ export class UpstoxAdapter implements BrokerAdapter {
     }
   }
 
+  /**
+   * Authenticated write request. `bucket` selects the correct Upstox rate
+   * window ('order' for V3 order APIs, 'data' otherwise). When `absoluteUrl`
+   * is passed the V3 HFT host is used verbatim; otherwise the v2 base is used.
+   */
   private async send(
     method: 'POST' | 'PUT' | 'DELETE',
     path: string,
     payload?: Record<string, any>,
+    opts?: { bucket?: 'order' | 'data'; absoluteUrl?: string },
   ): Promise<any> {
+    const bucket = opts?.bucket ?? 'data';
+    await upstoxRateLimiter.acquire(bucket);
+    const url = opts?.absoluteUrl ?? `${this.baseUrl}${path}`;
     this.logger.log(
-      `[Upstox ${method}] ${this.baseUrl}${path} | token=${this.mask(
+      `[Upstox ${method}] ${url} | token=${this.mask(
         this.accessToken,
       )} | body=${payload ? JSON.stringify(payload) : 'none'}`,
     );
     try {
       const { data, status } = await axios.request({
         method,
-        url: `${this.baseUrl}${path}`,
+        url,
         data: payload,
         headers: { ...this.headers(), 'Content-Type': 'application/json' },
       });
@@ -283,22 +302,47 @@ export class UpstoxAdapter implements BrokerAdapter {
   }
 
   /**
-   * Upstox `/order/place` (Uplink v2). `order` is the already-shaped payload
-   * built by the shared `buildUpstoxPlaceOrder` mapper (instrument_token,
-   * transaction_type, order_type, product, quantity, price, trigger_price,
-   * validity, disclosed_quantity, is_amo, tag). Returns the `{ status, data }`
-   * envelope which carries `order_id` (or `order_ids`).
+   * Live authenticated probe used by the OAuth callback / session validation
+   * to confirm the persisted access token actually works against an official
+   * Upstox endpoint before the broker is marked Connected. Returns the broker
+   * user id on success; throws the verbatim broker error on failure.
+   */
+  async validateToken(): Promise<{ userId?: string }> {
+    const profile = await this.getProfile();
+    return { userId: profile?.userId };
+  }
+
+  /**
+   * Upstox V3 `/order/place` on the HFT host (v2 order APIs are deprecated).
+   * `order` is the already-shaped payload built by the shared
+   * `buildUpstoxPlaceOrder` mapper (instrument_token, transaction_type,
+   * order_type, product, quantity, price, trigger_price, validity,
+   * disclosed_quantity, is_amo, slice, tag). Returns the
+   * `{ status, data: { order_ids }, metadata }` V3 envelope.
    */
   async placeOrder(order: any) {
-    return this.send('POST', '/order/place', order ?? {});
+    return this.send('POST', '/order/place', order ?? {}, {
+      bucket: 'order',
+      absoluteUrl: `${this.orderBaseUrl}/order/place`,
+    });
   }
 
   async modifyOrder(orderId: string, order: any) {
-    return this.send('PUT', '/order/modify', { order_id: orderId, ...(order ?? {}) });
+    return this.send(
+      'PUT',
+      '/order/modify',
+      { order_id: orderId, ...(order ?? {}) },
+      { bucket: 'order', absoluteUrl: `${this.orderBaseUrl}/order/modify` },
+    );
   }
 
   async cancelOrder(orderId: string) {
-    return this.send('DELETE', `/order/cancel?order_id=${encodeURIComponent(orderId)}`);
+    return this.send('DELETE', '/order/cancel', undefined, {
+      bucket: 'order',
+      absoluteUrl: `${this.orderBaseUrl}/order/cancel?order_id=${encodeURIComponent(
+        orderId,
+      )}`,
+    });
   }
 }
 
