@@ -426,3 +426,27 @@ IMPORTANT: if Rupesh's stored App ID is the WRONG string (typo / wrong app / raw
 secret in the App-ID field), no code fixes it — re-save the correct App ID in the
 DB. Diagnostic query provided to the user. Published via Save to GitHub.
 
+
+
+---
+
+## Sprint 6.3 — Upstox (Uplink v2) Complete Broker Onboarding (2026-08-10)
+
+**Status:** Implemented, typecheck + full workspace build PASS. Live order/OAuth verification PENDING (no Upstox app credentials in this env).
+
+Onboarded Upstox as the 5th production broker with full lifecycle parity vs Zerodha / Fyers / ICICI / Shoonya. Upstox = OAuth2 authorization-code flow (mirrors Fyers) over plain REST v2 (mirrors ICICI axios transport). **No new dependency** (built-in `zlib` + existing `axios`). **No DB migration** — `UPSTOX` already existed in the `Broker` enum.
+
+**New files (6):**
+- `apps/api/src/brokers/upstox/upstox.adapter.ts` — REST v2 adapter, per-account Bearer isolation, full data surface + place/modify/cancel + verbatim broker-error surfacing.
+- `apps/api/src/brokers/upstox/upstox.service.ts` — session persist + post-persist validation.
+- `apps/api/src/brokers/upstox/upstox.controller.ts` — OAuth login/callback (dual `/api` prefix, self-contained `state` reconnect ctx).
+- `apps/api/src/brokers/upstox/upstox.module.ts`
+- `apps/api/src/brokers/order-mapping/upstox-order.mapper.ts` — single-source `/order/place` payload mapper.
+- `apps/api/src/instruments/importers/upstox.importer.ts` — NSE cash+F&O from Upstox gz JSON.
+
+**Modified (17):** app.module, broker.service (factory + all normalizers), broker-lifecycle-normalizer, manual-trade.service, order-actions.service, copy-trading.service, instrument.module, admin-instrument.controller, instrument.controller, instrument-stats.service, admin/lib/api.ts, packages/shared (ACTIVE_BROKERS), admin pages (instruments, master-accounts, trade-monitor, orders/[key]), web broker-accounts page.
+
+**Feature commit:** 78f9552 · **Merge commit:** 4146ca8 (feature/upstox-broker-onboarding → main, --no-ff).
+
+**Pending (live-only, marked):** real OAuth round-trip + token exchange, live order placement/modify/cancel/exit, live copy fan-out, instrument-count reconciliation. Requires `UPSTOX_REDIRECT_URI` env + per-account Upstox API app key/secret. Derivative cross-broker contractKey alignment is best-effort (same inherent limitation as existing brokers).
+
