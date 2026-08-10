@@ -140,6 +140,7 @@ export interface AdminInstrumentStatsResponse {
     fyers: number;
     icici: number;
     shoonya: number;
+    upstox: number;
   };
   lastRefresh: {
     overall: string | null;
@@ -147,6 +148,7 @@ export interface AdminInstrumentStatsResponse {
     fyers: string | null;
     icici: string | null;
     shoonya: string | null;
+    upstox: string | null;
   };
   lastSummaries: Record<string, AdminInstrumentImportSummary>;
 }

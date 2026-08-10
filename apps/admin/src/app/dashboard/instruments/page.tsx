@@ -51,7 +51,7 @@ interface ToastItem {
   message?: string;
 }
 
-type ImportKey = 'ZERODHA' | 'FYERS' | 'ICICI_DIRECT' | 'SHOONYA' | 'ALL';
+type ImportKey = 'ZERODHA' | 'FYERS' | 'ICICI_DIRECT' | 'SHOONYA' | 'UPSTOX' | 'ALL';
 
 const EXCHANGE_OPTIONS = ['', 'NSE', 'BSE', 'NFO', 'BFO', 'MCX', 'CDS'];
 const SEGMENT_OPTIONS = ['', 'NSE', 'BSE', 'NFO', 'BFO', 'MCX', 'CDS'];
@@ -242,6 +242,7 @@ export default function InstrumentsPage() {
     FYERS: false,
     ICICI_DIRECT: false,
     SHOONYA: false,
+    UPSTOX: false,
     ALL: false,
   });
   const [importSummaries, setImportSummaries] = useState<
@@ -322,11 +323,13 @@ export default function InstrumentsPage() {
       const fTot = res.summaries?.[Broker.FYERS];
       const iTot = res.summaries?.[Broker.ICICI_DIRECT];
       const sTot = res.summaries?.[Broker.SHOONYA];
+      const uTot = res.summaries?.[Broker.UPSTOX];
       const parts: string[] = [];
       if (zTot) parts.push(`Zerodha ${zTot.inserted + zTot.updated}`);
       if (fTot) parts.push(`Fyers ${fTot.inserted + fTot.updated}`);
       if (iTot) parts.push(`ICICI ${iTot.inserted + iTot.updated}`);
       if (sTot) parts.push(`Shoonya ${sTot.inserted + sTot.updated}`);
+      if (uTot) parts.push(`Upstox ${uTot.inserted + uTot.updated}`);
       pushToast({
         kind: 'success',
         title: 'All brokers refreshed',
@@ -426,6 +429,7 @@ export default function InstrumentsPage() {
     importBusy.FYERS ||
     importBusy.ICICI_DIRECT ||
     importBusy.SHOONYA ||
+    importBusy.UPSTOX ||
     importBusy.ALL;
   const runningBrokerLabel = importBusy.ALL
     ? 'All brokers'
@@ -437,6 +441,8 @@ export default function InstrumentsPage() {
     ? BROKER_LABELS[Broker.ICICI_DIRECT]
     : importBusy.SHOONYA
     ? BROKER_LABELS[Broker.SHOONYA]
+    : importBusy.UPSTOX
+    ? BROKER_LABELS[Broker.UPSTOX]
     : null;
 
   return (
@@ -519,6 +525,24 @@ export default function InstrumentsPage() {
               <>
                 <Download className="h-4 w-4" />
                 Import Shoonya
+              </>
+            )}
+          </Button>
+          <Button
+            variant="outline"
+            onClick={() => runImportOne(Broker.UPSTOX)}
+            disabled={importBusy.UPSTOX || importBusy.ALL}
+            data-testid="import-upstox-btn"
+          >
+            {importBusy.UPSTOX ? (
+              <>
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Import in Progress
+              </>
+            ) : (
+              <>
+                <Download className="h-4 w-4" />
+                Import Upstox
               </>
             )}
           </Button>
@@ -608,6 +632,13 @@ export default function InstrumentsPage() {
           loading={statsLoading && !stats}
           icon={<Badge variant="secondary">{BROKER_LABELS[Broker.SHOONYA]}</Badge>}
           testId="stat-card-shoonya"
+        />
+        <StatCard
+          label="Upstox Instruments"
+          value={formatCount(stats?.counts.upstox)}
+          loading={statsLoading && !stats}
+          icon={<Badge variant="secondary">{BROKER_LABELS[Broker.UPSTOX]}</Badge>}
+          testId="stat-card-upstox"
         />
         <StatCard
           label="Last Refresh"

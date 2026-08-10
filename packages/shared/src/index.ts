@@ -35,6 +35,7 @@ export const ACTIVE_BROKERS: Broker[] = [
   Broker.FYERS,
   Broker.ICICI_DIRECT,
   Broker.SHOONYA,
+  Broker.UPSTOX,
 ];
 
 export function isActiveBroker(broker: Broker): boolean {

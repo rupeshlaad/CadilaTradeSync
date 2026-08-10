@@ -32,7 +32,7 @@ export class InstrumentStatsService {
   }
 
   async snapshot() {
-    const [canonical, brokerMappings, zerodha, fyers, icici, shoonya] =
+    const [canonical, brokerMappings, zerodha, fyers, icici, shoonya, upstox] =
       await Promise.all([
         this.prisma.instrument.count(),
         this.prisma.instrumentBroker.count(),
@@ -42,6 +42,7 @@ export class InstrumentStatsService {
           where: { broker: Broker.ICICI_DIRECT },
         }),
         this.prisma.instrumentBroker.count({ where: { broker: Broker.SHOONYA } }),
+        this.prisma.instrumentBroker.count({ where: { broker: Broker.UPSTOX } }),
       ]);
 
     const summaries = this.getAllSummaries();
@@ -60,6 +61,7 @@ export class InstrumentStatsService {
         fyers,
         icici,
         shoonya,
+        upstox,
       },
       lastRefresh: {
         overall,
@@ -67,6 +69,7 @@ export class InstrumentStatsService {
         fyers: summaries[Broker.FYERS]?.finishedAt ?? null,
         icici: summaries[Broker.ICICI_DIRECT]?.finishedAt ?? null,
         shoonya: summaries[Broker.SHOONYA]?.finishedAt ?? null,
+        upstox: summaries[Broker.UPSTOX]?.finishedAt ?? null,
       },
       lastSummaries: summaries,
     };

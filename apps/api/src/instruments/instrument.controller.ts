@@ -3,6 +3,7 @@ import { ZerodhaImporter } from './importers/zerodha.importer';
 import { FyersImporter } from './importers/fyers.importer';
 import { IciciImporter } from './importers/icici.importer';
 import { ShoonyaImporter } from './importers/shoonya.importer';
+import { UpstoxImporter } from './importers/upstox.importer';
 
 @Controller('instruments')
 export class InstrumentController {
@@ -11,6 +12,7 @@ export class InstrumentController {
     private readonly fyersImporter: FyersImporter,
     private readonly iciciImporter: IciciImporter,
     private readonly shoonyaImporter: ShoonyaImporter,
+    private readonly upstoxImporter: UpstoxImporter,
   ) {}
 
   @Post('import/zerodha')
@@ -53,6 +55,16 @@ export class InstrumentController {
     };
   }
 
+  @Post('import/upstox')
+  async importUpstox() {
+    await this.upstoxImporter.import();
+
+    return {
+      success: true,
+      broker: 'UPSTOX',
+    };
+  }
+
   @Post('import/all')
   async importAll() {
 
@@ -61,6 +73,7 @@ export class InstrumentController {
       this.fyersImporter.import(),
       this.iciciImporter.import(),
       this.shoonyaImporter.import(),
+      this.upstoxImporter.import(),
     ]);
 
     return {

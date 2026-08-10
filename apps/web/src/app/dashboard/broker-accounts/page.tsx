@@ -313,6 +313,9 @@ export default function BrokerAccountsPage() {
       case Broker.SHOONYA:
         window.location.href = `${apiBaseUrl}/brokers/shoonya/login?${q}`;
         break;
+      case Broker.UPSTOX:
+        window.location.href = `${apiBaseUrl}/brokers/upstox/login?${q}`;
+        break;
       case Broker.ICICI_DIRECT:
         // Sprint 6.2.1 — no OAuth redirect; paste a Breeze API Session instead.
         openIciciSession(row);

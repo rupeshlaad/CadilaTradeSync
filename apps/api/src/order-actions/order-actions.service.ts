@@ -11,8 +11,14 @@ import { EncryptionService } from '../encryption/encryption.service';
 import { ZerodhaAdapter } from '../brokers/zerodha/zerodha.adapter';
 import { FyersAdapter } from '../brokers/fyers/fyers.adapter';
 import { ICICIDirectAdapter } from '../brokers/icici/icici.adapter';
+import { UpstoxAdapter } from '../brokers/upstox/upstox.adapter';
 import { InstrumentResolverService } from '../instruments/instrument-resolver.service';
 import { buildIciciPlaceOrder } from '../brokers/order-mapping/icici-order.mapper';
+import {
+  buildUpstoxPlaceOrder,
+  mapUpstoxOrderType,
+  CtsOrderType,
+} from '../brokers/order-mapping/upstox-order.mapper';
 import { ResolvedInstrument } from '../brokers/order-mapping/instrument-context';
 
 import { PositionLifecycleService } from '../position-lifecycle/position-lifecycle.service';
@@ -255,6 +261,27 @@ export class OrderActionsService {
       return adapter.modifyOrder(position.brokerOrderId, payload);
     }
 
+    if (position.broker === Broker.UPSTOX) {
+      const adapter = await this.buildUpstoxAdapter(position, accessToken);
+      const payload: Record<string, unknown> = {
+        quantity: patch.quantity,
+        order_type: mapUpstoxOrderType(
+          ((patch.orderType ?? 'MARKET').toUpperCase() as CtsOrderType) ?? 'MARKET',
+        ),
+        validity: 'DAY',
+        price:
+          patch.price !== null && (orderType === 'LIMIT' || orderType === 'SL')
+            ? patch.price
+            : 0,
+        trigger_price:
+          patch.triggerPrice !== null &&
+          (orderType === 'SL' || orderType === 'SL-M')
+            ? patch.triggerPrice
+            : 0,
+      };
+      return adapter.modifyOrder(position.brokerOrderId, payload);
+    }
+
     throw new BadRequestException(
       `Broker ${position.broker} does not support modify from the admin console`,
     );
@@ -278,6 +305,11 @@ export class OrderActionsService {
     if (position.broker === Broker.ICICI_DIRECT) {
       const adapter = await this.buildIciciAdapter(position, accessToken);
       return adapter.cancelOrder(position.brokerOrderId, position.exchange ?? 'NSE');
+    }
+
+    if (position.broker === Broker.UPSTOX) {
+      const adapter = await this.buildUpstoxAdapter(position, accessToken);
+      return adapter.cancelOrder(position.brokerOrderId);
     }
 
     throw new BadRequestException(
@@ -341,10 +373,60 @@ export class OrderActionsService {
       return adapter.placeOrder(order);
     }
 
+    if (position.broker === Broker.UPSTOX) {
+      const adapter = await this.buildUpstoxAdapter(position, accessToken);
+      const instrumentToken = await this.resolveUpstoxToken(position);
+      const order = buildUpstoxPlaceOrder({
+        instrumentToken,
+        // An exit is the opposite side of the open position.
+        side: position.side === 'BUY' ? 'SELL' : 'BUY',
+        orderType: 'MARKET',
+        quantity: exitQuantity,
+        product: (position.productType as any) === 'I' ? 'MIS' : 'CNC',
+        validity: 'DAY',
+        tag: 'CTSExit',
+      });
+      return adapter.placeOrder(order);
+    }
+
 
     throw new BadRequestException(
       `Broker ${position.broker} does not support exit from the admin console`,
     );
+  }
+
+  /** Build a credentialed Upstox adapter for order actions. */
+  private async buildUpstoxAdapter(
+    position: PositionRecord,
+    accessToken: string,
+  ): Promise<UpstoxAdapter> {
+    const account = await this.prisma.tradingAccount.findUnique({
+      where: { id: position.masterAccountId },
+    });
+    const adapter = new UpstoxAdapter();
+    adapter.setCredentials(
+      account?.encryptedApiKey
+        ? this.encryption.decrypt(account.encryptedApiKey)
+        : '',
+      account?.encryptedApiSecret
+        ? this.encryption.decrypt(account.encryptedApiSecret)
+        : '',
+    );
+    adapter.setAccessToken(accessToken);
+    return adapter;
+  }
+
+  /** Resolve the Upstox instrument_token for a tracked position. */
+  private async resolveUpstoxToken(position: PositionRecord): Promise<string> {
+    const mapping = await this.prisma.instrumentBroker.findFirst({
+      where: {
+        broker: Broker.UPSTOX,
+        brokerSymbol: position.symbol,
+        exchange: position.exchange ?? 'NSE',
+      },
+      select: { brokerToken: true },
+    });
+    return mapping?.brokerToken ?? position.symbol;
   }
 
   /** Build a credentialed ICICI Direct (Breeze) adapter for order actions. */

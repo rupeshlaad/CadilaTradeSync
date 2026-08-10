@@ -282,6 +282,8 @@ export default function MasterAccountsPage() {
                                 ? 'fyers'
                                 : r.broker === 'SHOONYA'
                                 ? 'shoonya'
+                                : r.broker === 'UPSTOX'
+                                ? 'upstox'
                                 : 'zerodha';
                             const loginUrl =
                               `${api}/brokers/${brokerPath}/login?tradingAccountId=${r.id}&returnTo=${returnTo}`;

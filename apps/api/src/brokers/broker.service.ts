@@ -5,6 +5,7 @@ import { ZerodhaAdapter } from './zerodha/zerodha.adapter';
 import { FyersAdapter } from './fyers/fyers.adapter';
 import { ShoonyaAdapter } from './shoonya/shoonya.adapter';
 import { ICICIDirectAdapter } from './icici/icici.adapter';
+import { UpstoxAdapter } from './upstox/upstox.adapter';
 import { Broker, BrokerSession, ConnectionStatus, TradingAccount } from '@prisma/client';
 import type {
   BrokerCapabilities,
@@ -30,7 +31,8 @@ type AnyAdapter =
   | ZerodhaAdapter
   | FyersAdapter
   | ShoonyaAdapter
-  | ICICIDirectAdapter;
+  | ICICIDirectAdapter
+  | UpstoxAdapter;
 
 interface SettledSection<T> {
   data: T | null;
@@ -139,6 +141,20 @@ export class BrokerService {
         if (userId) adapter.setUserId(userId);
         return adapter;
       }
+      case Broker.UPSTOX: {
+        // Sprint 6.3 — Upstox account isolation: the Bearer token is bound to
+        // the account's own client_id (api key), so reads use THIS account's
+        // credentials + access token (never global env), mirroring Fyers/ICICI.
+        const adapter = new UpstoxAdapter();
+        if (creds?.apiKey) {
+          adapter.setCredentials(creds.apiKey, creds.apiSecret ?? '');
+        }
+        if (process.env.UPSTOX_REDIRECT_URI) {
+          adapter.setRedirectUri(process.env.UPSTOX_REDIRECT_URI);
+        }
+        adapter.setAccessToken(accessToken);
+        return adapter;
+      }
       case Broker.ZERODHA:
       default: {
         const adapter = new ZerodhaAdapter();
@@ -163,7 +179,8 @@ export class BrokerService {
   ): { apiKey?: string; apiSecret?: string } | undefined {
     if (
       account.broker !== Broker.ICICI_DIRECT &&
-      account.broker !== Broker.FYERS
+      account.broker !== Broker.FYERS &&
+      account.broker !== Broker.UPSTOX
     ) {
       return undefined;
     }
@@ -234,6 +251,8 @@ export class BrokerService {
         return ShoonyaAdapter.capabilities;
       case Broker.ICICI_DIRECT:
         return ICICIDirectAdapter.capabilities;
+      case Broker.UPSTOX:
+        return UpstoxAdapter.capabilities;
       case Broker.ZERODHA:
         return ZerodhaAdapter.capabilities;
       default:
@@ -316,7 +335,32 @@ export class BrokerService {
     if (broker === Broker.FYERS) return this.normalizeFyersFunds(margins);
     if (broker === Broker.SHOONYA) return this.normalizeShoonyaFunds(margins);
     if (broker === Broker.ICICI_DIRECT) return this.normalizeICICIFunds(margins);
+    if (broker === Broker.UPSTOX) return this.normalizeUpstoxFunds(margins);
     return this.normalizeZerodhaFunds(margins);
+  }
+
+  private normalizeUpstoxFunds(margins: any) {
+    // Upstox get-funds-and-margin → { equity: { used_margin, payin_amount,
+    //   span_margin, adhoc_margin, notional_cash, available_margin,
+    //   exposure_margin }, commodity: {...} }. Values read straight from the
+    //   broker — never fabricated.
+    if (!margins || typeof margins !== 'object') return null;
+    const out: ReturnType<BrokerService['fund']>[] = [];
+    for (const segment of ['equity', 'commodity']) {
+      const row = margins[segment];
+      if (!row || typeof row !== 'object') continue;
+      const available = this.num(row.available_margin);
+      const used = this.num(row.used_margin);
+      out.push(
+        this.fund(segment.toUpperCase(), {
+          availableCash: this.num(row.notional_cash ?? row.payin_amount) ?? available,
+          usedMargin: used,
+          availableMargin: available,
+          net: available,
+        }),
+      );
+    }
+    return out.length > 0 ? out : null;
   }
 
   private normalizeICICIFunds(margins: any) {
@@ -796,6 +840,8 @@ export class BrokerService {
         return ShoonyaAdapter.features;
       case Broker.ICICI_DIRECT:
         return ICICIDirectAdapter.features;
+      case Broker.UPSTOX:
+        return UpstoxAdapter.features;
       case Broker.ZERODHA:
         return ZerodhaAdapter.features;
       default:
@@ -823,6 +869,8 @@ export class BrokerService {
         return ShoonyaAdapter.onboarding;
       case Broker.ICICI_DIRECT:
         return ICICIDirectAdapter.onboarding;
+      case Broker.UPSTOX:
+        return UpstoxAdapter.onboarding;
       case Broker.ZERODHA:
         return ZerodhaAdapter.onboarding;
       default:
@@ -875,9 +923,23 @@ export class BrokerService {
   }
 
   private normalizeHoldings(broker: Broker, raw: any) {
-    const list = this.toArray(broker, raw, ['holdings']);
+    const list = this.toArray(broker, raw, ['holdings', 'data']);
     if (!list) return null;
     return list.map((h: any) => {
+      if (broker === Broker.UPSTOX) {
+        const qty = this.num(h?.quantity);
+        const ltp = this.num(h?.last_price ?? h?.close_price);
+        return {
+          symbol: h?.tradingsymbol ?? '—',
+          exchange: h?.exchange != null ? String(h.exchange) : null,
+          quantity: qty,
+          averagePrice: this.num(h?.average_price),
+          ltp,
+          currentValue:
+            qty !== null && ltp !== null ? Number((qty * ltp).toFixed(2)) : null,
+          pnl: this.num(h?.pnl),
+        };
+      }
       if (broker === Broker.FYERS) {
         const qty = this.num(h?.quantity ?? h?.remainingQuantity);
         return {
@@ -947,9 +1009,20 @@ export class BrokerService {
   }
 
   private normalizePositions(broker: Broker, raw: any) {
-    const list = this.toArray(broker, raw, ['net', 'netPositions']);
+    const list = this.toArray(broker, raw, ['net', 'netPositions', 'data']);
     if (!list) return null;
     return list.map((p: any) => {
+      if (broker === Broker.UPSTOX) {
+        return {
+          symbol: p?.tradingsymbol ?? '—',
+          exchange: p?.exchange != null ? String(p.exchange) : null,
+          product: p?.product ?? null,
+          quantity: this.num(p?.quantity),
+          averagePrice: this.num(p?.average_price ?? p?.buy_price),
+          ltp: this.num(p?.last_price),
+          pnl: this.num(p?.pnl ?? p?.unrealised),
+        };
+      }
       if (broker === Broker.FYERS) {
         return {
           symbol: p?.symbol ?? '—',
@@ -1007,9 +1080,24 @@ export class BrokerService {
   }
 
   private normalizeOrders(broker: Broker, raw: any) {
-    const list = this.toArray(broker, raw, ['orderBook']);
+    const list = this.toArray(broker, raw, ['orderBook', 'data']);
     if (!list) return null;
     return list.map((o: any) => {
+      if (broker === Broker.UPSTOX) {
+        const qty = this.num(o?.quantity);
+        return {
+          orderId: o?.order_id ?? '—',
+          symbol: o?.tradingsymbol ?? '—',
+          side: o?.transaction_type ?? null,
+          product: o?.product ?? null,
+          quantity: qty,
+          filledQuantity: this.num(o?.filled_quantity),
+          price: this.num(o?.price ?? o?.average_price),
+          status: o?.status ?? null,
+          orderType: o?.order_type ?? null,
+          time: o?.order_timestamp ?? o?.exchange_timestamp ?? null,
+        };
+      }
       if (broker === Broker.FYERS) {
         return {
           orderId: o?.id ?? '—',
@@ -1071,9 +1159,20 @@ export class BrokerService {
   }
 
   private normalizeTrades(broker: Broker, raw: any) {
-    const list = this.toArray(broker, raw, ['tradeBook']);
+    const list = this.toArray(broker, raw, ['tradeBook', 'data']);
     if (!list) return null;
     return list.map((t: any) => {
+      if (broker === Broker.UPSTOX) {
+        return {
+          tradeId: t?.trade_id ?? t?.order_id ?? '—',
+          orderId: t?.order_id ?? null,
+          symbol: t?.tradingsymbol ?? '—',
+          side: t?.transaction_type ?? null,
+          quantity: this.num(t?.quantity),
+          price: this.num(t?.trade_price ?? t?.average_price),
+          time: t?.trade_timestamp ?? t?.order_timestamp ?? null,
+        };
+      }
       if (broker === Broker.FYERS) {
         return {
           tradeId: t?.id ?? t?.orderNumber ?? '—',

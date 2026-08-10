@@ -12,6 +12,7 @@ import { ZerodhaImporter } from './importers/zerodha.importer';
 import { FyersImporter } from './importers/fyers.importer';
 import { IciciImporter } from './importers/icici.importer';
 import { ShoonyaImporter } from './importers/shoonya.importer';
+import { UpstoxImporter } from './importers/upstox.importer';
 import { InstrumentIntegrityService } from './instrument-integrity.service';
 
 @Module({
@@ -32,6 +33,7 @@ import { InstrumentIntegrityService } from './instrument-integrity.service';
     FyersImporter,
     IciciImporter,
     ShoonyaImporter,
+    UpstoxImporter,
   ],
   exports: [
     InstrumentService,

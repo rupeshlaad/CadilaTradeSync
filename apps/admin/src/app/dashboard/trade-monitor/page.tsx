@@ -51,7 +51,9 @@ const BROKER_OPTIONS = [
   { value: '', label: 'All brokers' },
   { value: 'ZERODHA', label: 'Zerodha' },
   { value: 'FYERS', label: 'Fyers' },
+  { value: 'ICICI_DIRECT', label: 'ICICI Direct' },
   { value: 'SHOONYA', label: 'Shoonya' },
+  { value: 'UPSTOX', label: 'Upstox' },
 ];
 
 const PAGE_SIZE = 25;

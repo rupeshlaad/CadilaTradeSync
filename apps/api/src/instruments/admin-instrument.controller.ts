@@ -19,6 +19,7 @@ import { ZerodhaImporter } from './importers/zerodha.importer';
 import { FyersImporter } from './importers/fyers.importer';
 import { IciciImporter } from './importers/icici.importer';
 import { ShoonyaImporter } from './importers/shoonya.importer';
+import { UpstoxImporter } from './importers/upstox.importer';
 import { InstrumentIntegrityService } from './instrument-integrity.service';
 
 import {
@@ -40,6 +41,7 @@ export class AdminInstrumentController {
     private readonly fyersImporter: FyersImporter,
     private readonly iciciImporter: IciciImporter,
     private readonly shoonyaImporter: ShoonyaImporter,
+    private readonly upstoxImporter: UpstoxImporter,
     private readonly integrity: InstrumentIntegrityService,
     private readonly stats: InstrumentStatsService,
   ) {}
@@ -199,6 +201,10 @@ export class AdminInstrumentController {
       const summary = await this.shoonyaImporter.import();
       return { success: true, broker: Broker.SHOONYA, summary };
     }
+    if (normalised === Broker.UPSTOX) {
+      const summary = await this.upstoxImporter.import();
+      return { success: true, broker: Broker.UPSTOX, summary };
+    }
     throw new NotFoundException(
       `No importer registered for broker "${broker}"`,
     );
@@ -210,20 +216,22 @@ export class AdminInstrumentController {
    */
   @Post('import')
   async triggerImportAll() {
-    const [zerodha, fyers, icici, shoonya] = await Promise.all([
+    const [zerodha, fyers, icici, shoonya, upstox] = await Promise.all([
       this.zerodhaImporter.import(),
       this.fyersImporter.import(),
       this.iciciImporter.import(),
       this.shoonyaImporter.import(),
+      this.upstoxImporter.import(),
     ]);
     return {
       success: true,
-      brokers: [Broker.ZERODHA, Broker.FYERS, Broker.ICICI_DIRECT, Broker.SHOONYA],
+      brokers: [Broker.ZERODHA, Broker.FYERS, Broker.ICICI_DIRECT, Broker.SHOONYA, Broker.UPSTOX],
       summaries: {
         ZERODHA: zerodha,
         FYERS: fyers,
         ICICI_DIRECT: icici,
         SHOONYA: shoonya,
+        UPSTOX: upstox,
       },
     };
   }

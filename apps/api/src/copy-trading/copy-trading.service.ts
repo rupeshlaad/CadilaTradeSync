@@ -8,7 +8,9 @@ import { InstrumentResolverService } from '../instruments/instrument-resolver.se
 import { TradeEvent } from './dto/trade-event.dto';
 import { FyersAdapter } from '../brokers/fyers/fyers.adapter';
 import { ICICIDirectAdapter } from '../brokers/icici/icici.adapter';
+import { UpstoxAdapter } from '../brokers/upstox/upstox.adapter';
 import { buildIciciPlaceOrder } from '../brokers/order-mapping/icici-order.mapper';
+import { buildUpstoxPlaceOrder } from '../brokers/order-mapping/upstox-order.mapper';
 import { ResolvedInstrument } from '../brokers/order-mapping/instrument-context';
 import {
   ExecutionEventRecorderService,
@@ -124,7 +126,7 @@ export class CopyTradingService {
         try {
 
           //-----------------------------------------
-          // Supported follower brokers: FYERS + ICICI Direct.
+          // Supported follower brokers: FYERS + ICICI Direct + Upstox.
           // (Zerodha / Shoonya copy execution remain future work.)
           //-----------------------------------------
 
@@ -132,7 +134,8 @@ export class CopyTradingService {
 
           if (
             followerBroker !== Broker.FYERS &&
-            followerBroker !== Broker.ICICI_DIRECT
+            followerBroker !== Broker.ICICI_DIRECT &&
+            followerBroker !== Broker.UPSTOX
           ) {
 
             this.logger.warn(
@@ -141,7 +144,7 @@ export class CopyTradingService {
 
             rec.skip(
               'BROKER_UNSUPPORTED',
-              `Broker ${followerBroker} is not supported for copy execution (Fyers + ICICI Direct)`,
+              `Broker ${followerBroker} is not supported for copy execution (Fyers + ICICI Direct + Upstox)`,
             );
 
             continue;
@@ -276,6 +279,49 @@ export class CopyTradingService {
             ok = result?.s === 'ok';
             brokerMessage =
               (result as any)?.message ??
+              (typeof result === 'string' ? result : null);
+
+          } else if (followerBroker === Broker.UPSTOX) {
+
+            // Upstox — build the /order/place payload via the shared mapper.
+            // The instrument_token is the InstrumentBroker.brokerToken stored
+            // by the Upstox importer (falls back to the symbol if absent).
+            const account = follower.tradingAccount;
+            const adapter = new UpstoxAdapter();
+            adapter.setCredentials(
+              account.encryptedApiKey
+                ? this.encryption.decrypt(account.encryptedApiKey)
+                : '',
+              account.encryptedApiSecret
+                ? this.encryption.decrypt(account.encryptedApiSecret)
+                : '',
+            );
+            adapter.setAccessToken(accessToken);
+
+            const order = buildUpstoxPlaceOrder({
+              instrumentToken:
+                followerSymbol.brokerToken ?? followerSymbol.brokerSymbol,
+              side: event.side,
+              orderType: 'MARKET',
+              quantity: qty,
+              product: 'MIS',
+              validity: 'DAY',
+              tag: 'CTSCopy',
+            });
+
+            this.logger.log(JSON.stringify(order, null, 2));
+            result = await adapter.placeOrder(order);
+            const orderId =
+              result?.data?.order_id ??
+              (Array.isArray(result?.data?.order_ids)
+                ? result.data.order_ids[0]
+                : null);
+            ok = !!orderId;
+            brokerMessage =
+              (result as any)?.message ??
+              (Array.isArray((result as any)?.errors)
+                ? (result as any).errors?.[0]?.message
+                : null) ??
               (typeof result === 'string' ? result : null);
 
           } else {
