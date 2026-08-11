@@ -565,3 +565,43 @@ app's redirect URI registered in the Shoonya OAuth app.
 Feature commit `fabf3fe`; merge (`--no-ff`) commit `becb527` on local `main`.
 NOT pushed — user publishes via **Save to GitHub**.
 
+
+
+---
+
+## Fix — Upstox `UDAPI1014: Redirect URI is required` (env loading) (2026-08) — DONE (static)
+
+**Symptom:** Upstox OAuth failed with `UDAPI1014: Redirect URI is required` even
+though `apps/api/.env` sets `UPSTOX_REDIRECT_URI`. At runtime
+`process.env.UPSTOX_REDIRECT_URI` was empty.
+
+**Root cause (from source):** `apps/api/src/app.module.ts` used
+`ConfigModule.forRoot({ envFilePath: ['.env'] })`. `@nestjs/config` resolves a
+relative `envFilePath` against `process.cwd()`. The API is started with cwd
+!= `apps/api` — `docker/api.Dockerfile` sets `WORKDIR /app` + `CMD node dist/main.js`,
+and `node dist/main.js` / `start:prod` run from the repo root — so ConfigModule
+looked for `<cwd>/.env`, never loaded `apps/api/.env`, and the var stayed
+undefined. `UpstoxAdapter` (`redirectUri = process.env.UPSTOX_REDIRECT_URI ?? ''`),
+`UpstoxController` and `BrokerService` all read `process.env.UPSTOX_REDIRECT_URI`
+directly → empty `redirect_uri` sent → `UDAPI1014`. It worked under `pnpm dev`
+only because pnpm sets cwd to `apps/api`.
+
+**Fix (one line + import, `apps/api/src/app.module.ts`):**
+`envFilePath: [join(__dirname, '..', '.env'), '.env']` — anchors to
+`apps/api/.env` via the compiled `dist` dir (`apps/api/dist/** → ../.env`),
+cwd-independent; keeps the cwd-relative `.env` as a fallback. No adapter/
+controller/service change (ConfigModule `isGlobal` already writes to
+`process.env`). No other code touched.
+
+**Validated (static):** `pnpm -r typecheck` 6/6 PASS; `pnpm -r build` all PASS;
+boot-sanity maps all 4 Upstox routes (crash only at Prisma/DATABASE_URL);
+new harness `backend/tests/upstox_redirect_env_harness.cjs` 4/4 ALL PASS
+(reproduces the empty-var bug from a foreign cwd + proves the fix populates
+ConfigService & process.env via the real @nestjs/config); shoonya + fyers
+harnesses ALL PASS (no regression). testing_agent iteration_14: 100%.
+
+**Not verified (impossible in pod):** live Upstox OAuth round-trip — confirm on
+local run where `apps/api/.env` exists.
+
+Feature commit `d413f83`; merge (`--no-ff`) `6710ecf` on local `main`.
+NOT pushed — user publishes via **Save to GitHub**.
