@@ -1,0 +1,21 @@
+{
+  "summary": "Static-only verification of Manual Trading exchange projection fix. Re-ran all 5 harnesses, workspace typecheck (6/6), and @cts/api build. Confirmed compiled dist projects `exchange: row.exchange`.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": { "ui_bugs": [], "integration_issues": [], "design_issues": [] },
+  "test_report_links": [
+    "/app/backend/tests/manual_search_exchange_harness.cjs",
+    "/app/backend/tests/upstox_redirect_env_harness.cjs",
+    "/app/backend/tests/shoonya_oauth_harness.cjs",
+    "/app/backend/tests/fyers_account_isolation_harness.cjs",
+    "/app/backend/tests/fyers_reconnect_harness.cjs"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [],
+  "updated_files": [],
+  "success_rate": { "backend": "100%", "frontend": "N/A (skipped per request)" },
+  "seed_data_creation": "None. Harnesses use in-file fake Prisma.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Environment is static-only (no Postgres/Redis). Verified: (a) node backend/tests/manual_search_exchange_harness.cjs => RESULT: 8/8 ALL PASS (exit 0); (b) grep confirms apps/api/src/instruments/instrument.service.ts:306 and apps/api/dist/instruments/instrument.service.js:192 both contain `exchange: row.exchange`; (c) pnpm -r typecheck: 6/6 projects Done (exit 0); (d) pnpm --filter @cts/api build: PASS (exit 0); (e) prior regression harnesses (upstox_redirect_env 4/4, shoonya_oauth 9/9, fyers_account_isolation ALL PASS, fyers_reconnect ALL PASS). Legacy Upstox-TCS-NSE-linked-to-BSE-canonical data mis-link is a DB integrity concern, not part of this code change (explicitly out of scope per request).",
+  "rca_of_the_issue": "Prior RCA: searchForManualTrading() projected exchange from the canonical Instrument (row.instrument.exchange) instead of the authoritative InstrumentBroker mapping (row.exchange). Fix (line 306) switches to row.exchange, so broker-mapping NSE row correctly surfaces as NSE even when its canonical link is a stale BSE record. Segment/lotSize/tickSize/expiry/strike/optionType still sourced from row.instrument (verified by harness Check 1 asserting segment=BSE alongside exchange=NSE)."
+}
