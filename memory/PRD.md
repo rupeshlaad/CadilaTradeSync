@@ -494,3 +494,74 @@ Corrected only the 6 audited production issues; no new features, no architecture
 **Fix commit:** fd2a785 · **Merge commit:** 7085e13 (fix/shoonya-gateway-resilience → main, --no-ff).
 **Production-ready?** CTS code is correct and now degrades gracefully. Live login success depends on Finvasia's gateway recovering (broker-side); it cannot be verified while the 502 outage persists and no Shoonya credentials exist in this env.
 
+
+---
+
+## Sprint 6.2.0 — Shoonya QuickAuth → OAuth migration (2026-08) — DONE (static)
+
+**Reported:** Shoonya (Finvasia) officially retired the password+TOTP `QuickAuth`
+login (`/NorenWClientTP/QuickAuth`) and moved to an OAuth 2.0 authorization-code
+flow on the new base `/NorenWClientAPI/` (official SDK:
+github.com/Shoonya-API-OAuth-Python/Shoonya_API_OAuth). CTS had to migrate.
+(A previous run reportedly finished the code but ran out of credits before the
+commit — verified there was NO stashed/uncommitted/dangling Shoonya OAuth work
+on origin/main, so it was re-implemented fresh.)
+
+**OAuth contract (from official SDK + Noren OAuth docs):**
+- Authorize URL: `https://api.shoonya.com/OAuthlogin/authorize/oauth?api_key=<apiKey>`
+  → broker redirects to the app's redirect URI with `?code=<auth_code>`.
+- Token exchange: POST `/NorenWClientAPI/GenAcsTok` with
+  `jData={code, checksum}`, `checksum = SHA256(apiKey + secretCode + code)`
+  (no spaces). Response: `{stat, access_token, refresh_token, expires_in, uid,
+  actid, uname, email}`.
+- Authenticated reads: Noren POST `jData=<json>&jKey=<access_token>` PLUS header
+  `Authorization: Bearer <access_token>` (access token replaces the legacy
+  `susertoken`).
+
+**Changes (feature branch `feature/shoonya-oauth-migration`, Shoonya-only):**
+- `shoonya.adapter.ts`: `setCredentials(apiKey, secretCode)` (trimmed);
+  `getLoginUrl(state?)`; `exchangeToken(code)` (GenAcsTok + checksum, sets
+  access token + uid/actid); authenticated `post()` now sends Bearer header +
+  `jKey`; new `NorenWClientAPI` base; `validateToken()`; onboarding/features
+  migrated to OAuth (requiresOAuth/Redirect/ApiKey/Secret = true,
+  password/TOTP/vendor = false, supportsAutoLogin = false). Legacy QuickAuth
+  `login()` removed. Sprint 6.1.8 gateway 502/HTML resilience + empty-book
+  handling preserved.
+- `shoonya.service.ts`: OAuth `saveSession()` (encrypt access token,
+  `expiresAt` from `expires_in` epoch, CONNECTED + lastHeartbeat) +
+  `validatePersistedSession()` — mirrors FyersService (no second live probe:
+  callback already exercised the token via getProfile; avoids failing on a
+  transient Noren 502).
+- `shoonya.controller.ts`: `@Controller(['brokers/shoonya','api/brokers/shoonya'])`
+  (dual prefix) with GET `login` + GET `callback` — per-account adapter,
+  self-contained OAuth `state` reconnect context + cookie/map fallback,
+  post-persist validation gate — mirrors Fyers/Upstox controllers.
+- Broker factory (`broker.service.ts`) UNCHANGED (buildAdapter Shoonya branch
+  still `setSessionToken` + `setUserId`), so dashboard / master-watcher /
+  copy-trading / manual-trading read paths work with the OAuth access token
+  with no edits. NO schema/Prisma/migration change (reuses BrokerSession
+  encryptedAccessToken/userId/userName/expiresAt). NO frontend change (web
+  broker-accounts page already redirects Shoonya to `/brokers/shoonya/login`;
+  API Key/Secret fields already present). No other broker touched.
+
+**Validated (static, this pod):** `pnpm -r typecheck` 6/6 PASS; `pnpm -r build`
+all workspaces PASS; NestJS boot-sanity maps all 4 Shoonya routes
+(`/brokers/shoonya/{login,callback}` + `/api/...`), crash only at
+PrismaModule/DATABASE_URL after full DI graph; new static logic harness
+`backend/tests/shoonya_oauth_harness.cjs` 9/9 ALL PASS (authorize URL,
+GenAcsTok checksum, Bearer+jKey reads, validateToken, empty-book,
+gateway-outage typing, OAuth onboarding, QuickAuth removed); Fyers isolation +
+reconnect harnesses ALL PASS (no regression). testing_agent iteration_13: 100%
+backend, no critical/minor issues.
+
+**NOT verified (impossible in this pod — no Postgres/Redis, no live daily
+Shoonya OAuth session, no registered redirect URI, no preview URL):** the live
+OAuth round-trip (real login redirect → code → GenAcsTok token exchange), live
+authenticated reads, session restore, broker health, account reconnect, and
+live manual/copy trading against Shoonya prod. To confirm on the user's local
+run with a Shoonya OAuth API key + secret code saved on the account and the
+app's redirect URI registered in the Shoonya OAuth app.
+
+Feature commit `fabf3fe`; merge (`--no-ff`) commit `becb527` on local `main`.
+NOT pushed — user publishes via **Save to GitHub**.
+
