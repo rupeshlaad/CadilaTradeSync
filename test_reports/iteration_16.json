@@ -1,0 +1,23 @@
+{
+  "summary": "Static-only verification for Sprint 6.2.8 InstrumentIntegrityService 3-column dedupe. Ran integrity_dedupe_exchange_harness.cjs (9/9 ALL PASS), all 5 prior regression harnesses (all PASS), pnpm -r typecheck (6/6 projects PASS), and pnpm --filter @cts/api build (PASS). Verified compiled apps/api/dist/instruments/instrument-integrity.service.js contains `GROUP BY broker, \"brokerSymbol\", exchange` and `a.exchange = b.exchange`.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/integrity_dedupe_exchange_harness.cjs",
+    "/app/backend/tests/manual_search_exchange_harness.cjs",
+    "/app/backend/tests/upstox_redirect_env_harness.cjs",
+    "/app/backend/tests/shoonya_oauth_harness.cjs",
+    "/app/backend/tests/fyers_account_isolation_harness.cjs",
+    "/app/backend/tests/fyers_reconnect_harness.cjs"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [],
+  "updated_files": [],
+  "success_rate": {"backend": "100%", "frontend": "N/A (skipped per request)"},
+  "seed_data_creation": "None (static verification only, no DB access).",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": false,
+  "test_credentials": "N/A",
+  "context_for_next_testing_agent": "Sprint 6.2.8 InstrumentIntegrityService dedupe verified static-only: harness 9/9 ALL PASS; compiled dist contains 3-col GROUP BY (broker, brokerSymbol, exchange) and DELETE join on a.exchange=b.exchange with a.id>b.id tiebreaker; typecheck 6/6; @cts/api build PASS; prior 5 harnesses regression-clean. Case 1 (ZERODHA/TCS NSE+BSE), Case 2 (ICICI_DIRECT/INFY NSE+BSE), and Case 3 (identical triple + identical timestamps) all validated by simulated SQL predicates. No DB dedupe execution attempted (out-of-scope per request).",
+  "rca_of_the_issue": "Prior bug: InstrumentIntegrityService still keyed dedupe on the stale 2-column (broker, brokerSymbol) after schema uniqueness was widened to 3-col in 6.2.8, so 'Fix Issues' deleted one of two legitimate dual-listed rows (NSE vs BSE). Fix (verified in compiled dist): countDuplicateMappings GROUP BY includes exchange; removeDuplicateMappings DELETE join adds a.exchange=b.exchange and (a.createdAt>b.createdAt OR equal-createdAt AND a.id>b.id) tiebreaker."
+}
