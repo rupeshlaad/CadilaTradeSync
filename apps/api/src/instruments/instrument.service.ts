@@ -298,7 +298,12 @@ export class InstrumentService {
       tradingSymbol: row.brokerSymbol,
       brokerSymbol: row.brokerSymbol,
       displayName,
-      exchange: row.instrument.exchange,
+      // Sprint fix — the exchange is taken from the broker mapping
+      // (InstrumentBroker.exchange, authoritative per Sprint 6.2.8), NOT the
+      // canonical Instrument. A legacy broker row can still be linked to a
+      // different-exchange canonical (e.g. Upstox "TCS" NSE row pointing at the
+      // BSE|TCS canonical), which previously surfaced the wrong exchange.
+      exchange: row.exchange,
       segment: row.instrument.segment,
       lotSize: row.instrument.lotSize,
       tickSize: row.instrument.tickSize,
