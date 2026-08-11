@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { createHash } from 'crypto';
 import {
   BrokerAdapter,
   BrokerCapabilities,
@@ -9,14 +10,31 @@ import {
 } from '../broker.interface';
 
 /**
- * Sprint 6.1.6 — Full Shoonya (Finvasia Noren) adapter.
+ * Sprint 6.2.0 — Shoonya (Finvasia Noren) OAuth adapter.
  *
- * Noren REST endpoints are POST calls with a body of
- * `jData=<json>&jKey=<susertoken>` (application/x-www-form-urlencoded). Data
- * endpoints require `uid` and `actid` in jData, both derived from the stored
- * account user id (== Noren account id for retail accounts). Every documented
- * account endpoint is wired: UserDetails, Limits, Holdings, PositionBook,
- * OrderBook, TradeBook, Logout.
+ * Shoonya officially retired the password + TOTP `QuickAuth` login
+ * (`/NorenWClientTP/QuickAuth`) and moved to an OAuth 2.0 authorization-code
+ * flow on the new `/NorenWClientAPI/` base, per the official OAuth SDK
+ * (github.com/Shoonya-API-OAuth-Python/Shoonya_API_OAuth) and the Noren OAuth
+ * docs. This adapter mirrors the Fyers/Upstox OAuth adapters:
+ *
+ *   1. `getLoginUrl(state?)` → the hosted authorize URL
+ *      `https://api.shoonya.com/OAuthlogin/authorize/oauth?api_key=<apiKey>`.
+ *      After the user logs in, Shoonya redirects to the app's registered
+ *      redirect URI with `?code=<auth_code>`.
+ *   2. `exchangeToken(code)` → POSTs `jData={code, checksum}` to
+ *      `/NorenWClientAPI/GenAcsTok`, where
+ *      `checksum = SHA256(apiKey + secretCode + code)` (no spaces). Returns the
+ *      daily `access_token` (+ refresh_token / uid / actid / uname).
+ *   3. Every authenticated read is a Noren POST of
+ *      `jData=<json>&jKey=<access_token>` with an
+ *      `Authorization: Bearer <access_token>` header (the OAuth access token
+ *      replaces the legacy `susertoken`).
+ *
+ * Data endpoints (UserDetails, Limits, Holdings, PositionBook, OrderBook,
+ * TradeBook, Logout) are unchanged from the Noren contract — only the base URL,
+ * the login mechanism and the token header changed. The Sprint 6.1.8 network
+ * resilience (retry + typed gateway-outage error on 502/HTML) is preserved.
  */
 export class ShoonyaAdapter implements BrokerAdapter {
   static readonly capabilities: BrokerCapabilities = {
@@ -40,40 +58,74 @@ export class ShoonyaAdapter implements BrokerAdapter {
     supportsOrders: true,
     supportsTrades: true,
     supportsPortfolio: true,
-    supportsAutoLogin: true,
+    // Sprint 6.2.0 — OAuth is interactive (redirect + user login), so there is
+    // no silent auto-login. A fresh OAuth login is required daily.
+    supportsAutoLogin: false,
     supportsLogout: true,
     supportsSessionRefresh: false,
   };
 
   static readonly onboarding: BrokerOnboardingRequirements = {
-    requiresOAuth: false,
-    requiresApiKey: true,
-    requiresSecret: false,
-    requiresPassword: true,
+    // Sprint 6.2.0 — migrated from QuickAuth (password/TOTP/vendor) to OAuth.
+    requiresOAuth: true,
+    requiresApiKey: true, // Shoonya OAuth API key (client_id).
+    requiresSecret: true, // Shoonya OAuth secret code.
+    requiresPassword: false,
     requiresPIN: false,
-    requiresTOTP: true,
+    requiresTOTP: false,
     requiresStaticIP: false,
-    requiresRedirect: false,
-    requiresVendorCode: true,
-    supportsAutoLogin: true,
+    requiresRedirect: true,
+    requiresVendorCode: false,
+    supportsAutoLogin: false,
     supportsTokenRefresh: false,
-    supportsMFA: true,
+    supportsMFA: false,
   };
 
-  private readonly baseUrl = 'https://api.shoonya.com/NorenWClientTP';
+  // Sprint 6.2.0 — new OAuth API host (QuickAuth on NorenWClientTP is retired).
+  private readonly baseUrl = 'https://api.shoonya.com/NorenWClientAPI';
+  private readonly oauthAuthorizeUrl =
+    'https://api.shoonya.com/OAuthlogin/authorize/oauth';
+
   // Sprint 6.1.8 — network resilience against intermittent Noren gateway
   // failures (api.shoonya.com nginx front returns HTTP 502 / connection
-  // resets during broker-side upstream flaps). Verified via direct curl: the
-  // endpoint + request format match the official ShoonyaApi-py SDK exactly, so
-  // these are transport-layer failures, not request-format bugs.
+  // resets during broker-side upstream flaps). These are transport-layer
+  // failures, not request-format bugs.
   private readonly timeoutMs = 15000;
   private readonly maxAttempts = 3;
-  private sessionToken = '';
+
+  // Per-account OAuth credentials (never env-based) — used only for the token
+  // exchange checksum + the authorize URL. Authenticated reads use the token.
+  private apiKey = '';
+  private secretCode = '';
+
+  private accessToken = '';
   private uid = '';
   private actid = '';
 
+  /**
+   * Sprint 6.2.0 — per-account OAuth credentials: `apiKey` is the Shoonya
+   * OAuth API key (used as `api_key` in the authorize URL and as the first
+   * checksum component), `secretCode` is the OAuth secret code. Trimmed to
+   * drop copy-paste artefacts (trailing newline/spaces) that would otherwise
+   * corrupt the authorize URL / checksum.
+   */
+  setCredentials(apiKey: string, secretCode: string) {
+    this.apiKey = (apiKey ?? '').trim();
+    this.secretCode = (secretCode ?? '').trim();
+  }
+
+  /**
+   * The OAuth access token is what every authenticated Noren call carries
+   * (as the `Authorization: Bearer` header and the `jKey` body field). Kept
+   * named `setSessionToken` so the shared BrokerService adapter factory wiring
+   * is unchanged (it treats the stored access token as the session token).
+   */
   setSessionToken(token: string) {
-    this.sessionToken = token;
+    this.accessToken = token;
+  }
+
+  setAccessToken(token: string) {
+    this.accessToken = token;
   }
 
   /** Sprint 6.1.6 — user/account id required by every Noren data endpoint. */
@@ -82,13 +134,51 @@ export class ShoonyaAdapter implements BrokerAdapter {
     this.actid = userId;
   }
 
-  getLoginUrl(): string {
-    // Shoonya uses direct API login (credentials + TOTP), not OAuth.
-    return '';
+  getLoginUrl(state?: string): string {
+    const params = new URLSearchParams({ api_key: this.apiKey });
+    // Shoonya may not echo `state` back on the callback; it is included as a
+    // best-effort, self-contained reconnect-context carrier. The controller
+    // always writes the cookie/map fallback too, so a dropped `state` is safe.
+    if (state) params.set('state', state);
+    return `${this.oauthAuthorizeUrl}?${params.toString()}`;
   }
 
-  async exchangeToken(_: string): Promise<any> {
-    throw new Error('Shoonya does not support OAuth token exchange.');
+  /**
+   * Exchange the single-use OAuth authorization `code` for the daily access
+   * token via `GenAcsTok`. `checksum = SHA256(apiKey + secretCode + code)`
+   * (no spaces) per the official OAuth SDK/docs. Body is raw
+   * `jData=<json>` (no jKey yet — there is no token before this call).
+   */
+  async exchangeToken(code: string): Promise<any> {
+    if (!this.apiKey || !this.secretCode) {
+      throw new Error(
+        'Shoonya OAuth API key/secret code missing on this account.',
+      );
+    }
+    const checksum = createHash('sha256')
+      .update(`${this.apiKey}${this.secretCode}${code}`)
+      .digest('hex');
+    const jData = { code, checksum };
+    const body = `jData=${JSON.stringify(jData)}`;
+    const data = await this.httpPost(`${this.baseUrl}/GenAcsTok`, body);
+    if (!data || data.stat !== 'Ok' || !data.access_token) {
+      throw new Error(data?.emsg || 'Shoonya OAuth token exchange failed');
+    }
+    // Cache the token + account id so the immediately-following profile/data
+    // calls on this adapter instance succeed.
+    this.accessToken = data.access_token;
+    this.setUserId(data.actid ?? data.uid ?? '');
+    return {
+      access_token: data.access_token,
+      refresh_token: data.refresh_token,
+      expires_in: data.expires_in,
+      uid: data.uid,
+      actid: data.actid,
+      userId: data.actid ?? data.uid,
+      userName: data.uname,
+      email: data.email,
+      raw: data,
+    };
   }
 
   /**
@@ -96,15 +186,18 @@ export class ShoonyaAdapter implements BrokerAdapter {
    *
    * Noren's gateway (nginx at api.shoonya.com) intermittently returns HTTP
    * 5xx **HTML** error pages and drops connections while its upstream flaps.
-   * We therefore:
-   *   - set an explicit timeout (never hang a login request forever),
-   *   - retry transient failures (5xx / network reset / timeout) with backoff,
-   *   - DETECT non-JSON (HTML) gateway bodies and raise a typed, actionable
-   *     `SHOONYA_GATEWAY_UNAVAILABLE` error instead of leaking raw HTML.
-   * `validateStatus: () => true` lets us inspect the status + body ourselves
-   * rather than have axios throw an opaque error on 5xx.
+   * We therefore set an explicit timeout, retry transient failures with
+   * backoff, and detect non-JSON (HTML) bodies → raise a typed, actionable
+   * `SHOONYA_GATEWAY_UNAVAILABLE` error instead of leaking raw HTML.
+   *
+   * When `authToken` is supplied it is sent as `Authorization: Bearer <token>`
+   * (Sprint 6.2.0 OAuth) — omitted for the unauthenticated GenAcsTok exchange.
    */
-  private async httpPost(url: string, body: string): Promise<any> {
+  private async httpPost(
+    url: string,
+    body: string,
+    authToken?: string,
+  ): Promise<any> {
     let lastError: Error | null = null;
 
     for (let attempt = 1; attempt <= this.maxAttempts; attempt++) {
@@ -113,6 +206,7 @@ export class ShoonyaAdapter implements BrokerAdapter {
           headers: {
             'Content-Type': 'application/x-www-form-urlencoded',
             Accept: 'application/json',
+            ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
           },
           timeout: this.timeoutMs,
           validateStatus: () => true,
@@ -164,14 +258,17 @@ export class ShoonyaAdapter implements BrokerAdapter {
   }
 
   /**
-   * Core Noren POST helper. Every authenticated endpoint uses
-   * `jData=<raw json>&jKey=<susertoken>` with an explicit
-   * application/x-www-form-urlencoded content type — matching the official
-   * NorenApi client exactly (jData is NOT url-encoded).
+   * Core authenticated Noren POST helper. Every endpoint uses
+   * `jData=<raw json>&jKey=<access_token>` (jData is NOT url-encoded) plus the
+   * OAuth Bearer header (Sprint 6.2.0).
    */
   private async post(path: string, jData: Record<string, any>): Promise<any> {
-    const body = `jData=${JSON.stringify(jData)}&jKey=${this.sessionToken}`;
-    const data = await this.httpPost(`${this.baseUrl}/${path}`, body);
+    const body = `jData=${JSON.stringify(jData)}&jKey=${this.accessToken}`;
+    const data = await this.httpPost(
+      `${this.baseUrl}/${path}`,
+      body,
+      this.accessToken,
+    );
     if (Array.isArray(data)) return data;
     if (data && data.stat && data.stat !== 'Ok') {
       const emsg = String(data.emsg ?? '');
@@ -185,39 +282,10 @@ export class ShoonyaAdapter implements BrokerAdapter {
     return data;
   }
 
-  /**
-   * Noren QuickAuth login. `pwd` must be SHA-256(password), `appkey` must be
-   * SHA-256("{uid}|{api_secret}"), `factor2` is the current TOTP — the caller
-   * (ShoonyaService) computes these. Body is raw `jData=<json>` (no jKey yet).
-   * On success the susertoken + uid/actid are cached on the adapter so the
-   * immediately-following profile/data calls succeed.
-   */
-  async login(payload: {
-    uid: string;
-    pwd: string;
-    factor2: string;
-    vc: string;
-    appkey: string;
-  }) {
-    const jData = {
-      source: 'API',
-      apkversion: '1.0.0',
-      uid: payload.uid,
-      pwd: payload.pwd,
-      factor2: payload.factor2,
-      vc: payload.vc,
-      appkey: payload.appkey,
-      imei: 'CTS_SERVER',
-    };
-    const body = `jData=${JSON.stringify(jData)}`;
-    const data = await this.httpPost(`${this.baseUrl}/QuickAuth`, body);
-    if (!data || data.stat !== 'Ok' || !data.susertoken) {
-      throw new Error(data?.emsg || 'Shoonya login failed');
-    }
-    // Persist session state so getProfile()/data calls work on this instance.
-    this.sessionToken = data.susertoken;
-    this.setUserId(data.actid ?? payload.uid);
-    return data;
+  /** Sprint 6.2.0 — live authenticated probe used by post-persist validation. */
+  async validateToken(): Promise<{ userId?: string }> {
+    const data = await this.post('UserDetails', { uid: this.uid });
+    return { userId: data?.actid ?? this.uid };
   }
 
   async getProfile(): Promise<BrokerProfile> {
@@ -286,7 +354,7 @@ export class ShoonyaAdapter implements BrokerAdapter {
     return {
       supported: false,
       reason:
-        'Shoonya (Noren) has no token refresh; a fresh TOTP login is required daily.',
+        'Shoonya (Noren) OAuth has no silent refresh; a fresh OAuth login is required daily.',
     };
   }
 
@@ -354,7 +422,7 @@ function gatewayUnavailableError(status: number, rawBody: unknown): Error {
   const detail = isHtml ? ' (received an HTML gateway page, not a JSON API response)' : '';
   const err = new Error(
     `Shoonya (Finvasia Noren) API gateway at api.shoonya.com is temporarily unavailable — ${statusText}${detail}. ` +
-      `This is a broker-side outage, not a problem with your UID, password, TOTP or API key. Please retry in a few minutes.`,
+      `This is a broker-side outage, not a problem with your OAuth API key or secret. Please retry in a few minutes.`,
   );
   (err as any).error_type = 'SHOONYA_GATEWAY_UNAVAILABLE';
   (err as any).brokerStatus = status || undefined;
