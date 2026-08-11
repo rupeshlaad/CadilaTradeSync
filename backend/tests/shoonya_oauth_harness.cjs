@@ -4,7 +4,7 @@
  * Pure-logic verification (NO real network, NO DB, NO running server): axios is
  * monkey-patched to capture requests, so this asserts the migrated adapter's
  * OAuth contract against the official Shoonya OAuth SDK/docs:
- *   - authorize URL (OAuthlogin/authorize/oauth?api_key=...&state=...)
+ *   - authorize URL (OAuthlogin/authorize/oauth?client_id=...&state=...)
  *   - GenAcsTok token exchange body + checksum = SHA256(apiKey+secret+code)
  *   - Bearer + jKey on authenticated reads (new NorenWClientAPI base)
  *   - "no data" empty-book handling preserved
@@ -45,7 +45,7 @@ function check(name, fn) {
 }
 
 // 1) Authorize URL --------------------------------------------------------------
-check('getLoginUrl builds OAuthlogin/authorize/oauth with api_key + state', () => {
+check('getLoginUrl builds OAuthlogin/authorize/oauth with client_id + state', () => {
   const a = new ShoonyaAdapter();
   a.setCredentials(`  ${API_KEY}\n`, `  ${SECRET} `); // padded → must trim
   const url = a.getLoginUrl('STATETOKEN');
@@ -54,7 +54,8 @@ check('getLoginUrl builds OAuthlogin/authorize/oauth with api_key + state', () =
     `base wrong: ${url}`,
   );
   const q = new URL(url).searchParams;
-  assert.strictEqual(q.get('api_key'), API_KEY, 'api_key not trimmed/present');
+  assert.strictEqual(q.get('client_id'), API_KEY, 'client_id not trimmed/present');
+  assert.strictEqual(q.get('api_key'), null, 'legacy api_key param must be gone');
   assert.strictEqual(q.get('state'), 'STATETOKEN', 'state not carried');
 });
 

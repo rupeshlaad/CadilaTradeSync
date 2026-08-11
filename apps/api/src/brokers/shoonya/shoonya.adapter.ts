@@ -19,7 +19,7 @@ import {
  * docs. This adapter mirrors the Fyers/Upstox OAuth adapters:
  *
  *   1. `getLoginUrl(state?)` → the hosted authorize URL
- *      `https://api.shoonya.com/OAuthlogin/authorize/oauth?api_key=<apiKey>`.
+ *      `https://api.shoonya.com/OAuthlogin/authorize/oauth?client_id=<clientId>`.
  *      After the user logs in, Shoonya redirects to the app's registered
  *      redirect URI with `?code=<auth_code>`.
  *   2. `exchangeToken(code)` → POSTs `jData={code, checksum}` to
@@ -104,9 +104,9 @@ export class ShoonyaAdapter implements BrokerAdapter {
 
   /**
    * Sprint 6.2.0 — per-account OAuth credentials: `apiKey` is the Shoonya
-   * OAuth API key (used as `api_key` in the authorize URL and as the first
-   * checksum component), `secretCode` is the OAuth secret code. Trimmed to
-   * drop copy-paste artefacts (trailing newline/spaces) that would otherwise
+   * OAuth Client ID (sent as `client_id` in the authorize URL and used as the
+   * first checksum component), `secretCode` is the OAuth secret code. Trimmed
+   * to drop copy-paste artefacts (trailing newline/spaces) that would otherwise
    * corrupt the authorize URL / checksum.
    */
   setCredentials(apiKey: string, secretCode: string) {
@@ -135,7 +135,10 @@ export class ShoonyaAdapter implements BrokerAdapter {
   }
 
   getLoginUrl(state?: string): string {
-    const params = new URLSearchParams({ api_key: this.apiKey });
+    // Shoonya support confirmed the authorize endpoint parameter is `client_id`
+    // (the value is the developer-portal Client ID, stored on the account as
+    // its API key). NOTE: parameter NAME is client_id; the value is this.apiKey.
+    const params = new URLSearchParams({ client_id: this.apiKey });
     // Shoonya may not echo `state` back on the callback; it is included as a
     // best-effort, self-contained reconnect-context carrier. The controller
     // always writes the cookie/map fallback too, so a dropped `state` is safe.

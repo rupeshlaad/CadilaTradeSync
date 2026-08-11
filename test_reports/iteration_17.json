@@ -1,0 +1,22 @@
+{
+  "summary": "Static verification of Shoonya OAuth authorize URL fix (api_key -> client_id). All 6 requested checks pass: shoonya_oauth_harness 9/9, pnpm -r typecheck (6/6 projects), pnpm --filter @cts/api build PASS, compiled dist contains `new URLSearchParams({ client_id: this.apiKey })` with no `api_key:`, callback @Get('callback') reading @Query('code') and calling adapter.exchangeToken(code) intact (controller lines 115-116, 199), grep of NorenWClientTP/QuickAuth returns comments only (no functional endpoint). All prior regression harnesses (manual_search 8/8, integrity_dedupe 9/9, upstox_redirect 4/4, fyers_account_isolation ALL PASS, fyers_reconnect ALL PASS) still green.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/shoonya_oauth_harness.cjs",
+    "/app/backend/tests/manual_search_exchange_harness.cjs",
+    "/app/backend/tests/integrity_dedupe_exchange_harness.cjs",
+    "/app/backend/tests/upstox_redirect_env_harness.cjs",
+    "/app/backend/tests/fyers_account_isolation_harness.cjs",
+    "/app/backend/tests/fyers_reconnect_harness.cjs"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [],
+  "updated_files": [],
+  "success_rate": {"backend": "100%", "frontend": "N/A (skipped per request)"},
+  "seed_data_creation": "None (static harnesses only).",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Static-only monorepo; no DB/preview. Shoonya adapter uses client_id in authorize URL; compiled dist verified. Live OAuth round-trip is not verifiable in this pod.",
+  "rca_of_the_issue": "N/A - fix verified. Root cause was authorize URL used ?api_key=<value>; Shoonya spec requires ?client_id=<value>. Only the query param NAME changed; value (this.apiKey) unchanged."
+}
