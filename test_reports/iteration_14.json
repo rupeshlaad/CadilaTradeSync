@@ -1,0 +1,33 @@
+{
+  "summary": "Static-only verification of Upstox UDAPI1014 env-loading fix. Independently re-ran the new regression harness (upstox_redirect_env_harness.cjs) plus prior static harnesses (shoonya, fyers isolation, fyers reconnect), workspace typecheck, workspace build, and NestJS boot-sanity. All pass. The fix in apps/api/src/app.module.ts anchors ConfigModule.forRoot envFilePath to [join(__dirname,'..','.env'), '.env'], and the compiled dist/app.module.js contains join(__dirname,'..','.env') as expected. Boot maps all four Upstox routes (/brokers/upstox/{login,callback} and /api/brokers/upstox/{login,callback}); process only errors at PrismaClientInitializationError (DATABASE_URL missing) AFTER route resolution — expected under the static-only constraint (no Postgres/Redis in pod).",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/upstox_redirect_env_harness.cjs",
+    "/app/backend/tests/shoonya_oauth_harness.cjs",
+    "/app/backend/tests/fyers_account_isolation_harness.cjs",
+    "/app/backend/tests/fyers_reconnect_harness.cjs"
+  ],
+  "action_items": [
+    "Live Upstox OAuth round-trip (real login redirect + token exchange) is inherently NOT verifiable in this pod (no DB, no preview URL, no Upstox app credentials). User must confirm end-to-end on local run where apps/api/.env exists — documented pending item, NOT a regression."
+  ],
+  "critical_code_review_comments": [
+    "Fix is targeted and correct: envFilePath: [join(__dirname,'..','.env'), '.env'] resolves apps/api/.env from the compiled dist regardless of process.cwd(); retains ['.env'] fallback for local ts-node runs from apps/api. Source and compiled dist agree.",
+    "UpstoxAdapter, UpstoxController, and BrokerService continue reading process.env.UPSTOX_REDIRECT_URI directly — since ConfigModule.forRoot({ isGlobal:true }) already writes to process.env, no adapter changes needed. Verified by harness assertion #4."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100%", "frontend": "N/A (skipped per request)"},
+  "seed_data_creation": "None. Harness uses its own temp .env fixture in an OS tempdir; apps/api/.env is not created or modified (gitignored/secret).",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": false,
+  "test_credentials": "None required (static verification).",
+  "context_for_next_testing_agent": "Verification pass performed with commands: `node backend/tests/upstox_redirect_env_harness.cjs` (4/4 ALL PASS), `node backend/tests/shoonya_oauth_harness.cjs` (9/9 ALL PASS), `node backend/tests/fyers_account_isolation_harness.cjs` (ALL PASS), `node backend/tests/fyers_reconnect_harness.cjs` (ALL PASS), `pnpm -r typecheck` (6/6 PASS), `pnpm -r build` (all PASS including apps/api, apps/web, apps/admin, packages/shared, packages/ui), and `cd apps/api && timeout 40 node dist/main.js` — Upstox routes all mapped, crash at Prisma DATABASE_URL as expected. Compiled dist/app.module.js line 49 contains `envFilePath: [(0, path_1.join)(__dirname, '..', '.env'), '.env']`.",
+  "rca_of_the_issue": "Root cause: docker/api.Dockerfile uses WORKDIR /app and CMD node dist/main.js, so process.cwd()='/app', while apps/api/.env lives at /app/apps/api/.env. @nestjs/config's ConfigModule.forRoot resolves relative envFilePath entries against process.cwd(), so the previous ['.env'] setting looked for /app/.env (missing) and never loaded apps/api/.env → process.env.UPSTOX_REDIRECT_URI empty → UpstoxAdapter sent redirect_uri='' → Upstox returned UDAPI1014. Fix uses join(__dirname,'..','.env') which anchors to apps/api/.env via the compiled dist directory, plus retains ['.env'] fallback for ts-node dev runs from apps/api. Harness independently reproduces the OLD bug (empty var) and validates the NEW behavior (var populated in both ConfigService and process.env) using the REAL @nestjs/config ConfigModule."
+}
