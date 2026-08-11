@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { join } from 'path';
 import { AuthModule } from './auth/auth.module';
 import { UsersModule } from './users/users.module';
 import { HealthModule } from './health/health.module';
@@ -33,7 +34,16 @@ import { FollowerModule } from './follower/follower.module';
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
-      envFilePath: ['.env'],
+      // Anchor the env file to the api package (…/apps/api/.env), resolved from
+      // this compiled module's location, NOT from process.cwd(). The compiled
+      // file lives at apps/api/dist/**, so `<dir>/../.env` → apps/api/.env
+      // regardless of the working directory the process is started in
+      // (Docker WORKDIR /app, `node dist/main.js` from the repo root, or
+      // `pnpm --filter @cts/api start:prod`). The trailing cwd-relative '.env'
+      // is kept as a backward-compatible fallback. This is why
+      // process.env.UPSTOX_REDIRECT_URI (and every other var) was empty at
+      // runtime while apps/api/.env existed on disk.
+      envFilePath: [join(__dirname, '..', '.env'), '.env'],
     }),
     PrismaModule,
     RedisModule,
