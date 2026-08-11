@@ -14,7 +14,10 @@ import { PrismaService } from '../prisma/prisma.module';
  *   • brokerMappings       = number of InstrumentBroker rows
  *   • union-of-brokers     = every InstrumentBroker points at a real Instrument
  *   • no orphan Instrument  = every Instrument has ≥1 broker mapping
- *   • no duplicate mapping  = (broker, brokerSymbol) is unique
+ *   • no duplicate mapping  = (broker, brokerSymbol, exchange) is unique
+ *                             (Sprint 6.2.8 — the same brokerSymbol legitimately
+ *                              lists on multiple exchanges, e.g. TCS on NSE and
+ *                              BSE, so exchange is part of the identity)
  */
 
 export interface IntegrityCount {
@@ -133,12 +136,15 @@ export class InstrumentIntegrityService {
   // ---------------------------------------------------------------------------
 
   private async countDuplicateMappings(): Promise<number> {
+    // Sprint 6.2.8 — uniqueness is (broker, brokerSymbol, exchange). A shared
+    // brokerSymbol across exchanges (e.g. TCS on NSE and BSE) is NOT a
+    // duplicate; only rows identical on all three columns are.
     const rows = await this.prisma.$queryRawUnsafe<Array<{ extra: bigint }>>(
       `SELECT COALESCE(SUM(c - 1), 0)::bigint AS extra
          FROM (
            SELECT COUNT(*) AS c
              FROM "instrument_brokers"
-            GROUP BY broker, "brokerSymbol"
+            GROUP BY broker, "brokerSymbol", exchange
            HAVING COUNT(*) > 1
          ) d`,
     );
@@ -160,13 +166,21 @@ export class InstrumentIntegrityService {
   // ---------------------------------------------------------------------------
 
   private async removeDuplicateMappings(): Promise<number> {
-    // Keep the earliest row per (broker, brokerSymbol); delete the rest.
+    // Sprint 6.2.8 — a duplicate is a row identical on
+    // (broker, brokerSymbol, exchange). Keep the earliest such row and delete
+    // the rest. Rows that share (broker, brokerSymbol) but differ on exchange
+    // (e.g. ZERODHA/TCS/NSE vs ZERODHA/TCS/BSE) are LEGITIMATE distinct
+    // listings and MUST NOT be deleted.
     const res = await this.prisma.$executeRawUnsafe(
       `DELETE FROM "instrument_brokers" a
         USING "instrument_brokers" b
        WHERE a.broker = b.broker
          AND a."brokerSymbol" = b."brokerSymbol"
-         AND a."createdAt" > b."createdAt"`,
+         AND a.exchange = b.exchange
+         AND (
+           a."createdAt" > b."createdAt"
+           OR (a."createdAt" = b."createdAt" AND a.id > b.id)
+         )`,
     );
     return Number(res ?? 0);
   }
