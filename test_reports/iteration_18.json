@@ -1,0 +1,24 @@
+{
+  "summary": "Static verification of Shoonya OAuth reconnect-context fix. Independently re-ran the new regression harness plus all prior harnesses, workspace typecheck, api build, and NestJS boot-sanity. All checks pass.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/shoonya_callback_context_harness.cjs",
+    "/app/backend/tests/shoonya_oauth_harness.cjs",
+    "/app/backend/tests/fyers_account_isolation_harness.cjs",
+    "/app/backend/tests/fyers_reconnect_harness.cjs",
+    "/app/backend/tests/upstox_redirect_env_harness.cjs",
+    "/app/backend/tests/manual_search_exchange_harness.cjs",
+    "/app/backend/tests/integrity_dedupe_exchange_harness.cjs"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [],
+  "updated_files": [],
+  "success_rate": {"backend": "100%", "frontend": "N/A (skipped per request)"},
+  "seed_data_creation": "None (static verification only)",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "N/A - no live requests",
+  "context_for_next_testing_agent": "Shoonya controller uses self-contained encoded state token in cookie; callback recovers via decodeOAuthState(stateParam) ?? decodeOAuthState(readCookie(...)). Verified: shoonya_callback_context_harness => 10/10 ALL PASS; shoonya_oauth_harness 9/9; fyers_account_isolation ALL PASS; fyers_reconnect ALL PASS (S1..S10); upstox_redirect_env 4/4; manual_search_exchange 8/8; integrity_dedupe_exchange 9/9. pnpm -r typecheck => 6/6 PASS. pnpm --filter @cts/api build => PASS. NestJS boot mapped GET /brokers/shoonya/{login,callback} and /api/brokers/shoonya/{login,callback}; process fails only at PrismaClientInitializationError (DATABASE_URL missing) AFTER routes resolve — expected in this pod. No live Shoonya OAuth round-trip (no DB/preview available); logic-level verification complete.",
+  "rca_of_the_issue": "Shoonya does not echo OAuth state; original code fell back to a random-id cookie whose value was looked up in an in-memory Map (not shared across instances / not restart-safe), so tradingAccountId was undefined after callback. Fix stores the self-contained encoded state token directly in the cookie; callback decodes it (state param path still preferred for brokers that echo state, keeping Fyers/Upstox unaffected). Fail-safe: tampered cookie decodes to undefined. HttpOnly + SameSite=Lax + Path=/ preserved."
+}
