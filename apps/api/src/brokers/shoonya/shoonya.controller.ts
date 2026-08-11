@@ -1,6 +1,5 @@
 import { Controller, Get, Logger, Query, Req, Res } from '@nestjs/common';
 import { Request, Response } from 'express';
-import { randomUUID } from 'crypto';
 import { TradingAccount } from '@prisma/client';
 
 import { PrismaService } from '../../prisma/prisma.module';
@@ -8,12 +7,7 @@ import { EncryptionService } from '../../encryption/encryption.service';
 import { ShoonyaAdapter } from './shoonya.adapter';
 import { ShoonyaService } from './shoonya.service';
 import { buildBrokerCallbackRedirect } from '../broker-callback-redirect';
-import {
-  putOAuthState,
-  takeOAuthState,
-  encodeOAuthState,
-  decodeOAuthState,
-} from '../oauth-state.store';
+import { encodeOAuthState, decodeOAuthState } from '../oauth-state.store';
 import {
   OAUTH_STATE_COOKIE,
   clearOAuthStateCookie,
@@ -32,13 +26,22 @@ function maskSecret(v?: string | null): string {
  * Sprint 6.2.0 — Shoonya (Finvasia Noren) OAuth 2.0 controller.
  *
  * Replaces the retired QuickAuth server-side login with the official OAuth
- * authorization-code flow, mirroring the Fyers/Upstox controllers exactly:
- * per-account credential isolation, self-contained OAuth `state` reconnect
- * context (with the cookie/map fallback), and a post-persist validation gate
- * so a failed connect never redirects as success. Registers BOTH the bare and
- * `/api`-prefixed routes (same dual-prefix pattern as Fyers 6.2.16 / Upstox)
- * so the broker-configured redirect URI works with or without a global `/api`
- * prefix.
+ * authorization-code flow, mirroring the Fyers/Upstox controllers: per-account
+ * credential isolation and a post-persist validation gate so a failed connect
+ * never redirects as success. Registers BOTH the bare and `/api`-prefixed
+ * routes (same dual-prefix pattern as Fyers 6.2.16 / Upstox) so the
+ * broker-configured redirect URI works with or without a global `/api` prefix.
+ *
+ * Reconnect-context recovery (fix): unlike Fyers/Upstox, Shoonya does NOT echo
+ * the OAuth `state` param back on the callback (its authorize endpoint takes
+ * only `client_id`; the redirect returns just `?code=`). Relying on `state`
+ * (or on the in-memory state map behind a random cookie id, which is not shared
+ * across API instances / restarts) therefore lost the context and produced
+ * "Reconnect context missing". The context is now carried in a SELF-CONTAINED
+ * cookie (the encoded state token itself), so the callback recovers it from the
+ * `state` param when present, else from the cookie — with no dependency on the
+ * broker echoing `state` or on any single instance's memory. Both the User
+ * Portal and Master Account flows use this identical, durable path.
  */
 @Controller(['brokers/shoonya', 'api/brokers/shoonya'])
 export class ShoonyaController {
@@ -99,16 +102,16 @@ export class ShoonyaController {
       );
     }
 
-    // Per-account adapter → the authorize URL carries THIS account's API key.
+    // Per-account adapter → the authorize URL carries THIS account's client_id.
     const adapter = this.buildAccountAdapter(account);
-    // Carry the reconnect context in the OAuth `state` param (echoed back by
-    // the broker on the callback when supported) so it survives hot reloads /
-    // multiple instances with no server-side memory. Cookie/map retained as a
-    // backward-compatible fallback (Shoonya may not echo `state`).
+    // Carry the reconnect context in a SELF-CONTAINED cookie (the encoded state
+    // token itself). Shoonya does not echo `state`, so the callback recovers the
+    // context from this cookie; storing the token — rather than a random id that
+    // points at per-instance server memory — makes it survive hot reloads,
+    // multiple API instances and the cross-site broker redirect. The same token
+    // is also passed as `state` for brokers/setups that do echo it back.
     const stateToken = encodeOAuthState({ tradingAccountId, returnTo });
-    const stateId = randomUUID();
-    putOAuthState(stateId, { tradingAccountId, returnTo });
-    setOAuthStateCookie(res, stateId);
+    setOAuthStateCookie(res, stateToken);
     return res.redirect(adapter.getLoginUrl(stateToken));
   }
 
@@ -120,16 +123,17 @@ export class ShoonyaController {
     @Res() res: Response,
     @Query('state') stateParam?: string,
   ) {
-    // Recover the reconnect context PRIMARILY from the OAuth `state` param
-    // echoed back by the broker; fall back to the in-memory cookie/map.
-    const stateEntry = decodeOAuthState(stateParam);
-    const stateId = readCookie(req, OAUTH_STATE_COOKIE);
-    const cookieEntry = takeOAuthState(stateId);
+    // Recover the reconnect context from the OAuth `state` param when the broker
+    // echoes it, else from the SELF-CONTAINED state cookie set at /login. Both
+    // decode the same token, so recovery no longer depends on Shoonya echoing
+    // `state` or on any single API instance's in-memory map.
+    const stateEntry =
+      decodeOAuthState(stateParam) ??
+      decodeOAuthState(readCookie(req, OAUTH_STATE_COOKIE));
     clearOAuthStateCookie(res);
 
-    const tradingAccountId =
-      stateEntry?.tradingAccountId ?? cookieEntry?.tradingAccountId;
-    const returnTo = stateEntry?.returnTo ?? cookieEntry?.returnTo;
+    const tradingAccountId = stateEntry?.tradingAccountId;
+    const returnTo = stateEntry?.returnTo;
 
     if (errorParam) {
       return res.redirect(
