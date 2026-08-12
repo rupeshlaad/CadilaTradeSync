@@ -7,6 +7,10 @@ import {
   ExecutionFollowerStatus,
   FollowerExecution,
 } from './execution-event';
+import {
+  traceStage,
+  currentManualTradeTrace,
+} from '../observability/manual-trade-trace';
 
 const BUFFER_CAPACITY = 100;
 
@@ -95,6 +99,35 @@ export class ExecutionEventRecorderService {
 
     const startedAtMs = Date.now();
 
+    // Stage 6 — execution event created (fan-out begins).
+    {
+      const trace = currentManualTradeTrace();
+      const isManual =
+        !!trace &&
+        !!trace.ids.brokerOrderId &&
+        event.masterBrokerOrderId === trace.ids.brokerOrderId;
+      traceStage(
+        6,
+        {
+          component: 'ExecutionEventRecorderService',
+          method: 'begin',
+          input: {
+            symbol: event.symbol,
+            side: event.side,
+            tradeSource: event.tradeSource,
+            masterBrokerOrderId: event.masterBrokerOrderId,
+          },
+          output: { executionEventId: event.id },
+          status: 'EVENT_CREATED',
+          relatedIds: {
+            executionEventId: event.id,
+            brokerOrderId: event.masterBrokerOrderId,
+          },
+        },
+        isManual,
+      );
+    }
+
     return new ExecutionEventBuilder(event, (finalised) => {
       finalised.processingTimeMs = Math.max(0, Date.now() - startedAtMs);
       this.commit(finalised);
@@ -153,6 +186,67 @@ export class ExecutionEventRecorderService {
 
   // ---------------------------------------------------------------------
   private commit(event: ExecutionEvent) {
+    // Stage 6 (committed) + Stage 7 (fan-out result) — derived purely from the
+    // committed event so CopyTradingService itself is never modified. No-op
+    // outside a manual-trade trace.
+    {
+      const trace = currentManualTradeTrace();
+      const isManual =
+        !!trace &&
+        !!trace.ids.brokerOrderId &&
+        event.masterBrokerOrderId === trace.ids.brokerOrderId;
+      const executed = event.followers.filter((f) => f.status === 'SUCCESS').length;
+      const failed = event.followers.filter((f) => f.status === 'FAILED').length;
+      const skipped = event.followers.filter((f) => f.status === 'SKIPPED').length;
+      traceStage(
+        6,
+        {
+          component: 'ExecutionEventRecorderService',
+          method: 'commit',
+          output: {
+            executionEventId: event.id,
+            outcome: event.outcome,
+            processingTimeMs: event.processingTimeMs,
+          },
+          status: 'EVENT_COMMITTED',
+          relatedIds: {
+            executionEventId: event.id,
+            brokerOrderId: event.masterBrokerOrderId,
+          },
+        },
+        isManual,
+      );
+      traceStage(
+        7,
+        {
+          component: 'CopyTradingService',
+          method: 'handleTrade',
+          output: {
+            outcome: event.outcome,
+            followersFound: event.followersFound,
+            executed,
+            skipped,
+            failed,
+            reasons: event.followers
+              .filter((f) => f.reason || f.status !== 'SUCCESS')
+              .map((f) => ({
+                follower: f.followerEmail,
+                broker: f.broker,
+                status: f.status,
+                failureType: f.failureType,
+                reason: f.reason,
+              })),
+          },
+          status: event.outcome,
+          relatedIds: {
+            executionEventId: event.id,
+            brokerOrderId: event.masterBrokerOrderId,
+          },
+        },
+        isManual,
+      );
+    }
+
     this.buffer.unshift(event);
     if (this.buffer.length > BUFFER_CAPACITY) {
       this.buffer.length = BUFFER_CAPACITY;

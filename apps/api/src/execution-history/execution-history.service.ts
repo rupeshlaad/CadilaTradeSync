@@ -12,6 +12,10 @@ import type {
   ExecutionEvent,
   FollowerExecution,
 } from '../copy-trading/execution-event';
+import {
+  traceStage,
+  currentManualTradeTrace,
+} from '../observability/manual-trade-trace';
 
 // ---------------------------------------------------------------------------
 // Query DTOs
@@ -134,12 +138,45 @@ export class ExecutionHistoryService implements OnModuleInit {
       this.logger.log(
         `Persisted execution ${history.id} (${event.broker} ${event.symbol} ${event.side} x${event.quantity}, status=${status}, followers=${event.followers.length})`,
       );
+
+      // Stage 8 — execution saved to the permanent audit trail.
+      const trace = currentManualTradeTrace();
+      const isManual =
+        !!trace &&
+        !!event.masterBrokerOrderId &&
+        event.masterBrokerOrderId === trace.ids.brokerOrderId;
+      if (isManual && trace) trace.ids.executionHistoryId = history.id;
+      traceStage(
+        8,
+        {
+          component: 'ExecutionHistoryService',
+          method: 'persist',
+          output: { executionHistoryId: history.id, status },
+          status: 'EXECUTION_SAVED',
+          relatedIds: {
+            executionHistoryId: history.id,
+            executionEventId: event.id,
+            brokerOrderId: event.masterBrokerOrderId,
+          },
+        },
+        isManual,
+      );
       return history.id;
     } catch (err: any) {
       // Never rethrow — persistence must not affect live copy trading.
       this.logger.error(
         `Failed to persist execution history for ${event.id}: ${err?.message ?? err}`,
       );
+      traceStage(8, {
+        component: 'ExecutionHistoryService',
+        method: 'persist',
+        output: { error: err?.message ?? String(err) },
+        status: 'PERSIST_FAILED',
+        relatedIds: {
+          executionEventId: event.id,
+          brokerOrderId: event.masterBrokerOrderId,
+        },
+      });
       return null;
     }
   }

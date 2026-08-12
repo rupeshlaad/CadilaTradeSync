@@ -38,6 +38,16 @@ import {
 } from '../brokers/order-mapping/icici-order.mapper';
 import { buildUpstoxPlaceOrder } from '../brokers/order-mapping/upstox-order.mapper';
 import { ResolvedInstrument } from '../brokers/order-mapping/instrument-context';
+import { normalizeRawOrder } from '../position-lifecycle/broker-lifecycle-normalizer';
+import {
+  ManualTradeTraceContext,
+  createManualTradeTraceContext,
+  runWithManualTradeTrace,
+  currentManualTradeTrace,
+  traceStage,
+  waitForPersistence,
+  finalizeManualTradeTrace,
+} from '../observability/manual-trade-trace';
 
 const BUFFER_CAPACITY = 100;
 const MANUAL_TRADE_SOURCE = 'MANUAL';
@@ -104,8 +114,57 @@ export class ManualTradeService implements OnModuleInit {
   // -------------------------------------------------------------------------
 
   async place(dto: PlaceManualTradeDto): Promise<ManualTradeRecord> {
+    // Manual-trade end-to-end trace — a unique correlation id is minted per
+    // request and carried through the entire (existing) pipeline via an
+    // AsyncLocalStorage store. Observability only: no behaviour change.
+    const trace = createManualTradeTraceContext();
+    return runWithManualTradeTrace(trace, () => this.placeWithTrace(dto, trace));
+  }
+
+  private async placeWithTrace(
+    dto: PlaceManualTradeDto,
+    trace: ManualTradeTraceContext,
+  ): Promise<ManualTradeRecord> {
+    try {
+    // Stage 1 — Manual request received.
+    traceStage(
+      1,
+      {
+        component: 'ManualTradeService',
+        method: 'place',
+        input: {
+          masterAccountId: dto.masterAccountId,
+          strategyId: dto.strategyId,
+          exchange: dto.exchange,
+          symbol: dto.symbol,
+          side: dto.side,
+          orderType: dto.orderType,
+          quantity: dto.quantity,
+          product: dto.product,
+          price: dto.price ?? null,
+          triggerPrice: dto.triggerPrice ?? null,
+        },
+        status: 'REQUEST_RECEIVED',
+      },
+      true,
+    );
+
     // 1) Validate
     const validation = await this.validator.validate(dto);
+    // Stage 2 — Validation.
+    traceStage(
+      2,
+      {
+        component: 'ManualTradeValidatorService',
+        method: 'validate',
+        output: {
+          ok: validation.ok,
+          failedChecks: validation.errors?.map((e) => e.key) ?? [],
+        },
+        status: validation.ok ? 'VALIDATION_PASSED' : 'VALIDATION_FAILED',
+      },
+      true,
+    );
 
     const id = randomUUID();
     const now = new Date().toISOString();
@@ -148,6 +207,10 @@ export class ManualTradeService implements OnModuleInit {
       updatedAt: now,
     };
     this.remember(record);
+    trace.ids.manualTradeId = record.id;
+    trace.broker = String(record.broker);
+    trace.symbol = record.symbol;
+    trace.side = record.side;
 
     if (!validation.ok) {
       record.status = ManualTradeStatus.REJECTED;
@@ -222,6 +285,20 @@ export class ManualTradeService implements OnModuleInit {
     record.brokerOrderId = brokerOrderId;
     record.updatedAt = new Date().toISOString();
 
+    // Stage 3 — Broker adapter: order sent + broker response + broker order id.
+    trace.ids.brokerOrderId = brokerOrderId;
+    traceStage(
+      3,
+      {
+        component: 'ManualTradeService',
+        method: `placeOnMaster(${master.broker})`,
+        output: { brokerOrderId, brokerResponse: placementResponse },
+        status: brokerOrderId ? 'ORDER_SENT' : 'NO_BROKER_ORDER_ID',
+        relatedIds: { brokerOrderId },
+      },
+      true,
+    );
+
     if (!brokerOrderId) {
       // Adapter returned a non-throwing rejection payload (e.g.
       // `{ s: 'error', message: '...' }` from Fyers, or a Zerodha
@@ -271,6 +348,27 @@ export class ManualTradeService implements OnModuleInit {
         master.broker,
         brokerOrderId,
       );
+      // Stage 4 — read-back of the just-placed order + broker→canonical
+      // status mapping (pure normalizer call, log-only) + order snapshot.
+      const fetchedMapped = rawOrder
+        ? normalizeRawOrder(master.broker, rawOrder)
+        : null;
+      traceStage(
+        4,
+        {
+          component: 'ManualTradeService',
+          method: 'fetchPlacedOrder',
+          output: {
+            fetched: !!rawOrder,
+            brokerStatus: (rawOrder as any)?.status ?? null,
+            mappedStatus: fetchedMapped?.status ?? null,
+            snapshot: rawOrder ?? '(none — optimistic surrogate will be built)',
+          },
+          status: rawOrder ? 'ORDER_FETCHED' : 'SURROGATE_USED',
+          relatedIds: { brokerOrderId },
+        },
+        true,
+      );
       const surrogate =
         rawOrder ??
         this.buildOptimisticOrder(
@@ -315,6 +413,78 @@ export class ManualTradeService implements OnModuleInit {
     }
 
     return this.get(record.id) ?? record;
+    } finally {
+      // Bounded wait for the fire-and-forget execution-history write so the
+      // summary can report the ExecutionHistory ID (skipped when no fan-out).
+      await waitForPersistence(trace);
+      // Stage 10 — Trade Monitor query (in-memory recorder buffer that the
+      // admin Trade Monitor "recent events" view is derived from).
+      this.emitTradeMonitorStage(trace);
+      finalizeManualTradeTrace(trace);
+    }
+  }
+
+  /**
+   * Stage 10 — reproduce the exact read the admin Trade Monitor performs
+   * (ExecutionEventRecorder ring buffer) for this manual trade's execution
+   * event, and record whether the manual trade is included + its status.
+   * Read-only; no effect on the pipeline.
+   */
+  private emitTradeMonitorStage(trace: ManualTradeTraceContext): void {
+    const record = trace.ids.manualTradeId
+      ? this.records.get(trace.ids.manualTradeId)
+      : null;
+    trace.manualStatus = record?.status ?? null;
+    if (record) {
+      trace.followerCount = record.followersFound;
+      trace.executed = record.successfulFollowers;
+      trace.skipped = record.skippedFollowers;
+      trace.failed = record.failedFollowers;
+    }
+
+    const eventId = trace.ids.executionEventId;
+    let included = false;
+    let status: string | null = null;
+    let reason: string | null = null;
+
+    if (eventId) {
+      const ev = this.recorder.getById(eventId);
+      if (ev) {
+        included = true;
+        status = ev.outcome;
+      } else {
+        reason =
+          'ExecutionEvent produced but rotated out of the recorder buffer';
+      }
+    } else {
+      reason =
+        'No ExecutionEvent was ever produced for this manual trade — ' +
+        'CopyTradingService fan-out (Stage 7) was never reached';
+    }
+
+    trace.tradeMonitorIncluded = included;
+    trace.tradeMonitorStatus = status;
+    trace.tradeMonitorFilterReason = reason;
+
+    traceStage(
+      10,
+      {
+        component: 'ExecutionEventRecorder (Trade Monitor source)',
+        method: 'getById',
+        output: {
+          executionRetrieved: !!eventId,
+          manualTradeIncluded: included,
+          tradeMonitorStatus: status,
+          filterReason: reason,
+        },
+        status: included ? 'INCLUDED' : 'EXCLUDED',
+        relatedIds: {
+          executionEventId: eventId,
+          executionHistoryId: trace.ids.executionHistoryId,
+        },
+      },
+      true,
+    );
   }
 
   get(id: string): ManualTradeRecord | null {
@@ -695,13 +865,51 @@ export class ManualTradeService implements OnModuleInit {
 
     const key = brokerOrderKey(event.broker, event.masterBrokerOrderId);
     const manualId = this.byBrokerOrderId.get(key);
-    if (!manualId) return;
+    if (!manualId) {
+      // Stage 9 — a fan-out committed for an order that is NOT one of THIS
+      // service's manual placements (e.g. a master-watcher poll of an
+      // unrelated / stale broker order). Surfaced so the trace explains a
+      // "console shows other events instead of my manual order" symptom.
+      traceStage(9, {
+        component: 'ManualTradeService',
+        method: 'handleExecutionCommit',
+        input: {
+          incomingBrokerOrderId: event.masterBrokerOrderId,
+          broker: event.broker,
+          symbol: event.symbol,
+          tradeSource: event.tradeSource,
+        },
+        output: { recordLocated: false, brokerOrderMatched: false },
+        status: 'UNMATCHED_EVENT',
+        relatedIds: { executionEventId: event.id },
+      });
+      return;
+    }
 
     const record = this.records.get(manualId);
     if (!record) return;
 
     if (TERMINAL_STATUSES.has(record.status)) {
       // Already finalised — duplicate/late ExecutionEvent, idempotent no-op.
+      traceStage(
+        9,
+        {
+          component: 'ManualTradeService',
+          method: 'handleExecutionCommit',
+          input: {
+            masterBrokerOrderId: event.masterBrokerOrderId,
+            tradeSource: event.tradeSource,
+          },
+          output: {
+            recordLocated: true,
+            brokerOrderMatched: true,
+            currentStatus: record.status,
+          },
+          status: 'ALREADY_TERMINAL_NOOP',
+          relatedIds: { executionEventId: event.id, manualTradeId: record.id },
+        },
+        true,
+      );
       return;
     }
 
@@ -749,6 +957,37 @@ export class ManualTradeService implements OnModuleInit {
     if (event.outcome === 'ERROR' && event.errorReason) {
       record.rejectionReason = event.errorReason;
     }
+
+    const trace = currentManualTradeTrace();
+    if (trace) {
+      trace.ids.executionEventId = event.id;
+      trace.followerCount = event.followersFound;
+      trace.executed = successful;
+      trace.skipped = skipped;
+      trace.failed = failed;
+    }
+    // Stage 9 — manual record located, broker order matched, status finalised.
+    traceStage(
+      9,
+      {
+        component: 'ManualTradeService',
+        method: 'handleExecutionCommit',
+        input: {
+          masterBrokerOrderId: event.masterBrokerOrderId,
+          tradeSource: event.tradeSource,
+          outcome: event.outcome,
+        },
+        output: {
+          recordLocated: true,
+          brokerOrderMatched: true,
+          oldStatus: previousStatus,
+          newStatus: status,
+        },
+        status: 'STATUS_TRANSITION',
+        relatedIds: { executionEventId: event.id, manualTradeId: record.id },
+      },
+      true,
+    );
 
     this.logger.debug(
       `Manual trade ${record.id} matched ExecutionEvent ${event.id} — ` +
