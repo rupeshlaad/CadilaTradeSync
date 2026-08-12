@@ -1,0 +1,53 @@
+{
+  "summary": "Backend-static verification of Fyers per-account credential isolation fix. Independently re-ran all 4 harnesses, TypeScript typecheck, and full monorepo build. Also performed static git diff review. Everything passes; matches main agent's expected results.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": { "ui_bugs": [], "integration_issues": [], "design_issues": [] },
+  "verification_results": {
+    "fyers_placement_credential_isolation_harness.cjs": "RESULT: ALL PASS (24/24 checks). Verifies: (1) blank FYERS_APP_ID env yields bare adapter with blank App ID (nothing hardcoded); (2) diagnostics show APPID-A / APPID-B (never '(none)' or env sentinel 'ENVLEAK-APP'); (3) ManualTradeService.placeOnMaster calls setCredentials with each account's decrypted App ID independently; (4) OrderActionsService exit/cancel calls setCredentials per-account; (5) structural guard — every `new FyersAdapter()` in manual-trade, order-actions, copy-trading, position-synchronization services is followed by setCredentials() and none reads process.env.FYERS_APP_ID/SECRET_ID.",
+    "fyers_account_isolation_harness.cjs": "RESULT: ALL PASS",
+    "fyers_reconnect_harness.cjs": "RESULT: ALL PASS",
+    "fyers_order_diagnostics_harness.cjs": "RESULT: ALL PASS",
+    "pnpm --filter @cts/api typecheck": "exit 0 (prisma generate + tsc --noEmit clean)",
+    "pnpm -r build": "exit 0; all 5 workspaces Done (packages/shared, packages/ui, apps/api, apps/web, apps/admin)"
+  },
+  "static_diff_review": {
+    "files_changed": [
+      "apps/api/src/manual-trading/manual-trade.service.ts",
+      "apps/api/src/order-actions/order-actions.service.ts",
+      "apps/api/src/copy-trading/copy-trading.service.ts",
+      "apps/api/src/position-lifecycle/position-synchronization.service.ts",
+      "backend/tests/fyers_placement_credential_isolation_harness.cjs (new)"
+    ],
+    "confirmed": [
+      "All four services: `new FyersAdapter()` is immediately followed by adapter.setCredentials(decrypt(encryptedApiKey), decrypt(encryptedApiSecret)) then setAccessToken(accessToken) BEFORE placeOrder/modifyOrder/cancelOrder/getOrders.",
+      "OrderActionsService: new private buildFyersAdapter(position, accessToken) helper mirroring buildUpstoxAdapter/buildIciciAdapter; used in modify/cancel/exit branches.",
+      "ManualTradeService: placeOnMaster FYERS branch (~L348) and fetchPlacedOrder FYERS branch (~L495) load account and setCredentials before placeOrder/getOrders.",
+      "CopyTradingService FYERS follower branch (~L259) and PositionSynchronizationService FYERS follower branch (~L240) call setCredentials from follower.tradingAccount before setAccessToken.",
+      "No source reads process.env.FYERS_APP_ID / FYERS_SECRET_ID (only textual comments referencing the removed env behavior remain).",
+      "apps/api/src/brokers/fyers/fyers.adapter.ts and fyers.controller.ts are UNCHANGED (git diff empty). OAuth path preserved.",
+      "No Prisma schema / migration change. No API request/response contract change."
+    ]
+  },
+  "coverage_boundary_notes": "CopyTradingService and PositionSynchronizationService FYERS branches sit inside large multi-account loops that require a live DB to drive end-to-end; per main agent note, they are covered by the structural guard (every `new FyersAdapter()` paired with setCredentials + no env read) rather than a live invocation. This is a known, accepted coverage boundary — not a defect.",
+  "test_report_links": [
+    "/app/backend/tests/fyers_placement_credential_isolation_harness.cjs",
+    "/app/backend/tests/fyers_account_isolation_harness.cjs",
+    "/app/backend/tests/fyers_reconnect_harness.cjs",
+    "/app/backend/tests/fyers_order_diagnostics_harness.cjs"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Fix correctly binds per-account App ID/Secret at every Fyers order placement path, aligning with existing ICICI/Upstox branches and with fyers.controller.buildAccountAdapter / broker.service.buildAdapter.",
+    "Encryption.decrypt is invoked defensively (ternary guards on encryptedApiKey/Secret), preventing null-decrypt crashes.",
+    "No hardcoded App ID/Secret anywhere; env keys FYERS_APP_ID/FYERS_SECRET_ID are effectively deprecated for order placement.",
+    "OAuth flow untouched (fyers.controller.ts diff empty) — root cause resolution preserved."
+  ],
+  "updated_files": [],
+  "success_rate": { "backend": "100%", "frontend": "N/A (skipped per request)" },
+  "test_credentials": "N/A — static verification only",
+  "seed_data_creation": "None — harnesses use in-memory Prisma/Encryption doubles and stub fyers-api-v3.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Fyers order-placement credential-isolation fix is verified backend-static. Four services updated; adapter+controller unchanged. Rerun the four .cjs harnesses under /app/backend/tests + `pnpm --filter @cts/api typecheck` + `pnpm -r build` for regression. Live/DB-based end-to-end for CopyTrading and PositionSync FYERS loops remains out of scope in this sandboxed pod.",
+  "rca of the issue": "Previously every Fyers placement path did `new FyersAdapter()` + setAccessToken only. Adapter's authenticated header `appId:accessToken` therefore used a blank/env FYERS_APP_ID (absent in user's .env) while the OAuth token was minted under the account's per-account App ID → Fyers returned code -50 'Algo orders are not allowed from this app.' Fix: in every placement path load TradingAccount, decrypt encryptedApiKey/encryptedApiSecret, and call adapter.setCredentials(appId, secret) before setAccessToken/placeOrder. Verified via 24-check isolation harness plus structural guard across all 4 services."
+}
