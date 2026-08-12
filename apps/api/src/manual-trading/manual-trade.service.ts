@@ -42,6 +42,15 @@ import { ResolvedInstrument } from '../brokers/order-mapping/instrument-context'
 const BUFFER_CAPACITY = 100;
 const MANUAL_TRADE_SOURCE = 'MANUAL';
 
+/** Terminal manual-trade statuses — once reached, later ExecutionEvents
+ *  for the same broker order are idempotently ignored. */
+const TERMINAL_STATUSES: ReadonlySet<ManualTradeStatus> = new Set([
+  ManualTradeStatus.REJECTED,
+  ManualTradeStatus.COMPLETED,
+  ManualTradeStatus.PARTIAL,
+  ManualTradeStatus.FAILED,
+]);
+
 /**
  * Sprint 5.4 — Manual Trade Execution.
  *
@@ -83,8 +92,10 @@ export class ManualTradeService implements OnModuleInit {
     // Correlate manual trade → follower fan-out outcome. The recorder
     // fires this every time CopyTradingService commits an ExecutionEvent
     // (whether from the master watcher, the lifecycle sync engine, or
-    // the manual trade path). We only act on events tagged
-    // `MANUAL` — everything else is ignored.
+    // the manual trade path). Correlation is by masterBrokerOrderId —
+    // the fan-out for a manual order may arrive tagged `MANUAL`
+    // (immediate COMPLETE_FILL) or `BROKER_POLL` (fill detected by the
+    // post-placement master-watcher reconciliation).
     this.recorder.onCommit((event) => this.handleExecutionCommit(event));
   }
 
@@ -675,7 +686,11 @@ export class ManualTradeService implements OnModuleInit {
   // -------------------------------------------------------------------------
 
   private handleExecutionCommit(event: ExecutionEvent) {
-    if (event.tradeSource !== MANUAL_TRADE_SOURCE) return;
+    // Correlate purely on the master broker order id. `byBrokerOrderId`
+    // only ever contains orders placed by THIS service, so an order-id
+    // match IS a manual trade regardless of the event's tradeSource
+    // (a Fyers fill is often detected by the post-placement watcher
+    // reconciliation, which commits the fan-out as `BROKER_POLL`).
     if (!event.masterBrokerOrderId) return;
 
     const key = brokerOrderKey(event.broker, event.masterBrokerOrderId);
@@ -684,6 +699,13 @@ export class ManualTradeService implements OnModuleInit {
 
     const record = this.records.get(manualId);
     if (!record) return;
+
+    if (TERMINAL_STATUSES.has(record.status)) {
+      // Already finalised — duplicate/late ExecutionEvent, idempotent no-op.
+      return;
+    }
+
+    const previousStatus = record.status;
 
     const followers: ManualTradeFollowerOutcome[] = event.followers.map((f) => ({
       followerId: f.followerId,
@@ -727,6 +749,13 @@ export class ManualTradeService implements OnModuleInit {
     if (event.outcome === 'ERROR' && event.errorReason) {
       record.rejectionReason = event.errorReason;
     }
+
+    this.logger.debug(
+      `Manual trade ${record.id} matched ExecutionEvent ${event.id} — ` +
+        `brokerOrderId=${event.masterBrokerOrderId} tradeSource=${event.tradeSource} ` +
+        `status ${previousStatus} → ${status} ` +
+        `(success=${successful} failed=${failed} skipped=${skipped} outcome=${event.outcome})`,
+    );
   }
 
   // -------------------------------------------------------------------------
