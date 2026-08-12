@@ -23,6 +23,10 @@ import {
   LifecycleIngestOutcome,
   PositionState,
 } from './lifecycle.types';
+import {
+  traceStage,
+  currentManualTradeTrace,
+} from '../observability/manual-trade-trace';
 
 /**
  * Sprint 5.3 — Position Lifecycle Manager.
@@ -87,6 +91,16 @@ export class PositionLifecycleService {
   ): Promise<LifecycleIngestOutcome> {
     const normalized = normalizeRawOrder(context.broker, rawOrder);
     if (!normalized) {
+      traceStage(5, {
+        component: 'PositionLifecycleService',
+        method: 'ingest',
+        input: {
+          broker: context.broker,
+          tradeSource: context.tradeSource ?? 'BROKER_POLL',
+        },
+        output: { accepted: false, reason: 'Unable to normalize broker payload' },
+        status: 'NORMALIZE_FAILED',
+      });
       return {
         key: '',
         accepted: false,
@@ -107,6 +121,24 @@ export class PositionLifecycleService {
     const signature = computeSignature(normalized);
     if (!this.registry.hasSignatureChanged(key, signature)) {
       // Broker echo with no state change — no-op.
+      traceStage(5, {
+        component: 'PositionLifecycleService',
+        method: 'ingest',
+        input: {
+          broker: context.broker,
+          brokerOrderId: normalized.brokerOrderId,
+          symbol: normalized.symbol,
+          tradeSource: context.tradeSource ?? 'BROKER_POLL',
+        },
+        output: {
+          accepted: false,
+          brokerStatus: normalized.status,
+          positionId: key,
+          reason: 'Signature unchanged (duplicate broker echo)',
+        },
+        status: 'SIGNATURE_UNCHANGED',
+        relatedIds: { brokerOrderId: normalized.brokerOrderId, masterPositionId: key },
+      });
       return {
         key,
         accepted: false,
@@ -131,6 +163,23 @@ export class PositionLifecycleService {
       // The normalizer decided nothing changed materially. Remember the
       // signature so we don't reconsider this echo.
       this.registry.rememberSignature(key, signature);
+      traceStage(5, {
+        component: 'PositionLifecycleService',
+        method: 'ingest',
+        input: {
+          broker: context.broker,
+          brokerOrderId: normalized.brokerOrderId,
+          symbol: normalized.symbol,
+          tradeSource: context.tradeSource ?? 'BROKER_POLL',
+        },
+        output: {
+          accepted: false,
+          brokerStatus: normalized.status,
+          reason: 'No lifecycle event derived from broker payload',
+        },
+        status: 'NO_EVENT',
+        relatedIds: { brokerOrderId: normalized.brokerOrderId, masterPositionId: key },
+      });
       return {
         key,
         accepted: false,
@@ -151,6 +200,23 @@ export class PositionLifecycleService {
       );
       this.registry.rememberSignature(key, signature);
       this.registry.appendTimeline(key, buildRejectionEntry(reason, event));
+      traceStage(5, {
+        component: 'PositionLifecycleService',
+        method: 'ingest',
+        input: {
+          broker: event.broker,
+          brokerOrderId: event.brokerOrderId,
+          symbol: event.symbol,
+          classification: event.type,
+        },
+        output: {
+          accepted: false,
+          transition: `${previousState ?? 'NONE'} -> (rejected)`,
+          reason,
+        },
+        status: 'REJECTED_TRANSITION',
+        relatedIds: { brokerOrderId: event.brokerOrderId, masterPositionId: key },
+      });
       return {
         key,
         accepted: false,
@@ -312,17 +378,49 @@ export class PositionLifecycleService {
       );
     }
 
+    const resolvedNextState =
+      event.type === LifecycleEventType.EXIT &&
+      followerSync.length > 0 &&
+      followerSync.every((o) => o.ok)
+        ? PositionState.CLOSED
+        : nextState;
+
+    // Stage 5 — accepted lifecycle transition. Marked against the manual
+    // order only when the broker order id matches the traced manual trade.
+    const trace = currentManualTradeTrace();
+    const isManualOrder =
+      !!trace &&
+      !!trace.ids.brokerOrderId &&
+      event.brokerOrderId === trace.ids.brokerOrderId;
+    if (isManualOrder && trace) trace.ids.masterPositionId = key;
+    traceStage(
+      5,
+      {
+        component: 'PositionLifecycleService',
+        method: 'applyAcceptedTransition',
+        input: {
+          tradeSource: tradeSource ?? 'BROKER_POLL',
+          brokerOrderId: event.brokerOrderId,
+          symbol: event.symbol,
+        },
+        output: {
+          classification: event.type,
+          transition: `${previousState ?? 'NONE'} -> ${resolvedNextState}`,
+          positionId: key,
+          followerSyncJobs: followerSync.length,
+        },
+        status: 'ACCEPTED',
+        relatedIds: { masterPositionId: key, brokerOrderId: event.brokerOrderId },
+      },
+      isManualOrder,
+    );
+
     return {
       key,
       accepted: true,
       event,
       previousState,
-      nextState:
-        event.type === LifecycleEventType.EXIT &&
-        followerSync.length > 0 &&
-        followerSync.every((o) => o.ok)
-          ? PositionState.CLOSED
-          : nextState,
+      nextState: resolvedNextState,
       reason: null,
       followerSync,
     };
