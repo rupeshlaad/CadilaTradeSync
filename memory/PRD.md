@@ -753,3 +753,51 @@ per instruction.
 **Git:** feature branch `feature/manual-trade-pipeline-trace`, commit `758af32`;
 `--no-ff` merge `0ca903c` into local `main`. NOT pushed — user publishes via
 **Save to GitHub**.
+
+
+## Sprint — Manual MARKET COMPLETE_FILL fix (2026-08) — DONE (static + harness-verified)
+
+**Bug (fixed):** manual Fyers MARKET BUY placed OK (broker 1101) but UI stuck at
+EXECUTING_FOLLOWERS forever; never in Trade Monitor / Execution History.
+**Proven root cause:** `fetchPlacedOrder()` read the just-placed order while
+still Pending/Transit (Fyers status 6/4) → `mapFyersStatus`=OPEN →
+`classifyEvent`=NEW → `dispatchFollowers` `case NEW: return []`
+(`position-lifecycle.service.ts:479-482`) → `CopyTradingService.handleTrade`
+never ran → no ExecutionEvent → `handleExecutionCommit` never fired → the ONLY
+writer that leaves EXECUTING_FOLLOWERS (`manual-trade.service.ts:955`) never
+executed. Secondary: `masterWatcher.syncMaster` strategy filter omitted
+`masterAccount:true` (diverged from `lookupStrategyId`/copy-trading).
+
+**Fix (surgical — no architecture/schema/API/adapter/OAuth/UI change; all
+diagnostics + correlation-id trace kept):**
+- `ManualTradeService.pollUntilTerminal()` — MARKET-only bounded broker re-poll
+  (5×300ms, ≤1500ms) until terminal (Filled/Rejected/Cancelled) → ingest the
+  REAL terminal order so it enters COMPLETE_FILL. Still-Pending after budget →
+  optimistic COMPLETE surrogate. LIMIT/SL unchanged (OPEN until explicit Sync).
+- Terminal-rejection net: MARKET order the broker REJECTED/CANCELLED sets the
+  manual record REJECTED/FAILED so it always leaves EXECUTING_FOLLOWERS.
+- NEW `apps/api/src/common/active-master-strategy.ts` `activeMasterStrategyWhere()`
+  — ONE canonical filter (`tradingAccountId + masterAccount:true + enabled:true +
+  status ACTIVE`) now shared by `masterWatcher.syncMaster`,
+  `PositionLifecycleService.lookupStrategyId`, `CopyTradingService.handleTrade`.
+- NEW `backend/tests/manual_trade_market_fill_e2e_harness.cjs` (13 checks):
+  Pending(6)→Filled(2) re-poll; real lifecycle NEW→COMPLETE_FILL fan-out; real
+  recorder commit → handleExecutionCommit → COMPLETED + Trade Monitor buffer.
+
+**Files:** MOD `manual-trading/manual-trade.service.ts`,
+`master-watcher/master-watcher.service.ts`,
+`position-lifecycle/position-lifecycle.service.ts`,
+`copy-trading/copy-trading.service.ts`; NEW `common/active-master-strategy.ts`,
+`backend/tests/manual_trade_market_fill_e2e_harness.cjs`.
+
+**Validated:** `@cts/api` typecheck PASS; `pnpm -r build` 5/5 PASS; boot sanity
+PASS; testing_agent iteration_22 = 11/11 harnesses ALL PASS, no regressions
+(manual-trade e2e 13/13, trace 25/25, status-transition 24/24, Fyers ×3, Shoonya
+×2, integrity/manual-search/upstox).
+**NOT verifiable in pod:** a real LIVE Fyers+Postgres manual TCS MARKET trade —
+user smoke-tests on their infra (expected: EXECUTING_FOLLOWERS → COMPLETED/
+PARTIAL/FAILED; appears in Trade Monitor + Execution History; correlation Stage
+1-10 + summary).
+
+**Git:** feature branch `fix/manual-market-complete-fill`, commit `438b7a2`;
+`--no-ff` merge into local `main`. NOT pushed — user publishes via **Save to GitHub**.
