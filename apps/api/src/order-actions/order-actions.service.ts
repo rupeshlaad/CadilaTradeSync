@@ -229,8 +229,7 @@ export class OrderActionsService {
     }
 
     if (position.broker === Broker.FYERS) {
-      const adapter = new FyersAdapter();
-      adapter.setAccessToken(accessToken);
+      const adapter = await this.buildFyersAdapter(position, accessToken);
 
       const payload: Record<string, unknown> = {
         id: position.brokerOrderId,
@@ -297,8 +296,7 @@ export class OrderActionsService {
     }
 
     if (position.broker === Broker.FYERS) {
-      const adapter = new FyersAdapter();
-      adapter.setAccessToken(accessToken);
+      const adapter = await this.buildFyersAdapter(position, accessToken);
       return adapter.cancelOrder(position.brokerOrderId);
     }
 
@@ -339,8 +337,7 @@ export class OrderActionsService {
     }
 
     if (position.broker === Broker.FYERS) {
-      const adapter = new FyersAdapter();
-      adapter.setAccessToken(accessToken);
+      const adapter = await this.buildFyersAdapter(position, accessToken);
       const order = {
         symbol: position.symbol,
         qty: exitQuantity,
@@ -396,6 +393,27 @@ export class OrderActionsService {
   }
 
   /** Build a credentialed Upstox adapter for order actions. */
+  /** Build a credentialed Fyers adapter for order actions. */
+  private async buildFyersAdapter(
+    position: PositionRecord,
+    accessToken: string,
+  ): Promise<FyersAdapter> {
+    const account = await this.prisma.tradingAccount.findUnique({
+      where: { id: position.masterAccountId },
+    });
+    const adapter = new FyersAdapter();
+    adapter.setCredentials(
+      account?.encryptedApiKey
+        ? this.encryption.decrypt(account.encryptedApiKey)
+        : '',
+      account?.encryptedApiSecret
+        ? this.encryption.decrypt(account.encryptedApiSecret)
+        : '',
+    );
+    adapter.setAccessToken(accessToken);
+    return adapter;
+  }
+
   private async buildUpstoxAdapter(
     position: PositionRecord,
     accessToken: string,

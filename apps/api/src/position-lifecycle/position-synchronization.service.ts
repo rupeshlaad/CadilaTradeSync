@@ -237,7 +237,21 @@ export class PositionSynchronizationService {
           continue;
         }
 
+        // Fyers account isolation: bind THIS follower account's own App ID
+        // (api key) + Secret ID so the `appId:accessToken` header matches its
+        // OAuth-minted token — never the global FYERS_APP_ID env value.
+        const account = await this.prisma.tradingAccount.findUnique({
+          where: { id: link.followerAccountId },
+        });
         const adapter = new FyersAdapter();
+        adapter.setCredentials(
+          account?.encryptedApiKey
+            ? this.encryption.decrypt(account.encryptedApiKey)
+            : '',
+          account?.encryptedApiSecret
+            ? this.encryption.decrypt(account.encryptedApiSecret)
+            : '',
+        );
         adapter.setAccessToken(
           this.encryption.decrypt(session.encryptedAccessToken),
         );

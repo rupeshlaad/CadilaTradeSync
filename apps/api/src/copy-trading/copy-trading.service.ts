@@ -258,7 +258,20 @@ export class CopyTradingService {
 
           if (followerBroker === Broker.FYERS) {
 
+            // Fyers account isolation: place on the follower with THIS
+            // follower account's own App ID (api key) + Secret ID so the
+            // `appId:accessToken` header matches its OAuth-minted token —
+            // never the global FYERS_APP_ID env value.
+            const account = follower.tradingAccount;
             const adapter = new FyersAdapter();
+            adapter.setCredentials(
+              account.encryptedApiKey
+                ? this.encryption.decrypt(account.encryptedApiKey)
+                : '',
+              account.encryptedApiSecret
+                ? this.encryption.decrypt(account.encryptedApiSecret)
+                : '',
+            );
             adapter.setAccessToken(accessToken);
 
             const order = {

@@ -346,7 +346,22 @@ export class ManualTradeService implements OnModuleInit {
     }
 
     if (broker === Broker.FYERS) {
+      // Fyers account isolation for placement: the authenticated header is
+      // `appId:accessToken`, so the order MUST be placed with THIS account's
+      // own App ID (api key) + Secret ID — the same credentials the OAuth
+      // token was minted under — never the global FYERS_APP_ID env value.
+      const account = await this.prisma.tradingAccount.findUnique({
+        where: { id: tradingAccountId },
+      });
       const adapter = new FyersAdapter();
+      adapter.setCredentials(
+        account?.encryptedApiKey
+          ? this.encryption.decrypt(account.encryptedApiKey)
+          : '',
+        account?.encryptedApiSecret
+          ? this.encryption.decrypt(account.encryptedApiSecret)
+          : '',
+      );
       adapter.setAccessToken(accessToken);
       const order = buildFyersOrder(dto);
       // TEMPORARY DIAGNOSTICS — attach account context so the Fyers order log
@@ -475,7 +490,21 @@ export class ManualTradeService implements OnModuleInit {
       }
 
       if (broker === Broker.FYERS) {
+        // Fyers account isolation: read-back of the just-placed order is an
+        // authenticated (`appId:accessToken`) call too, so bind THIS account's
+        // own App ID + Secret, never the global env App ID.
+        const account = await this.prisma.tradingAccount.findUnique({
+          where: { id: tradingAccountId },
+        });
         const adapter = new FyersAdapter();
+        adapter.setCredentials(
+          account?.encryptedApiKey
+            ? this.encryption.decrypt(account.encryptedApiKey)
+            : '',
+          account?.encryptedApiSecret
+            ? this.encryption.decrypt(account.encryptedApiSecret)
+            : '',
+        );
         adapter.setAccessToken(accessToken);
         const orders = await adapter.getOrders();
         const list = orders?.orderBook ?? orders?.data ?? orders;
