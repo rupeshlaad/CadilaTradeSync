@@ -659,3 +659,36 @@ blocks from the API logs for the support ticket.
 Feature commit `7462888`; merge (`--no-ff`) `81670cd`; pushed to
 `origin/main` (`1f8198b..81670cd`).
 
+
+## Sprint — Manual Trade status transition hotfix (2026-06, awaiting merge/push approval)
+
+**Bug:** Manual Trading UI stuck at EXECUTING_FOLLOWERS forever. Root cause:
+`ManualTradeService.handleExecutionCommit()` early-returned when
+`event.tradeSource !== 'MANUAL'`. Fyers fills are usually detected by the
+post-placement `masterWatcher.syncMaster()` reconciliation → CopyTradingService
+fan-out committed as `BROKER_POLL` → manual record never finalised, while
+ExecutionHistory correctly persisted the terminal state (e.g. FAILED for a
+skipped ZERODHA follower).
+
+**Fix (surgical, 1 file):** `apps/api/src/manual-trading/manual-trade.service.ts`
+- correlate purely by `masterBrokerOrderId` (byBrokerOrderId map only holds
+  manually placed orders — order-id match IS a manual trade)
+- `TERMINAL_STATUSES` guard (COMPLETED/FAILED/PARTIAL/REJECTED): duplicate/late
+  events are idempotent no-ops
+- one DEBUG log on match (order id, tradeSource, prev → new status, counts)
+- NO changes to adapters, copy trading, watcher, OAuth, DB, APIs, diagnostics.
+
+**New harness:** `backend/tests/manual_trade_status_transition_harness.cjs`
+(24 checks, runs compiled dist service against the REAL recorder pipeline):
+MANUAL event still works; BROKER_POLL finalises; duplicate ignored; unknown/null
+order id ignored; terminal never overwritten; PARTIAL/NO_ENABLED_FOLLOWERS
+mapping; structural guards on source.
+
+**Validated:** typecheck PASS; `pnpm -r build` PASS (5/5); all 4 Fyers harnesses
+ALL PASS; both Shoonya harnesses ALL PASS; new harness 24/24.
+**NOT verified live** (no Postgres/Redis/live broker in pod).
+
+**Git:** branch `fix/manual-trade-status-transition` (from the unmerged
+`fix/fyers-placement-account-credentials` HEAD), commit `4777d2a`. NOT merged,
+NOT pushed — awaiting user approval. Note: `fix/fyers-placement-account-credentials`
+(`09a569c`) is also still unmerged/unpushed; both need to go out together.
