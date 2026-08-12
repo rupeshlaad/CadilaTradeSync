@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import { fyersModel } from 'fyers-api-v3';
 import {
   BrokerAdapter,
@@ -7,6 +8,74 @@ import {
   BrokerProfile,
   UnsupportedResult,
 } from '../broker.interface';
+
+// ---------------------------------------------------------------------------
+// TEMPORARY DIAGNOSTICS (Fyers order request/response instrumentation)
+// -----------------------------------------------------------------------------
+// Added to capture an exact engineering log of what CTS sends to the Fyers
+// Order API before raising a Fyers support case (broker error code -50 "Algo
+// orders are not allowed from this app"). This block ONLY logs — it does not
+// change the payload, headers, authentication, retry or error handling. Remove
+// once the support case is resolved.
+//
+// The `fyers-api-v3` SDK targets the v3 order endpoint below (documented +
+// SDK constant `DefaultBaseURI`); the SDK abstracts the underlying axios call,
+// so raw HTTP status/headers are not exposed to this layer — logged as such.
+const FYERS_API_BASE_URL = 'https://api-t1.fyers.in/api/v3';
+const FYERS_PLACE_ORDER_PATH = '/orders/sync';
+
+/** Optional per-call diagnostic context supplied by the calling service. */
+export interface FyersOrderDiagnosticContext {
+  tradingAccountId?: string | null;
+  brokerUserId?: string | null;
+  sourceModule?: string | null;
+  environment?: string | null;
+  accessTokenExpiry?: string | null;
+}
+
+/**
+ * Render the Fyers Authorization header (`appId:accessToken`) for the log,
+ * showing only the first 12 characters then `****`. The window is capped at
+ * the `appId:` boundary so the secret access token is NEVER exposed, even for
+ * a short/misconfigured App ID (the App ID itself is a public client id and is
+ * already logged in full on its own line).
+ */
+function maskAuthHeader(appId: string, accessToken?: string | null): string {
+  if (!appId && !accessToken) return '(none)';
+  const header = `${appId}:${accessToken ?? ''}`;
+  const boundary = appId.length + 1; // through the ':' — never into the token
+  const window = Math.min(12, boundary);
+  return `${header.slice(0, window)}****`;
+}
+
+function decodeFyersOrderType(type: unknown): string {
+  switch (type) {
+    case 1:
+      return '1 (LIMIT)';
+    case 2:
+      return '2 (MARKET)';
+    case 3:
+      return '3 (SL-M / STOP)';
+    case 4:
+      return '4 (SL / STOP-LIMIT)';
+    default:
+      return String(type ?? '(none)');
+  }
+}
+
+function decodeFyersSide(side: unknown): string {
+  if (side === 1) return '1 (BUY)';
+  if (side === -1) return '-1 (SELL)';
+  return String(side ?? '(none)');
+}
+
+function safeJson(value: unknown): string {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
 
 /**
  * Sprint 6.1.6 — Full Fyers API v3 adapter.
@@ -60,6 +129,11 @@ export class FyersAdapter implements BrokerAdapter {
   };
 
   private fyers: any;
+  // TEMPORARY DIAGNOSTICS — logger + captured values used ONLY to build the
+  // Fyers order request/response log. None of these influence the SDK call.
+  private readonly logger = new Logger('FyersAdapter');
+  private accessTokenForDiag: string = '';
+  private orderDiagnosticContext: FyersOrderDiagnosticContext = {};
   // Sprint 6.2.15 — per-account Fyers credentials. Default to the legacy env
   // values so an adapter built without setCredentials() is byte-identical to
   // the previous single-account behaviour; a per-account adapter overrides them
@@ -97,6 +171,21 @@ export class FyersAdapter implements BrokerAdapter {
 
   setAccessToken(accessToken: string) {
     this.fyers.setAccessToken(accessToken);
+    // TEMPORARY DIAGNOSTICS — retain the token ONLY to render the masked
+    // Authorization-header preview in the order log. Authentication is
+    // unchanged: the SDK still uses the token set above.
+    this.accessTokenForDiag = accessToken ?? '';
+  }
+
+  /**
+   * TEMPORARY DIAGNOSTICS — optional context the calling service can attach so
+   * the Fyers order log carries the TradingAccountId / Broker User ID / source
+   * module. Purely additive: it is NOT part of the BrokerAdapter interface,
+   * never touches the SDK, payload, headers or auth, and defaults to empty so
+   * callers that do not set it are byte-identical.
+   */
+  setOrderDiagnosticContext(ctx: FyersOrderDiagnosticContext) {
+    this.orderDiagnosticContext = ctx ?? {};
   }
 
   getLoginUrl(state?: string): string {
@@ -196,7 +285,89 @@ export class FyersAdapter implements BrokerAdapter {
   }
 
   async placeOrder(order: any) {
-    return this.fyers.place_order(order);
+    // ===================================================================
+    // TEMPORARY DIAGNOSTICS — this is the EXACT site that calls the Fyers
+    // Order API (`fyers-api-v3` place_order → POST /orders/sync). The three
+    // log blocks below ONLY log; the payload, headers, authentication, retry
+    // and error propagation are all unchanged.
+    // ===================================================================
+    const ctx = this.orderDiagnosticContext;
+    const startedAt = Date.now();
+    const exchange =
+      typeof order?.symbol === 'string' && order.symbol.includes(':')
+        ? order.symbol.split(':')[0]
+        : '(embedded in symbol)';
+
+    this.logger.warn(
+      [
+        '',
+        '========== FYERS ORDER REQUEST ==========',
+        `Timestamp            : ${new Date().toISOString()}`,
+        `TradingAccountId     : ${ctx.tradingAccountId ?? '(not provided)'}`,
+        `Broker User ID       : ${ctx.brokerUserId ?? '(not provided)'}`,
+        `Broker               : FYERS`,
+        `Environment          : ${ctx.environment ?? process.env.NODE_ENV ?? '(unknown)'}`,
+        `App ID being used    : ${this.appId || '(none)'}`,
+        `Redirect URI         : ${process.env.FYERS_REDIRECT_URI ?? '(unset)'}`,
+        `Base URL             : ${FYERS_API_BASE_URL}`,
+        `Full endpoint URL    : ${FYERS_API_BASE_URL}${FYERS_PLACE_ORDER_PATH}`,
+        `HTTP Method          : POST`,
+        `Order payload        : ${safeJson(order)}`,
+        `Authorization header : ${maskAuthHeader(this.appId, this.accessTokenForDiag)}`,
+        `Access Token expiry  : ${ctx.accessTokenExpiry ?? '(not available at adapter layer)'}`,
+        `Order Type           : ${decodeFyersOrderType(order?.type)}`,
+        `Product Type         : ${order?.productType ?? '(none)'}`,
+        `Side                 : ${decodeFyersSide(order?.side)}`,
+        `Exchange             : ${exchange}`,
+        `Symbol               : ${order?.symbol ?? '(none)'}`,
+        `Qty                  : ${order?.qty ?? '(none)'}`,
+        `Price (limitPrice)   : ${order?.limitPrice ?? '(none)'}`,
+        `Trigger (stopPrice)  : ${order?.stopPrice ?? '(none)'}`,
+        `Validity             : ${order?.validity ?? '(none)'}`,
+        `Offline Order flag   : ${order?.offlineOrder ?? '(none)'}`,
+        `Source Module        : ${ctx.sourceModule ?? '(not provided)'}`,
+        '=========================================',
+      ].join('\n'),
+    );
+
+    try {
+      const response = await this.fyers.place_order(order);
+
+      this.logger.warn(
+        [
+          '',
+          '========== FYERS ORDER RESPONSE ==========',
+          `HTTP Status          : ${
+            response?.statusCode ??
+            response?.code ??
+            '(not exposed by fyers-api-v3 SDK — see Response Body)'
+          }`,
+          `Response Headers     : (not exposed by fyers-api-v3 SDK)`,
+          `Response Body        : ${safeJson(response)}`,
+          `Elapsed Time         : ${Date.now() - startedAt} ms`,
+          `Fyers Request ID     : ${response?.request_id ?? response?.requestId ?? '(none)'}`,
+          `Correlation ID       : ${response?.correlationId ?? response?.correlation_id ?? '(none)'}`,
+          '==========================================',
+        ].join('\n'),
+      );
+
+      return response;
+    } catch (err: any) {
+      this.logger.error(
+        [
+          '',
+          '========== FYERS ORDER ERROR ==========',
+          `Axios Error?         : ${!!(err?.isAxiosError || err?.response)}`,
+          `HTTP Status          : ${err?.response?.status ?? err?.statusCode ?? '(none)'}`,
+          `Response Body        : ${safeJson(err?.response?.data ?? err?.data ?? err?.message ?? err)}`,
+          `Elapsed Time         : ${Date.now() - startedAt} ms`,
+          `Stack                : ${err?.stack ?? '(none)'}`,
+          '==========================================',
+        ].join('\n'),
+      );
+      // Do NOT swallow — propagate the exact same error unchanged.
+      throw err;
+    }
   }
 
   async modifyOrder(orderId: string, order: any) {

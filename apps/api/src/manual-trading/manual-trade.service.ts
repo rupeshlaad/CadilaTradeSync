@@ -349,6 +349,18 @@ export class ManualTradeService implements OnModuleInit {
       const adapter = new FyersAdapter();
       adapter.setAccessToken(accessToken);
       const order = buildFyersOrder(dto);
+      // TEMPORARY DIAGNOSTICS — attach account context so the Fyers order log
+      // (FyersAdapter.placeOrder) records TradingAccountId / Broker User ID /
+      // source module. Logging only: does not alter the order, adapter or flow.
+      adapter.setOrderDiagnosticContext({
+        tradingAccountId,
+        brokerUserId: session.userId ?? null,
+        sourceModule: 'ManualTradeService.placeOnMaster (MANUAL)',
+        environment: process.env.NODE_ENV ?? null,
+        accessTokenExpiry: session.expiresAt
+          ? session.expiresAt.toISOString()
+          : null,
+      });
       const response = await adapter.placeOrder(order);
       return { response, brokerOrderId: extractFyersOrderId(response) };
     }
