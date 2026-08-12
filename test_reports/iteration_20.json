@@ -1,0 +1,51 @@
+{
+  "summary": "BACKEND-STATIC verification of Fyers order-placement diagnostic instrumentation on branch chore/fyers-order-request-diagnostics. Independently re-ran all four required checks and performed a static git-diff review against baseline 1f8198b. All four checks passed and the diff review confirms the change is strictly log-only with zero behavioural change.",
+  "checks_executed": {
+    "fyers_order_diagnostics_harness": "node /app/backend/tests/fyers_order_diagnostics_harness.cjs -> RESULT: ALL PASS (21/21 checks incl. payload identity, return identity, error rethrow, three log blocks emitted, secret masking)",
+    "fyers_reconnect_harness": "node /app/backend/tests/fyers_reconnect_harness.cjs -> RESULT: ALL PASS (no regression)",
+    "fyers_account_isolation_harness": "node /app/backend/tests/fyers_account_isolation_harness.cjs -> RESULT: ALL PASS (no regression)",
+    "typecheck": "pnpm --filter @cts/api typecheck -> exit 0 (tsc clean, prisma client generated)",
+    "workspace_build": "pnpm -r build -> exit 0. All 5 workspaces Done: packages/shared, packages/ui, apps/api, apps/web, apps/admin"
+  },
+  "static_diff_review": {
+    "baseline": "1f8198b (origin/main)",
+    "files_changed": [
+      "apps/api/src/brokers/fyers/fyers.adapter.ts (+165 / -1)",
+      "apps/api/src/manual-trading/manual-trade.service.ts (+12 / -0)",
+      "backend/tests/fyers_order_diagnostics_harness.cjs (new, test-only)"
+    ],
+    "broker_interface_unchanged": true,
+    "oauth_unchanged": "getLoginUrl / exchangeToken not touched in diff",
+    "copy_trading_unchanged": "no copy-trading files in diff",
+    "placeOrder_behaviour": "The original call `this.fyers.place_order(order)` is preserved verbatim inside a try/catch. Same `order` reference passed, response returned unchanged on success, `throw err` rethrows the SAME error object on failure (no swallowing, no wrapping).",
+    "log_blocks_present": [
+      "FYERS ORDER REQUEST (before SDK call, logger.warn)",
+      "FYERS ORDER RESPONSE (after success, logger.warn)",
+      "FYERS ORDER ERROR (in catch, logger.error, followed by throw err)"
+    ],
+    "secret_masking": "maskHead() renders only first 12 chars of `${appId}:${accessTokenForDiag}` then '****'. Harness explicitly asserts the full access token is NOT present in emitted logs. accessTokenForDiag is captured inside setAccessToken purely for masked preview; SDK auth flow is unaltered.",
+    "additive_api": "setOrderDiagnosticContext() is a NEW concrete method on FyersAdapter only, NOT added to BrokerAdapter interface — abstraction preserved. Defaults to {} so adapters without a caller-supplied context remain byte-identical to prior behaviour.",
+    "manual_trade_service_change": "Single additive block in FYERS branch of placeOnMaster(): adapter.setOrderDiagnosticContext({tradingAccountId, brokerUserId: session.userId ?? null, sourceModule, environment, accessTokenExpiry}) immediately before existing adapter.placeOrder(order). No other lines changed; existing return shape { response, brokerOrderId } preserved."
+  },
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": { "ui_bugs": [], "integration_issues": [], "design_issues": [] },
+  "test_report_links": [
+    "/app/backend/tests/fyers_order_diagnostics_harness.cjs",
+    "/app/backend/tests/fyers_reconnect_harness.cjs",
+    "/app/backend/tests/fyers_account_isolation_harness.cjs"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "MINOR (informational only, do NOT fix per sprint constraints): maskHead is called with `${appId}:${accessToken}` combined. Because Fyers appIds are typically >= 12 chars (e.g. 'XCXXXXXXXX-100'), the printed first-12 window is entirely appId and the token is fully masked. If a shorter/misconfigured appId (< ~12 chars) is ever used, up to (12 - len(appId) - 1) leading chars of the access token could appear in logs. Consider masking appId and token independently in a follow-up sprint. Harness already verifies non-leakage for the current typical appId length.",
+    "MINOR (informational): HTTP status/headers are intentionally logged as '(not exposed by fyers-api-v3 SDK)' — this is expected given the SDK abstracts axios. For the support case, main agent may want to note that raw axios interception via the SDK's internal `request` instance is possible but was explicitly excluded from this LOG-ONLY sprint.",
+    "POSITIVE: Diagnostics correctly annotated as TEMPORARY with clear removal marker; logger.warn/error used so blocks are visible without a global log-level change; error path unambiguously rethrows via `throw err`."
+  ],
+  "updated_files": [],
+  "success_rate": { "backend": "100%", "frontend": "N/A (skipped per request)" },
+  "test_credentials": "N/A — no DB / broker credentials required for static verification.",
+  "seed_data_creation": "None.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Branch chore/fyers-order-request-diagnostics is LOG-ONLY diagnostic instrumentation of FyersAdapter.placeOrder for a Fyers support case (error code -50). All three harnesses (fyers_order_diagnostics_harness.cjs 21/21, fyers_reconnect_harness.cjs, fyers_account_isolation_harness.cjs), `pnpm --filter @cts/api typecheck` and `pnpm -r build` all pass. broker.interface.ts is unchanged; OAuth and copy-trading paths are unchanged. No servers/Postgres/Redis/Fyers live session are available in this pod — future verification must remain static (harnesses + typecheck + build + diff review).",
+  "rca of the issue": "N/A — diagnostic sprint, no bug to RCA. The underlying broker error -50 ('Algo orders are not allowed from this app') is a Fyers-side app-permission issue to be raised via support case using the engineering log this instrumentation produces."
+}

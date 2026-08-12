@@ -605,3 +605,57 @@ local run where `apps/api/.env` exists.
 
 Feature commit `d413f83`; merge (`--no-ff`) `6710ecf` on local `main`.
 NOT pushed — user publishes via **Save to GitHub**.
+
+
+---
+
+## Diagnostics — Fyers order request/response instrumentation (2026-08-12) — DONE (static, verified)
+
+**Objective (NOT a fix):** produce a complete engineering log of exactly what
+CTS sends to the Fyers Order API before raising a Fyers support case. Broker
+rejects manual Fyers orders with code **-50 "Order placement restricted. Algo
+orders are not allowed from this app."** (OAuth/connection/token all fine;
+placement reaches the broker). Log-only sprint — no business-logic/OAuth/
+copy-trading/broker-abstraction/API-contract/payload/header/auth changes.
+
+**Exact call site:** `FyersAdapter.placeOrder()` → `this.fyers.place_order(order)`
+(`fyers-api-v3` SDK → POST `https://api-t1.fyers.in/api/v3/orders/sync`). This
+is the single chokepoint all Fyers order placements funnel through.
+
+**Changes (branch `chore/fyers-order-request-diagnostics`):**
+- `apps/api/src/brokers/fyers/fyers.adapter.ts`: wrapped the existing
+  `place_order` call with LOG BLOCK 1 (REQUEST: timestamp, TradingAccountId,
+  Broker User ID, broker, env, App ID, redirect/base/full-endpoint URL, POST,
+  full order payload, masked Authorization header, token expiry, order type/
+  product/side/exchange/symbol/qty/price/trigger/validity/offlineOrder, source
+  module), BLOCK 2 (RESPONSE: body, elapsed ms, request/correlation id; HTTP
+  status/headers noted as not exposed by the SDK), BLOCK 3 (ERROR: axios flag,
+  status, body, stack) then `throw err` (no swallow). Added `maskAuthHeader`
+  (never leaks the access token — window capped at the appId:token boundary),
+  `decodeFyersOrderType/decodeFyersSide/safeJson`, base-URL/path constants, a
+  captured `accessTokenForDiag` (set in `setAccessToken`, masked-preview only)
+  and a new concrete `setOrderDiagnosticContext()` (NOT on the BrokerAdapter
+  interface — abstraction preserved; defaults to {} so unset callers are
+  byte-identical).
+- `apps/api/src/manual-trading/manual-trade.service.ts`: FYERS branch of
+  `placeOnMaster()` attaches the diagnostic context (tradingAccountId,
+  session.userId, source module, env, session.expiresAt) right before the
+  existing `adapter.placeOrder(order)`. No other change.
+- NEW `backend/tests/fyers_order_diagnostics_harness.cjs` (static, 23 checks):
+  proves payload identity, return identity, error rethrow, all three blocks
+  emitted, and token never leaked (incl. short-appId edge).
+
+**Validated (static):** `pnpm --filter @cts/api typecheck` PASS; `pnpm -r build`
+PASS (5/5 workspaces); diagnostics harness 23/23 ALL PASS; existing
+`fyers_reconnect_harness.cjs` + `fyers_account_isolation_harness.cjs` ALL PASS
+(no regression). testing_agent iteration_20: 100% backend, no critical/minor
+blocking issues, retest not needed.
+
+**NOT verified (impossible in pod — no Postgres/Redis, no live Fyers session,
+no preview URL):** the live order log against Fyers prod. To capture on the
+user's local run: place a manual Fyers trade and collect the three `[FyersAdapter]`
+blocks from the API logs for the support ticket.
+
+Feature commit `7462888`; merge (`--no-ff`) `81670cd`; pushed to
+`origin/main` (`1f8198b..81670cd`).
+
