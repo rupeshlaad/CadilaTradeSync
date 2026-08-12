@@ -692,3 +692,64 @@ ALL PASS; both Shoonya harnesses ALL PASS; new harness 24/24.
 `fix/fyers-placement-account-credentials` HEAD), commit `4777d2a`. NOT merged,
 NOT pushed — awaiting user approval. Note: `fix/fyers-placement-account-credentials`
 (`09a569c`) is also still unmerged/unpushed; both need to go out together.
+
+
+## Sprint — Manual Trade end-to-end pipeline trace (2026-08, observability only) — DONE (static)
+
+**Goal:** prove exactly where the Manual Trading pipeline stops (symptom: UI
+stuck at EXECUTING_FOLLOWERS; console shows old MasterWatcher NIFTY events, not
+the TCS manual order). NOT a redesign / not a fix — a correlation-id trace.
+
+**Design:** each `ManualTradeService.place()` mints a unique correlation id
+`CTS-MT-YYYYMMDD-000001` and carries it through the WHOLE existing pipeline via a
+Node `AsyncLocalStorage` store — zero method-signature / architecture / schema /
+API / UI / adapter / copy-execution changes. Auto-scoped: a trace exists ONLY
+inside a manual `place()`, so `traceStage` is a silent no-op for every
+non-manual event (Shoonya / Fyers diagnostics / master-watcher / broker adapters
+byte-identical). No Kafka/OTel/Grafana/ELK.
+
+**10 stages logged** (correlationId, timestamp, component, method, input, output,
+status, elapsedMs, relatedIds) + a final `CTS MANUAL TRADE SUMMARY` block with
+Correlation/Manual-Trade/Broker-Order/Execution-Event/Execution-History/
+Master-Position ids, follower counts, current manual status, current Trade
+Monitor status, Pipeline Completed YES/NO and the first Missing Stage:
+1 place (request) · 2 validate · 3 placeOnMaster (adapter) · 4 fetchPlacedOrder
+(broker→canonical mapped status, log-only normalizer call) · 5
+PositionLifecycle.ingest (classification/transition/positionId; also logs
+NORMALIZE_FAILED / SIGNATURE_UNCHANGED / NO_EVENT / REJECTED_TRANSITION) · 6
+ExecutionEventRecorder begin+commit · 7 CopyTradingService fan-out (DERIVED from
+the committed event — copy-trading.service.ts untouched) · 8
+ExecutionHistory.persist · 9 handleExecutionCommit (matched vs UNMATCHED_EVENT —
+this is what surfaces the "NIFTY instead of my order" symptom) · 10 Trade Monitor
+query (recorder buffer). Stages 5-9 are marked against the manual order only when
+the broker order id matches, so "Missing Stage" is accurate even while
+syncMaster ingests other orders in the same request.
+
+**Files:** NEW `apps/api/src/observability/manual-trade-trace.ts`, NEW
+`backend/tests/manual_trade_trace_harness.cjs` (25 checks); MOD
+`manual-trading/manual-trade.service.ts`, `position-lifecycle/
+position-lifecycle.service.ts`, `copy-trading/execution-event.recorder.ts`,
+`execution-history/execution-history.service.ts`. No DB/Prisma/migration change.
+A bounded (≤1.8s) wait for the fire-and-forget history write lets the summary
+report the ExecutionHistory ID without changing the recorder's fire-and-forget
+architecture (skipped entirely when no fan-out occurred).
+
+**Validated (static, this pod):** `@cts/api` typecheck PASS; `pnpm -r build` 5/5
+PASS; boot sanity PASS (full DI graph, all `/admin/manual-trading` +
+`/admin/execution-events` + `/admin/execution-history` + `/masters/:id/sync`
+routes mapped; crash only at Redis/PrismaModule DATABASE_URL). New harness 25/25;
+manual-trade status-transition (24/24), Fyers order-diagnostics / account-isolation
+/ reconnect, and Shoonya OAuth (9/9) harnesses ALL PASS — no regression.
+
+**NOT verified (impossible in pod — no Postgres/Redis, no live Fyers session, no
+preview URL):** the LIVE trace of a real manual Fyers trade. To capture on the
+user's local run: place one manual Fyers TCS order and collect the single
+`[ManualTradeTrace]` correlation id's Stage 1-10 lines + the summary — the first
+absent stage (expected around 5→6/7, i.e. lifecycle emits NEW/OPEN so
+COMPLETE_FILL fan-out never fires, or syncMaster early-returns on no active
+strategy / no enabled followers) is the proven break point. No fix proposed yet,
+per instruction.
+
+**Git:** feature branch `feature/manual-trade-pipeline-trace`, commit `758af32`;
+`--no-ff` merge `0ca903c` into local `main`. NOT pushed — user publishes via
+**Save to GitHub**.
