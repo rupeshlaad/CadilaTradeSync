@@ -1,0 +1,44 @@
+{
+  "summary": "Verified surgical FIX sprint for Fyers MARKET manual-trade stuck-at-EXECUTING_FOLLOWERS bug. Ran the new manual_trade_market_fill_e2e_harness.cjs plus the full existing suite of 10 harnesses. All 11 harnesses report ALL PASS / 0 failed. The Pending(6)->Filled(2) read-back scenario now resolves via ManualTradeService.pollUntilTerminal to COMPLETE_FILL, PositionLifecycleService.dispatchFollowers invokes CopyTradingService.handleTrade, ExecutionEvent commits, ManualTradeService.handleExecutionCommit fires, and the manual record transitions EXECUTING_FOLLOWERS -> COMPLETED with the event present in the recorder buffer (Trade Monitor source). Canonical activeMasterStrategyWhere() lookup is used by masterWatcher.syncMaster, PositionLifecycleService.lookupStrategyId and CopyTradingService.handleTrade. Observability (correlation IDs, trace stages, summary) intact.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": { "ui_bugs": [], "integration_issues": [], "design_issues": [] },
+  "test_report_links": [
+    "/app/backend/tests/manual_trade_market_fill_e2e_harness.cjs",
+    "/app/backend/tests/manual_trade_trace_harness.cjs",
+    "/app/backend/tests/manual_trade_status_transition_harness.cjs",
+    "/app/backend/tests/fyers_order_diagnostics_harness.cjs",
+    "/app/backend/tests/fyers_account_isolation_harness.cjs",
+    "/app/backend/tests/fyers_reconnect_harness.cjs",
+    "/app/backend/tests/shoonya_oauth_harness.cjs",
+    "/app/backend/tests/shoonya_callback_context_harness.cjs",
+    "/app/backend/tests/integrity_dedupe_exchange_harness.cjs",
+    "/app/backend/tests/manual_search_exchange_harness.cjs",
+    "/app/backend/tests/upstox_redirect_env_harness.cjs"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "pollUntilTerminal cap of 5x300ms (<=1.5s) is a reasonable bound but note that on a slow Fyers backend a legitimate MARKET could still fall through to the optimistic COMPLETE surrogate — logs correctly annotate this path; keep monitoring in prod.",
+    "activeMasterStrategyWhere() is now the single source of truth for master-strategy filtering across masterWatcher, PositionLifecycleService and CopyTradingService — good DRY consolidation. Recommend adding a lint/import-guard so future code paths cannot bypass it.",
+    "Harness coverage for the exact bug (Pending->Filled read-back + fan-out + commit + status transition) is now green; a true LIVE Fyers+Postgres run is inherently not-verifiable-in-pod (no DB/Redis/broker) and must be smoke-tested by the user on their infra."
+  ],
+  "updated_files": [],
+  "success_rate": { "backend": "100% (11/11 harnesses ALL PASS)", "frontend": "N/A (skipped per request)" },
+  "harness_results": {
+    "manual_trade_market_fill_e2e_harness": "13 passed, 0 failed — ALL PASS",
+    "manual_trade_trace_harness": "25 passed, 0 failed — ALL PASS",
+    "manual_trade_status_transition_harness": "24 passed, 0 failed — ALL PASS",
+    "fyers_order_diagnostics_harness": "ALL PASS",
+    "fyers_account_isolation_harness": "ALL PASS",
+    "fyers_reconnect_harness": "ALL PASS",
+    "shoonya_oauth_harness": "9/9 ALL PASS",
+    "shoonya_callback_context_harness": "10/10 ALL PASS",
+    "integrity_dedupe_exchange_harness": "9/9 ALL PASS",
+    "manual_search_exchange_harness": "8/8 ALL PASS",
+    "upstox_redirect_env_harness": "4/4 ALL PASS"
+  },
+  "seed_data_creation": "None — harnesses use in-memory fakes; no DB writes.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "External CadilaTradeSync pnpm monorepo — NO supervisor services, NO preview URL, NO DB/Redis/broker in-pod. Verification is exclusively via `node backend/tests/<name>.cjs` against apps/api/dist. If dist is missing, rebuild with `corepack enable && corepack prepare pnpm@9.12.3 --activate && pnpm -r build`. LIVE Fyers+Postgres end-to-end is not-verifiable-in-pod; user must smoke-test on their infra.",
+  "rca of the issue": "Pre-fix: MARKET place() -> placeOnMaster() succeeds -> fetchPlacedOrder() reads back while broker status is 6 (Pending)/4 (Transit) -> mapFyersStatus -> OPEN -> classifyEvent -> NEW -> PositionLifecycleService.dispatchFollowers case NEW returns [] -> CopyTradingService.handleTrade never runs -> no ExecutionEvent -> ManualTradeService.handleExecutionCommit never fires -> manual record stuck at EXECUTING_FOLLOWERS forever. Additionally, masterWatcher.syncMaster used a strategy filter that omitted masterAccount:true, mismatched with lookupStrategyId. Fix: (1) ManualTradeService.pollUntilTerminal bounded re-poll (5x300ms, <=1.5s) for MARKET orders until terminal, so Pending->Filled resolves to Filled and ingests as COMPLETE_FILL; (2) optimistic COMPLETE surrogate fallback if still non-terminal after re-poll; (3) canonical activeMasterStrategyWhere() (tradingAccountId + masterAccount:true + enabled:true + status ACTIVE) shared by masterWatcher.syncMaster, PositionLifecycleService.lookupStrategyId, and CopyTradingService.handleTrade. Verified by 13/13 assertions in the new e2e harness covering all three stages (re-poll, classify+fan-out, commit->COMPLETED)."
+}

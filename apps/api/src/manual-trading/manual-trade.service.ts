@@ -343,16 +343,37 @@ export class ManualTradeService implements OnModuleInit {
     record.updatedAt = new Date().toISOString();
 
     try {
-      const rawOrder = await this.fetchPlacedOrder(
+      let rawOrder = await this.fetchPlacedOrder(
         master.id,
         master.broker,
         brokerOrderId,
       );
+
+      // FIX — Manual MARKET orders must reach COMPLETE_FILL, not NEW.
+      // A just-placed MARKET order is frequently still Pending/Transit on the
+      // immediate read-back (e.g. Fyers status 6/4 → OPEN → classifyEvent NEW →
+      // dispatchFollowers returns [] → no fan-out → stuck at
+      // EXECUTING_FOLLOWERS). For MARKET only, bounded re-poll the broker
+      // (5 attempts × 300ms, ≤1500ms) until a terminal state before ingesting.
+      if (dto.orderType === 'MARKET') {
+        rawOrder = await this.pollUntilTerminal(
+          master.id,
+          master.broker,
+          brokerOrderId,
+          rawOrder,
+        );
+      }
+
       // Stage 4 — read-back of the just-placed order + broker→canonical
       // status mapping (pure normalizer call, log-only) + order snapshot.
       const fetchedMapped = rawOrder
         ? normalizeRawOrder(master.broker, rawOrder)
         : null;
+      const isTerminalReadback =
+        !!fetchedMapped &&
+        (fetchedMapped.status === 'COMPLETE' ||
+          fetchedMapped.status === 'REJECTED' ||
+          fetchedMapped.status === 'CANCELLED');
       traceStage(
         4,
         {
@@ -362,22 +383,46 @@ export class ManualTradeService implements OnModuleInit {
             fetched: !!rawOrder,
             brokerStatus: (rawOrder as any)?.status ?? null,
             mappedStatus: fetchedMapped?.status ?? null,
+            terminal: isTerminalReadback,
             snapshot: rawOrder ?? '(none — optimistic surrogate will be built)',
           },
-          status: rawOrder ? 'ORDER_FETCHED' : 'SURROGATE_USED',
+          status: rawOrder
+            ? isTerminalReadback
+              ? 'ORDER_FETCHED_TERMINAL'
+              : 'ORDER_FETCHED_NON_TERMINAL'
+            : 'SURROGATE_USED',
           relatedIds: { brokerOrderId },
         },
         true,
       );
-      const surrogate =
-        rawOrder ??
-        this.buildOptimisticOrder(
-          dto,
-          brokerOrderId,
-          placementResponse,
-          master.broker,
-          instrument,
-        );
+
+      // Choose the order to route into the lifecycle:
+      //  - a TERMINAL real broker order (Filled/Rejected/Cancelled) is
+      //    authoritative — ingest as-is;
+      //  - a MARKET order still Pending/Transit after the bounded re-poll falls
+      //    back to the optimistic COMPLETE surrogate (broker already accepted
+      //    the order) so it enters COMPLETE_FILL rather than NEW;
+      //  - non-MARKET orders keep prior behaviour (real order if present, else
+      //    optimistic surrogate) so genuinely-resting LIMIT/SL orders still
+      //    track as OPEN until an explicit Sync confirms the fill.
+      const surrogate = isTerminalReadback
+        ? rawOrder
+        : dto.orderType === 'MARKET'
+        ? this.buildOptimisticOrder(
+            dto,
+            brokerOrderId,
+            placementResponse,
+            master.broker,
+            instrument,
+          )
+        : rawOrder ??
+          this.buildOptimisticOrder(
+            dto,
+            brokerOrderId,
+            placementResponse,
+            master.broker,
+            instrument,
+          );
 
       await this.lifecycle.ingest(
         {
@@ -387,6 +432,28 @@ export class ManualTradeService implements OnModuleInit {
         },
         surrogate,
       );
+
+      // A MARKET order the broker terminally REJECTED/CANCELLED will not fan
+      // out (correctly — nothing to copy). Ensure the manual record leaves
+      // EXECUTING_FOLLOWERS with the right terminal status instead of hanging.
+      // (The COMPLETE path leaves EXECUTING_FOLLOWERS via handleExecutionCommit
+      // once the fan-out ExecutionEvent commits.)
+      if (
+        fetchedMapped &&
+        (fetchedMapped.status === 'REJECTED' ||
+          fetchedMapped.status === 'CANCELLED')
+      ) {
+        record.status =
+          fetchedMapped.status === 'REJECTED'
+            ? ManualTradeStatus.REJECTED
+            : ManualTradeStatus.FAILED;
+        record.rejectionReason =
+          record.rejectionReason ??
+          fetchedMapped.reason ??
+          `Broker reported order ${fetchedMapped.status}`;
+        record.failureStage = record.failureStage ?? 'broker_terminal';
+        record.updatedAt = new Date().toISOString();
+      }
     } catch (err: any) {
       // Lifecycle ingest failure MUST NOT roll back the broker order —
       // the order is on the exchange. We surface the failure on the
@@ -742,6 +809,43 @@ export class ManualTradeService implements OnModuleInit {
       );
     }
     return null;
+  }
+
+  /**
+   * Bounded re-poll of the just-placed order until the broker reports a
+   * TERMINAL state (Filled → COMPLETE, Rejected, Cancelled). Used for MARKET
+   * orders so a transient Pending/Transit read-back does not classify as NEW
+   * and stall the pipeline. Returns the last-seen order (which may still be
+   * non-terminal, or null, after the budget is exhausted — the caller then
+   * falls back to the optimistic COMPLETE surrogate). Read-only: reuses the
+   * existing per-account `fetchPlacedOrder` adapter path (no new broker logic).
+   */
+  private async pollUntilTerminal(
+    tradingAccountId: string,
+    broker: Broker,
+    brokerOrderId: string,
+    initial: any | null,
+    retries = 5,
+    delayMs = 300,
+    maxMs = 1500,
+  ): Promise<any | null> {
+    const startedAt = Date.now();
+    let order = initial;
+    for (let attempt = 0; attempt < retries; attempt++) {
+      const mapped = order ? normalizeRawOrder(broker, order) : null;
+      if (
+        mapped &&
+        (mapped.status === 'COMPLETE' ||
+          mapped.status === 'REJECTED' ||
+          mapped.status === 'CANCELLED')
+      ) {
+        return order;
+      }
+      if (Date.now() - startedAt >= maxMs) break;
+      await new Promise((r) => setTimeout(r, delayMs));
+      order = await this.fetchPlacedOrder(tradingAccountId, broker, brokerOrderId);
+    }
+    return order;
   }
 
   /**
