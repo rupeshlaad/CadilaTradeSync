@@ -4,6 +4,7 @@ import { BrokerService } from '../brokers/broker.service';
 import { PositionLifecycleService } from '../position-lifecycle/position-lifecycle.service';
 import { Broker } from '@prisma/client';
 import { LifecycleEventType } from '../position-lifecycle/lifecycle.types';
+import { activeMasterStrategyWhere } from '../common/active-master-strategy';
 
 /**
  * Master Sync — reconciles a single master account against its OWN broker
@@ -53,11 +54,7 @@ export class MasterWatcherService {
     };
 
     const strategy = await this.prisma.strategy.findFirst({
-      where: {
-        tradingAccountId,
-        enabled: true,
-        status: 'ACTIVE',
-      },
+      where: activeMasterStrategyWhere(tradingAccountId),
     });
 
     if (!strategy) {

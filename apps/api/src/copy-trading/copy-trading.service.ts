@@ -16,6 +16,7 @@ import {
   ExecutionEventRecorderService,
 } from './execution-event.recorder';
 import { classifyFailure } from './execution-event.recorder';
+import { activeMasterStrategyWhere } from '../common/active-master-strategy';
 
 @Injectable()
 export class CopyTradingService {
@@ -63,12 +64,7 @@ export class CopyTradingService {
       //-----------------------------------------
 
       const strategy = await this.prisma.strategy.findFirst({
-        where: {
-          tradingAccountId: event.tradingAccountId,
-          masterAccount: true,
-          enabled: true,
-          status: 'ACTIVE',
-        },
+        where: activeMasterStrategyWhere(event.tradingAccountId),
       });
 
       if (!strategy) {

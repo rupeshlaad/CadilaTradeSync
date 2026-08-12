@@ -27,6 +27,7 @@ import {
   traceStage,
   currentManualTradeTrace,
 } from '../observability/manual-trade-trace';
+import { activeMasterStrategyWhere } from '../common/active-master-strategy';
 
 /**
  * Sprint 5.3 — Position Lifecycle Manager.
@@ -490,12 +491,7 @@ export class PositionLifecycleService {
     tradingAccountId: string,
   ): Promise<string | null> {
     const strategy = await this.prisma.strategy.findFirst({
-      where: {
-        tradingAccountId,
-        masterAccount: true,
-        enabled: true,
-        status: 'ACTIVE',
-      },
+      where: activeMasterStrategyWhere(tradingAccountId),
       select: { id: true },
     });
     return strategy?.id ?? null;
