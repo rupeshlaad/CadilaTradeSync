@@ -9,6 +9,11 @@ import { ShoonyaService } from './shoonya.service';
 import { buildBrokerCallbackRedirect } from '../broker-callback-redirect';
 import { encodeOAuthState, decodeOAuthState } from '../oauth-state.store';
 import {
+  savePendingOAuth,
+  recoverLatestPendingOAuth,
+  clearPendingOAuth,
+} from '../oauth-pending.store';
+import {
   OAUTH_STATE_COOKIE,
   clearOAuthStateCookie,
   readCookie,
@@ -151,6 +156,12 @@ export class ShoonyaController {
     // is also passed as `state` for brokers/setups that do echo it back.
     const stateToken = encodeOAuthState({ tradingAccountId, returnTo });
     setOAuthStateCookie(res, stateToken);
+    // Cross-origin-safe fallback: Shoonya redirects the browser to the
+    // PORTAL-registered callback origin (often a different origin than the one
+    // that served /login), so the host cookie is dropped and Shoonya does not
+    // echo `state`. Persist the reconnect context on the API process itself so
+    // the callback can recover it with neither a cookie nor the `state` param.
+    savePendingOAuth({ broker: 'SHOONYA', tradingAccountId, returnTo });
     const redirectUrl = adapter.getLoginUrl(stateToken);
 
     // TEMPORARY DIAGNOSTICS — read back exactly what Set-Cookie wrote (no change).
@@ -213,17 +224,37 @@ export class ShoonyaController {
         '====================================',
     );
 
-    // Recover the reconnect context from the OAuth `state` param when the broker
-    // echoes it, else from the SELF-CONTAINED state cookie set at /login. Both
-    // decode the same token, so recovery no longer depends on Shoonya echoing
-    // `state` or on any single API instance's in-memory map.
-    const stateEntry =
+    // Recover the reconnect context. Order:
+    //   1) OAuth `state` param  (brokers that echo it — unchanged)
+    //   2) self-contained state cookie  (same-origin login/callback — unchanged)
+    //   3) server-side pending store  (CROSS-ORIGIN fallback: Shoonya redirects
+    //      to a different origin, so 1 & 2 are both empty — recover the context
+    //      the API kept on the process at /login; works without `state`).
+    let stateEntry =
       decodeOAuthState(stateParam) ??
       decodeOAuthState(readCookie(req, OAUTH_STATE_COOKIE));
+    let recoverySource: string = stateEntry
+      ? decodeOAuthState(stateParam)
+        ? 'state param'
+        : 'cookie'
+      : 'none';
+    if (!stateEntry?.tradingAccountId) {
+      const pendingCtx = recoverLatestPendingOAuth('SHOONYA');
+      if (pendingCtx?.tradingAccountId) {
+        stateEntry = pendingCtx;
+        recoverySource = 'pending-store (cross-origin fallback)';
+      }
+    }
     clearOAuthStateCookie(res);
 
     const tradingAccountId = stateEntry?.tradingAccountId;
     const returnTo = stateEntry?.returnTo;
+    // Context resolved via cookie/state — drop any stale pending entry so a
+    // later context-less callback can't pick it up. (The fallback path already
+    // consumed its entry via recoverLatestPendingOAuth.)
+    if (tradingAccountId && recoverySource !== 'pending-store (cross-origin fallback)') {
+      clearPendingOAuth('SHOONYA');
+    }
 
     // TEMPORARY DIAGNOSTICS — context recovery trace.
     this.logger.log(
@@ -288,7 +319,7 @@ export class ShoonyaController {
       '\n========== SHOONYA CONTEXT RECOVERED ==========\n' +
         `TradingAccountId     : ${tradingAccountId}\n` +
         `ReturnTo             : ${returnTo ?? '(none)'}\n` +
-        `Source               : ${decodedFromState?.tradingAccountId ? 'state param' : 'cookie'}\n` +
+        `Source               : ${recoverySource}\n` +
         '=============================================',
     );
 
