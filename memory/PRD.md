@@ -854,3 +854,50 @@ on their infra.
 **Git:** feature branch `feature/zerodha-follower-execution`, commit `2e9c1df`;
 `--no-ff` merge `ef27d20` into local `main`. NOT pushed — user publishes via
 **Save to GitHub**.
+
+
+## Sprint — Canonical InstrumentTranslationService (2026-08) — DONE (static + harness-verified)
+
+**Root cause:** two divergent instrument-lookup paths. CopyTradingService
+resolved via `resolveByBrokerSymbol(broker, event.symbol, event.exchange)` +
+`getBrokerSymbol(...)` — the `event.exchange` acted as a HARD filter and the raw
+Fyers master symbol carried `NSE:`/`-EQ` affixes, so the copy lookup returned
+null → INSTRUMENT_NOT_FOUND. The Translation UI resolved the SAME instrument via
+`resolver.translate(...)` WITHOUT the exchange constraint, so it succeeded. The
+mapping existed; only the copy lookup path was wrong.
+
+**Fix — one canonical service (`instruments/instrument-translation.service.ts`):**
+- Internal normalization (strip `EXCH:` prefix + `-EQ/-BE/...` suffix); callers
+  never normalize.
+- Deterministic lookup: exact → normalized variants → canonical
+  (underlying/contractKey) → trading (exchange) symbol → instrument token.
+  Exchange is a PREFERENCE (pickPreferred), never a zeroing hard filter.
+- Never throws → structured NOT_FOUND (`SOURCE_NOT_FOUND` / `TARGET_NOT_FOUND`)
+  with every attempted key + reason; correlation-aware match logging.
+- Returns every stored field: targetSymbol/brokerSymbol/tradingSymbol,
+  token/instrumentToken, exchangeToken, exchange, exchangeSegment, lotSize,
+  tickSize, expiry, optionType, strike, contractKey, underlying.
+- `InstrumentResolverService` now DELEGATES resolveByBrokerSymbol /
+  getBrokerSymbol / translate to it (no duplicate lookup logic remains; admin
+  Translation UI endpoint contract unchanged). CopyTradingService calls
+  `translation.translate()` once; FollowerExecutionService still receives the
+  already-translated instrument and performs NO lookup / symbol manipulation.
+  Manual-trade validator + order-actions gain the same normalization via the
+  resolver facade.
+
+**Files:** NEW `apps/api/src/instruments/instrument-translation.service.ts`,
+`backend/tests/instrument_translation_harness.cjs` (33 checks). MOD
+`instruments/instrument-resolver.service.ts` (delegates),
+`instruments/instrument.module.ts` (provide/export the service),
+`copy-trading/copy-trading.service.ts` (single translate call).
+
+**Validated:** `@cts/api` typecheck PASS; `pnpm -r build` 5/5 PASS; boot sanity
+PASS (InstrumentModule + CopyTradingModule resolve); new harness 33/33; all 13
+regression harnesses PASS (Fyers ×4, Shoonya ×2, Zerodha follower exec 38/38,
+manual-trade e2e/status/trace, integrity, manual-search, upstox — no regression).
+**NOT verified (impossible in pod — no Postgres):** a real LIVE cross-broker copy
+resolving against the imported instrument master — user smoke-tests on their infra.
+
+**Git:** feature branch `feature/canonical-instrument-translation`, commit
+`bd20287`; `--no-ff` merge `8d8f389` into local `main`. NOT pushed — user
+publishes via **Save to GitHub**.
