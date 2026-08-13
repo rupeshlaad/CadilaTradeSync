@@ -1010,3 +1010,29 @@ UPSTOX/ICICI without throwing and without mutating the sent order/result).
 16 existing harnesses PASS (no regression, 17 total); testing_agent iteration_25 =
 100% backend, 0 issues, observability blocks confirmed in stdout for all brokers.
 **DB changes:** none.
+
+## Audit — Shoonya OAuth authentication failure (2026-06) — ROOT CAUSE = PORTAL CONFIG (no code change)
+
+**Verdict:** Application Shoonya OAuth code is CORRECT. Failure is in the Shoonya
+Developer Portal redirect/callback registration, NOT in CTS code. No files changed.
+
+**Why (proven):** `shoonya.adapter.getLoginUrl()` sends ONLY `client_id` (+optional
+`state`) to `https://api.shoonya.com/OAuthlogin/authorize/oauth`. Shoonya does NOT
+accept a client-supplied `redirect_uri`; the redirect target is bound to the OAuth
+app inside the Shoonya Developer Portal. So a callback/redirect mismatch is portal
+config by definition. Token exchange (`/NorenWClientAPI/GenAcsTok`, checksum
+SHA256(apiKey+secretCode+code)), Bearer+jKey reads, encrypted daily-token
+persistence, and callback context recovery (state param OR `cts_oauth_state`
+cookie) all match the official contract.
+
+**Evidence:** typecheck exit 0; build OK; shoonya_oauth_harness 9/9;
+shoonya_callback_context_harness 10/10; all 17 harnesses green; testing_agent
+iteration_26 = 100% backend, 0 issues, RCA portal-side.
+
+**Portal fix (user, ZERO code change):** register the Shoonya OAuth app's
+Redirect/Callback URL to EXACTLY the app callback route
+`https://<deployed-api-host>/api/brokers/shoonya/callback` (controller also serves
+`/brokers/shoonya/callback`). Must match scheme+host+path+trailing-slash. Ensure the
+stored SHOONYA API Key(client_id)/Secret belong to the SAME portal app.
+
+**Nothing to push** — no application code was modified.
