@@ -25,9 +25,37 @@ export interface FollowerExecutionParams {
   instrument: ResolvedInstrument | null;
   /** Master trade product (CNC / MIS / NRML) mirrored to the follower order. */
   product?: string | null;
+  /** Source (master) symbol BEFORE translation — observability only. */
+  masterSymbol?: string | null;
   followerId?: string | null;
   correlationId?: string | null;
 }
+
+/**
+ * Best-effort read of the first present alias key from a broker-native order
+ * payload. Broker payload shapes differ (Zerodha `order_type`, Fyers `type`,
+ * ICICI `exchange_code`, …), so the observability block reads a small alias
+ * set and always falls back to the complete JSON below. Returns null when
+ * absent so a value of 0 / -1 (e.g. Zerodha market_protection) is preserved.
+ */
+function pickField(order: unknown, keys: string[]): unknown {
+  if (!order || typeof order !== 'object') return null;
+  const o = order as Record<string, unknown>;
+  for (const k of keys) {
+    if (o[k] !== undefined && o[k] !== null) return o[k];
+  }
+  return null;
+}
+
+function safeJson(value: unknown): string {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+const show = (v: unknown): string => (v === null || v === undefined ? '-' : String(v));
 
 /**
  * Sprint — Zerodha follower execution / dynamic broker execution layer.
@@ -110,11 +138,17 @@ export class FollowerExecutionService {
     }
 
     // 3) Place + normalize (raw broker payloads never escape this service).
+    //    PERMANENT OBSERVABILITY — log the FINAL payload that will actually be
+    //    sent to the broker (ALL brokers), immediately before the API call, and
+    //    the normalized broker response immediately after. Never mutates the
+    //    order / result and never throws into the execution path.
+    this.logFollowerPayload(params, resolved.broker, order);
     const startedAt = Date.now();
     try {
       const raw = await (resolved.adapter as any).placeOrder(order);
       const latencyMs = Date.now() - startedAt;
       const outcome = normalizeExecutionResponse(resolved.broker, raw);
+      this.logBrokerResponse(params, resolved.broker, outcome, latencyMs);
       return this.settle(base, outcome, order, latencyMs);
     } catch (err: any) {
       const latencyMs = Date.now() - startedAt;
@@ -122,8 +156,90 @@ export class FollowerExecutionService {
         `Follower ${params.followerId ?? params.followerAccountId} (${resolved.broker}) placeOrder threw: ${err?.message ?? err}`,
       );
       const outcome = normalizeExecutionError(resolved.broker, err);
+      this.logBrokerResponse(params, resolved.broker, outcome, latencyMs);
       return this.settle(base, outcome, order, latencyMs);
     }
+  }
+
+  /**
+   * PERMANENT OBSERVABILITY — the FINAL broker payload, logged for EVERY broker
+   * right before the placeOrder API call. Named fields are best-effort across
+   * broker payload shapes; the complete JSON is always printed so nothing is
+   * ever lost. Additive only — does not influence execution.
+   */
+  private logFollowerPayload(
+    params: FollowerExecutionParams,
+    broker: Broker,
+    order: unknown,
+  ): void {
+    const p = (keys: string[]) => pickField(order, keys);
+    const block = [
+      '---------------------------------------------',
+      'FOLLOWER EXECUTION PAYLOAD',
+      '---------------------------------------------',
+      `Correlation ID         : ${show(params.correlationId)}`,
+      `Follower Account       : ${show(params.followerAccountId)}`,
+      `Broker                 : ${show(broker)}`,
+      `Exchange               : ${show(p(['exchange', 'exchange_code']) ?? params.exchange)}`,
+      `Original Master Symbol : ${show(params.masterSymbol)}`,
+      `Translated Symbol      : ${show(params.brokerSymbol ?? p(['tradingsymbol', 'symbol', 'stock_code', 'instrument_token']))}`,
+      `Quantity               : ${show(p(['quantity', 'qty']) ?? params.quantity)}`,
+      `Side                   : ${show(p(['transaction_type', 'action', 'side']) ?? params.side)}`,
+      `Order Type             : ${show(p(['order_type', 'type']))}`,
+      `Product                : ${show(p(['product', 'productType']))}`,
+      `Variety                : ${show(p(['variety']))}`,
+      `Price                  : ${show(p(['price', 'limitPrice']))}`,
+      `Trigger Price          : ${show(p(['trigger_price', 'stopPrice', 'stoploss']))}`,
+      `Market Protection      : ${show(p(['market_protection']))}`,
+      `Tag                    : ${show(p(['tag', 'user_remark', 'remark']))}`,
+      `Autoslice              : ${show(p(['slice', 'autoslice', 'auto_slice']))}`,
+      `Complete JSON payload  : ${safeJson(order)}`,
+      '---------------------------------------------',
+    ].join('\n');
+    this.logger.log('\n' + block);
+  }
+
+  /**
+   * PERMANENT OBSERVABILITY — the normalized broker response, logged for EVERY
+   * broker right after placeOrder settles (success OR failure). Reads the
+   * broker-neutral outcome so the raw broker response is always captured.
+   */
+  private logBrokerResponse(
+    params: FollowerExecutionParams,
+    broker: Broker,
+    outcome: {
+      success: boolean;
+      category: ExecutionResultCategory;
+      retryable: boolean;
+      brokerOrderId: string | null;
+      exchangeOrderId: string | null;
+      httpStatus: number | null;
+      brokerStatus: string | null;
+      brokerMessage: string | null;
+      failureReason: string | null;
+      rawResponse: unknown | null;
+    },
+    latencyMs: number | null,
+  ): void {
+    const block = [
+      '---------------------------------------------',
+      'BROKER RESPONSE',
+      '---------------------------------------------',
+      `Correlation ID             : ${show(params.correlationId)}`,
+      `Follower Account           : ${show(params.followerAccountId)}`,
+      `Broker                     : ${show(broker)}`,
+      `HTTP Status                : ${show(outcome.httpStatus)}`,
+      `Broker Status              : ${show(outcome.brokerStatus)}`,
+      `Order ID                   : ${show(outcome.brokerOrderId)}`,
+      `Exchange Order ID          : ${show(outcome.exchangeOrderId)}`,
+      `Broker Message             : ${show(outcome.brokerMessage ?? outcome.failureReason)}`,
+      `Normalized Result Category : ${show(outcome.category)}`,
+      `Retryable                  : ${show(outcome.retryable ?? isRetryable(outcome.category))}`,
+      `Latency                    : ${latencyMs != null ? `${latencyMs}ms` : '-'}`,
+      `Raw broker response        : ${safeJson(outcome.rawResponse)}`,
+      '---------------------------------------------',
+    ].join('\n');
+    this.logger.log('\n' + block);
   }
 
   private settle(

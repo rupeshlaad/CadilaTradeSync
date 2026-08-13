@@ -974,3 +974,39 @@ harnesses PASS (no regression); testing_agent iteration_24 = 100% backend, 0 iss
 accepted end-to-end after 3:12 PM — user smoke-tests on their infra.
 
 **DB changes:** none.
+
+## Sprint — Permanent follower-execution observability (all brokers) (2026-06) — DONE (harness + testing_agent verified)
+
+**Scope:** Root cause (Zerodha translator hard-coded `product:'MIS'`) was fixed in
+the prior commit (product threaded end-to-end). This sprint adds PERMANENT
+production-grade observability so the copy fan-out never has to be blind-debugged
+again. NO working broker logic touched.
+
+**Change (single chokepoint — ALL brokers pass through it):**
+`brokers/execution/follower-execution.service.ts`
+- NEW `logFollowerPayload()` — emitted IMMEDIATELY BEFORE `adapter.placeOrder`,
+  for every broker. Prints Correlation ID, Follower Account, Broker, Exchange,
+  Original Master Symbol, Translated Symbol, Quantity, Side, Order Type, Product,
+  Variety, Price, Trigger Price, Market Protection, Tag, Autoslice + the complete
+  JSON payload. Named fields are best-effort alias reads across broker payload
+  shapes (`pickField`); complete JSON guarantees nothing is lost.
+- NEW `logBrokerResponse()` — emitted IMMEDIATELY AFTER placeOrder settles
+  (success AND catch paths). Prints HTTP Status, Broker Status, Order ID,
+  Exchange Order ID, Broker Message, Normalized Result Category, Retryable,
+  Latency, Raw broker response.
+- Additive helpers `pickField`/`safeJson`/`show`; `FollowerExecutionParams` gains
+  optional `masterSymbol` (observability only). Logging never mutates the order
+  or the result and never throws into execution.
+`copy-trading/copy-trading.service.ts` — `followerExec.place({...})` also passes
+`masterSymbol: event.symbol` (observability context only).
+
+**Files:** MOD `follower-execution.service.ts`, `copy-trading.service.ts`; NEW
+`backend/tests/follower_broker_payload_regression_harness.cjs` (27 checks:
+CNC/MIS/NRML/missing product mirroring; Fyers/Upstox/ICICI payloads byte-identical
+with/without product; Shoonya null; observability path runs for ZERODHA/FYERS/
+UPSTOX/ICICI without throwing and without mutating the sent order/result).
+
+**Validated:** `@cts/api` typecheck (exit 0) + build PASS; new harness 27/27; all
+16 existing harnesses PASS (no regression, 17 total); testing_agent iteration_25 =
+100% backend, 0 issues, observability blocks confirmed in stdout for all brokers.
+**DB changes:** none.

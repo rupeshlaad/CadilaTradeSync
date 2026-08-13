@@ -204,6 +204,7 @@ export class CopyTradingService {
             exchange: translated.exchange,
             instrument: resolvedInstrument,
             product: event.product,
+            masterSymbol: event.symbol,
             followerId: follower.id,
             correlationId: currentManualTradeTrace()?.correlationId ?? null,
           });
