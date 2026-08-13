@@ -801,3 +801,56 @@ PARTIAL/FAILED; appears in Trade Monitor + Execution History; correlation Stage
 
 **Git:** feature branch `fix/manual-market-complete-fill`, commit `438b7a2`;
 `--no-ff` merge into local `main`. NOT pushed — user publishes via **Save to GitHub**.
+
+
+## Sprint — Zerodha follower execution via dynamic Broker Factory (2026-08) — DONE (static + harness-verified)
+
+**Root cause:** `CopyTradingService.handleTrade` had a hard-coded follower
+broker allow-list (FYERS + ICICI_DIRECT + UPSTOX). ZERODHA fell through to
+`rec.skip('BROKER_UNSUPPORTED')` BEFORE any adapter was built, so the existing
+(fully working) ZerodhaAdapter placeOrder/modify/cancel/auth + its
+BrokerService factory registration were never reached for the fan-out.
+
+**Fix (architecture-preserving — no adapter rewrite, no schema/API/UI/OAuth
+change, all observability kept & extended):**
+- CopyTradingService now places EVERY follower through the existing Broker
+  Factory `BrokerService.getAdapterForAccount` (supports all brokers incl.
+  ZERODHA), wrapped by a new `FollowerExecutionService`. The allow-list and the
+  inline per-broker if/else are gone; no per-broker switch remains in the copy
+  engine and no broker logic is duplicated.
+- NEW centralized result vocabulary `copy-trading/execution-result-category.ts`
+  (ExecutionResultCategory + StandardExecutionResult + retryable + status map).
+  `ExecutionFailureType` aliased to it (strict superset of legacy values).
+- NEW `brokers/execution/`: `follower-order-translator.ts` (reuses the shared
+  Upstox/ICICI mappers + Fyers/Zerodha shapes), `broker-response-normalizer.ts`
+  (per-broker success detection + central `classifyBrokerMessage`),
+  `follower-execution.service.ts` (dynamic factory → translate → placeOrder →
+  StandardExecutionResult), `broker-execution.module.ts`.
+- Recorder gains `recordStandardResult` (additive): mirrors broker/exchange
+  order id, http+broker status, message, latency, category, retryable,
+  correlation id onto the follower telemetry → Trade Monitor + Execution History
+  show the ACTUAL outcome (Rejected by Broker / Token Expired / Insufficient
+  Funds / AMO Not Supported / …) instead of a generic FAILED.
+- Per-follower isolation retained (one follower failing never stops the rest).
+  Fyers/Upstox/ICICI paths unchanged (regression harnesses green).
+
+**Files:** NEW `apps/api/src/copy-trading/execution-result-category.ts`,
+`apps/api/src/brokers/execution/{follower-execution.service,broker-response-normalizer,follower-order-translator,broker-execution.module}.ts`,
+`backend/tests/zerodha_follower_execution_harness.cjs` (38 checks). MOD
+`copy-trading/{copy-trading.service,copy-trading.module,execution-event,execution-event.recorder}.ts`,
+`apps/admin/src/lib/api.ts` (widened failureType union + optional result fields),
+`backend/tests/fyers_placement_credential_isolation_harness.cjs` (copy-trading
+guard updated: now verifies delegation to the Broker Factory rather than an
+inline `new FyersAdapter()`, since isolation moved into getAdapterForAccount).
+
+**Validated:** `@cts/api` typecheck PASS; `pnpm -r build` 5/5 PASS; boot sanity
+PASS (full DI graph incl. BrokerExecutionModule/CopyTradingModule resolves,
+crash only at Redis/PrismaModule DATABASE_URL); new harness 38/38; all 12
+regression harnesses PASS (no regression).
+**NOT verified (impossible in pod — no Postgres/Redis, no live Zerodha session):**
+a real LIVE Zerodha follower order placed via a master fan-out — user smoke-tests
+on their infra.
+
+**Git:** feature branch `feature/zerodha-follower-execution`, commit `2e9c1df`;
+`--no-ff` merge `ef27d20` into local `main`. NOT pushed — user publishes via
+**Save to GitHub**.
