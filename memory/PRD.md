@@ -1036,3 +1036,38 @@ Redirect/Callback URL to EXACTLY the app callback route
 stored SHOONYA API Key(client_id)/Secret belong to the SAME portal app.
 
 **Nothing to push** — no application code was modified.
+
+## Sprint — Shoonya cross-origin OAuth context recovery (2026-06) — DONE (harness + testing_agent verified)
+
+**Root cause in code:** `shoonya.controller.ts` stored reconnect context only in
+(a) the OAuth `state` param and (b) the host-scoped `cts_oauth_state` cookie set
+at `/login`. Shoonya does NOT echo `state`, and its portal-registered callback is
+on a DIFFERENT origin (login `http://localhost:4000` vs callback
+`https://cts.investwithdimple.com`), so the cookie is never sent → both channels
+empty → `tradingAccountId` lost ("Reconnect context missing").
+
+**Fix (Shoonya-scoped, no protocol/schema/other-broker/frontend change):**
+- NEW `brokers/oauth-pending.store.ts` — in-memory, process-resident pending
+  store (TTL 10min, single-use, broker-scoped): `savePendingOAuth`,
+  `recoverLatestPendingOAuth`, `clearPendingOAuth`. Survives the cross-origin
+  browser redirect because the API instance is unchanged across it.
+- `shoonya.controller.ts`: `/login` now also `savePendingOAuth({broker:'SHOONYA',
+  tradingAccountId, returnTo})`; `/callback` recovery order = state param →
+  cookie → **pending-store fallback** (used only when state+cookie both empty);
+  clears stale pending on same-origin success.
+
+**Why previous cookie mechanism failed:** cookies are origin-scoped; a cookie set
+on the login origin is never transmitted to a different callback origin, and
+Shoonya omits `state` — so the cross-origin redirect stripped both channels.
+
+**Files:** NEW `apps/api/src/brokers/oauth-pending.store.ts`; MOD
+`apps/api/src/brokers/shoonya/shoonya.controller.ts`; NEW
+`backend/tests/shoonya_cross_origin_recovery_harness.cjs` (8 checks: cross-origin
+recover w/o state+cookie, single-use, latest-wins, broker isolation, same-origin
+cookie path unchanged, state-param brokers unchanged).
+
+**Validated:** typecheck exit 0 + build OK; new harness 8/8; shoonya_callback
+10/10; shoonya_oauth 9/9; all 18 harnesses green; testing_agent iteration_27 =
+100% backend, 0 issues. **Not verifiable in-pod:** live browser OAuth round-trip
+(no live Shoonya account). **DB changes:** none.
+**Note:** in-memory store is single-instance; horizontal scaling would need Redis/DB backing (documented).
