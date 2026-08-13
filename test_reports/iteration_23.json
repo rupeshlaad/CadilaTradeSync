@@ -1,0 +1,19 @@
+{
+  "summary": "Verified Zerodha market_protection fix. Built @cts/api successfully, then ran all 15 backend .cjs harnesses. All PASS including the new zerodha_order_payload_harness (29/29), zerodha_follower_execution_harness (38/38), and instrument_translation_harness (33/33). ZerodhaAdapter.normalizeOrder correctly (a) lifts variety out of params defaulting to 'regular', (b) injects market_protection=-1 for MARKET and SL-M only, (c) never overrides explicit values including explicit 0, (d) does not mutate caller input, and (e) propagates broker rejections. Only apps/api/src/brokers/zerodha/zerodha.adapter.ts changed for this sprint (CopyTradingService/FollowerExecution/instrument translation untouched).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/zerodha_order_payload_harness.cjs",
+    "/app/backend/tests/zerodha_follower_execution_harness.cjs",
+    "/app/backend/tests/instrument_translation_harness.cjs"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [],
+  "updated_files": [],
+  "success_rate": {"backend": "100%", "frontend": "N/A (skipped per request)"},
+  "seed_data_creation": "None — pure static/logic verification with kite.placeOrder spied.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Build required before harnesses: `cd /app && corepack enable && corepack prepare pnpm@9.12.3 --activate && pnpm --filter @cts/api build`. NestJS cannot fully boot (no DATABASE_URL/Redis) — this is expected. Verify via .cjs harnesses only.",
+  "rca_of_the_issue": "Kite Connect API rejects MARKET/SL-M orders lacking market_protection. Kite Web injects it automatically; the Connect API does not. Fix injects DEFAULT_MARKET_PROTECTION=-1 (Kite 'automatic') inside ZerodhaAdapter.normalizeOrder for MARKET/SL-M order types when caller omitted the field, while respecting any explicit value (including 0). CopyTradingService remains broker-agnostic; only the ZerodhaAdapter was modified."
+}
