@@ -54,6 +54,17 @@ export class ZerodhaAdapter implements BrokerAdapter {
 
   private kite: any;
 
+  /**
+   * Kite requires MARKET / SL-M orders placed via the Connect API to carry an
+   * explicit `market_protection`; omitting it (or sending 0) is treated as an
+   * unprotected market order and rejected with "Market orders without market
+   * protection are not allowed via API." Kite Web injects this automatically —
+   * the Connect API does not. `-1` requests Kite's AUTOMATIC protection (the
+   * same behaviour as the web terminal) and is the production-safe default.
+   * Ref: https://kite.trade/docs/connect/v3/orders/
+   */
+  static readonly DEFAULT_MARKET_PROTECTION = -1;
+
   constructor() {
     this.kite = new KiteConnect({
       api_key: process.env.ZERODHA_API_KEY!,
@@ -109,8 +120,39 @@ export class ZerodhaAdapter implements BrokerAdapter {
     return this.kite.getPositions();
   }
 
+  /**
+   * Apply Zerodha-specific placement defaults. This is the ONLY place Kite
+   * defaults live so CopyTradingService / FollowerExecutionService stay
+   * broker-agnostic. Pure + side-effect free so it can be unit-harnessed.
+   *
+   *  - `variety` is lifted out of the params (Kite's `placeOrder` takes it as
+   *    the first positional arg) and defaults to `regular`; callers may pass
+   *    `amo` / `co` / `iceberg` / `auction`.
+   *  - MARKET / SL-M orders get `market_protection = -1` (automatic) UNLESS the
+   *    caller supplied an explicit value (e.g. the manual UI's P2/P5/P10/NONE
+   *    selectors), which is always respected — even `0` (explicit NONE).
+   */
+  normalizeOrder(order: any): { variety: string; params: Record<string, any> } {
+    const params: Record<string, any> = { ...(order ?? {}) };
+
+    const variety = String(params.variety ?? 'regular').toLowerCase();
+    delete params.variety;
+
+    const orderType = String(params.order_type ?? '').toUpperCase();
+    const isMarketExecution = orderType === 'MARKET' || orderType === 'SL-M';
+    if (
+      isMarketExecution &&
+      (params.market_protection === undefined || params.market_protection === null)
+    ) {
+      params.market_protection = ZerodhaAdapter.DEFAULT_MARKET_PROTECTION;
+    }
+
+    return { variety, params };
+  }
+
   async placeOrder(order: any) {
-    return this.kite.placeOrder('regular', order);
+    const { variety, params } = this.normalizeOrder(order);
+    return this.kite.placeOrder(variety, params);
   }
 
   async modifyOrder(orderId: string, order: any) {
