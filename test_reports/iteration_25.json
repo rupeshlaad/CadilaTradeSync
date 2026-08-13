@@ -1,0 +1,48 @@
+{
+  "summary": "Static backend validation for pnpm monorepo (NestJS/Prisma). Ran typecheck, build, and all 17 .cjs regression harnesses. All green. Observability logs (FOLLOWER EXECUTION PAYLOAD + BROKER RESPONSE blocks) confirmed emitted in stdout for ZERODHA, FYERS, UPSTOX, ICICI_DIRECT with all required fields (Correlation ID, Follower Account, Broker, Exchange, Original/Translated Symbol, Quantity, Side, Order Type, Product, Variety, Price, Trigger, Market Protection, Tag, Autoslice, Complete JSON; response block: HTTP/Broker Status, Order IDs, Message, Normalized Category, Retryable, Latency, Raw response). CNC passthrough verified: Zerodha payload contains product='CNC' for CNC master trade. Non-Zerodha broker payloads unchanged (Fyers productType=INTRADAY, Upstox product=I, ICICI product=cash from instrument). No mutation of the sent order or normalized result caused by logging.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": { "ui_bugs": [], "integration_issues": [], "design_issues": [] },
+  "test_report_links": [
+    "/app/backend/tests/follower_broker_payload_regression_harness.cjs",
+    "/app/backend/tests/zerodha_copy_product_cnc_harness.cjs",
+    "/app/backend/tests/zerodha_follower_execution_harness.cjs",
+    "/app/backend/tests/zerodha_order_payload_harness.cjs",
+    "/app/backend/tests/instrument_translation_harness.cjs"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Observability implementation is well-isolated (logFollowerPayload/logBrokerResponse wrapped in try paths; helpers pickField/safeJson/show) and does not mutate the adapter order or normalized result — verified by harness spy equality checks.",
+    "product threading is minimal and backward compatible (undefined -> 'MIS' at Zerodha translator only); other broker translators intentionally ignore params.product — good separation."
+  ],
+  "updated_files": [],
+  "success_rate": { "backend": "100%", "frontend": "N/A (skipped per request)" },
+  "test_results_detail": {
+    "typecheck": "exit 0",
+    "build": "success",
+    "harnesses": {
+      "follower_broker_payload_regression_harness": "27/27 PASS",
+      "zerodha_copy_product_cnc_harness": "14/14 PASS",
+      "zerodha_order_payload_harness": "29/29 PASS",
+      "zerodha_follower_execution_harness": "38/38 PASS",
+      "instrument_translation_harness": "33/33 PASS",
+      "integrity_dedupe_exchange_harness": "9/9 PASS",
+      "manual_search_exchange_harness": "8/8 PASS",
+      "manual_trade_market_fill_e2e_harness": "13/13 PASS",
+      "manual_trade_status_transition_harness": "24/24 PASS",
+      "manual_trade_trace_harness": "25/25 PASS",
+      "shoonya_callback_context_harness": "10/10 PASS",
+      "shoonya_oauth_harness": "9/9 PASS",
+      "upstox_redirect_env_harness": "4/4 PASS",
+      "fyers_account_isolation_harness": "ALL PASS",
+      "fyers_order_diagnostics_harness": "ALL PASS",
+      "fyers_placement_credential_isolation_harness": "ALL PASS",
+      "fyers_reconnect_harness": "ALL PASS"
+    },
+    "observability_blocks_confirmed_in_stdout": ["ZERODHA", "FYERS", "UPSTOX", "ICICI_DIRECT"]
+  },
+  "seed_data_creation": "None (static harness validation only, no DB/live brokers).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "pnpm monorepo (NOT FastAPI/Mongo). Validation is `corepack pnpm --filter @cts/api typecheck && build`, then `node backend/tests/*.cjs`. Do not start services. All 17 harnesses currently green.",
+  "rca of the issue": "N/A — verification-only sprint. Product-passthrough root cause (Zerodha translator hard-coded product:'MIS') was fixed in a prior commit; this sprint added permanent observability logs before/after every broker call, verified via harness spies that capture the exact emitted order and confirm no mutation."
+}
