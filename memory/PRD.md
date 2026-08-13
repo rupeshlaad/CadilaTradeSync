@@ -939,3 +939,38 @@ order accepted end-to-end — user smoke-tests on their infra.
 **Git:** feature branch `feature/zerodha-market-protection`, commit `07eb0ac`;
 `--no-ff` merge `b613224` into local `main`. NOT pushed — user publishes via
 **Save to GitHub**.
+
+## Sprint — Zerodha copy-follower product passthrough (CNC preserved) (2026-06) — DONE (harness + testing_agent verified)
+
+**Reported bug:** Manual Trade Product=CNC copied to a ZERODHA follower reached
+Kite as `product=MIS`. Kite rejected: "Intraday orders (MIS) are allowed only
+till 3:12 PM. Try placing a CNC order."
+
+**Data-flow audit (product field):** ManualTrade dto.product=CNC → ManualTradeRecord.product=CNC
+→ buildOptimisticOrder Zerodha shape `product: dto.product` → broker-lifecycle-normalizer
+`productType: raw.product` → PositionLifecycle handleTrade `product: event.productType`
+→ CopyTradingService `event.product='CNC'`. **DROP POINT:** CopyTradingService.followerExec.place()
+never forwarded product; FollowerExecutionParams had no product field; and the
+**single root cause** — `follower-order-translator.ts` ZERODHA case HARD-CODED
+`product: 'MIS'` (was line 46), ignoring the incoming product.
+
+**Fix (minimal, threads product; other brokers untouched):**
+- `brokers/execution/follower-order-translator.ts` — `TranslateFollowerOrderParams`
+  gains optional `product?: string|null`; ZERODHA case emits `params.product ?? 'MIS'`
+  (fallback preserves old default; Fyers/Upstox/ICICI/Shoonya unchanged).
+- `brokers/execution/follower-execution.service.ts` — `FollowerExecutionParams`
+  gains `product?`; `place()` forwards it into `translateFollowerOrder`.
+- `copy-trading/copy-trading.service.ts` — `followerExec.place({...})` passes
+  `product: event.product`.
+
+**Files:** MOD `follower-order-translator.ts`, `follower-execution.service.ts`,
+`copy-trading.service.ts`; NEW `backend/tests/zerodha_copy_product_cnc_harness.cjs`
+(14 checks: CNC→CNC, NRML→NRML, MIS→MIS, omitted→MIS default, and end-to-end via
+FollowerExecutionService spy adapter asserting Zerodha payload product='CNC' ≠ 'MIS').
+
+**Validated:** `@cts/api` typecheck + build PASS; new harness 14/14; all 16 existing
+harnesses PASS (no regression); testing_agent iteration_24 = 100% backend, 0 issues.
+**NOT verified (impossible in pod — no live Zerodha session):** a real Kite CNC order
+accepted end-to-end after 3:12 PM — user smoke-tests on their infra.
+
+**DB changes:** none.
