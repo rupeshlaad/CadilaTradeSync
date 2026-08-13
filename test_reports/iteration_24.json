@@ -1,0 +1,27 @@
+{
+  "summary": "Verified the ZERODHA CNC-downgrade-to-MIS bug fix in the copy-trading follower translator chain. Ran TypeScript typecheck (exit 0) and every regression harness under backend/tests/*.cjs (17 files). All harnesses green including the new zerodha_copy_product_cnc_harness.cjs which asserts the Zerodha placeOrder payload receives product='CNC' (not 'MIS') end-to-end through translateFollowerOrder + FollowerExecutionService, plus NRML->NRML, MIS->MIS, and omitted->MIS (backward-compatible default). Fyers/Upstox/ICICI/Shoonya translation paths and manual-trade harnesses unchanged.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/zerodha_copy_product_cnc_harness.cjs",
+    "/app/backend/tests/zerodha_follower_execution_harness.cjs",
+    "/app/backend/tests/zerodha_order_payload_harness.cjs",
+    "/app/backend/tests/instrument_translation_harness.cjs"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Fix is minimal and correct: follower-order-translator.ts ZERODHA case line 53 now emits `product: params.product ?? 'MIS'` preserving backward compatibility.",
+    "TranslateFollowerOrderParams.product is optional (`string | null`) — safe additive change.",
+    "FollowerExecutionService.place forwards params.product into translateFollowerOrder (line 72).",
+    "CopyTradingService passes event.product from master ManualTrade (line 206) — full chain preserved.",
+    "Suggestion (non-blocking): consider validating product against a whitelist ('CNC'|'MIS'|'NRML') at the translator boundary to reject junk values from upstream instead of silently forwarding."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (all 17 harnesses pass, typecheck clean)", "frontend": "not tested (per request)"},
+  "test_credentials": "N/A - static harness validation, no auth/broker calls",
+  "seed_data_creation": "None",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Static validation monorepo (pnpm). No servers, no DB. Run `corepack pnpm --filter @cts/api typecheck` and `node backend/tests/<harness>.cjs`. Target harness for this bug: zerodha_copy_product_cnc_harness.cjs (14/14). Other key harnesses: zerodha_order_payload (29/29), zerodha_follower_execution (38/38), instrument_translation (33/33).",
+  "rca of the issue": "RCA: apps/api/src/brokers/execution/follower-order-translator.ts had `product: 'MIS'` hard-coded in the ZERODHA branch, ignoring the master's product. FIX applied by main agent threads the master product through the chain: CopyTradingService.handleTrade -> FollowerExecutionService.place (params.product) -> translateFollowerOrder (params.product ?? 'MIS') -> Zerodha payload. Reproduction: master CNC ManualTrade -> before fix, Zerodha placeOrder received product='MIS' -> Kite rejected after 3:12 PM with 'Intraday orders (MIS) are allowed only till 3:12 PM'. Post-fix verified: CNC->CNC, NRML->NRML, MIS->MIS, undefined->MIS default. No regressions in other brokers or manual-trade flows."
+}
