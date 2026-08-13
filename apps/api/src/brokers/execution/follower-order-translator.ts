@@ -26,6 +26,13 @@ export interface TranslateFollowerOrderParams {
   exchange: string | null;
   /** Resolved instrument facts — drives ICICI product/right/strike/expiry. */
   instrument: ResolvedInstrument | null;
+  /**
+   * Master trade product (CTS-neutral: CNC / MIS / NRML), forwarded so the
+   * follower order mirrors the master's product instead of a hard-coded
+   * default. Optional + falls back to the previous per-broker default when
+   * absent, so every existing caller stays backward compatible.
+   */
+  product?: string | null;
 }
 
 /**
@@ -43,7 +50,7 @@ export function translateFollowerOrder(
         tradingsymbol: params.brokerSymbol,
         transaction_type: params.side,
         quantity: params.quantity,
-        product: 'MIS',
+        product: params.product ?? 'MIS',
         order_type: 'MARKET',
         validity: 'DAY',
       };

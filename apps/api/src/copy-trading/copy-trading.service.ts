@@ -203,6 +203,7 @@ export class CopyTradingService {
             brokerToken: translated.token,
             exchange: translated.exchange,
             instrument: resolvedInstrument,
+            product: event.product,
             followerId: follower.id,
             correlationId: currentManualTradeTrace()?.correlationId ?? null,
           });

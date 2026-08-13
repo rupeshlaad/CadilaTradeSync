@@ -23,6 +23,8 @@ export interface FollowerExecutionParams {
   brokerToken: string | null;
   exchange: string | null;
   instrument: ResolvedInstrument | null;
+  /** Master trade product (CNC / MIS / NRML) mirrored to the follower order. */
+  product?: string | null;
   followerId?: string | null;
   correlationId?: string | null;
 }
@@ -67,6 +69,7 @@ export class FollowerExecutionService {
       brokerToken: params.brokerToken,
       exchange: params.exchange,
       instrument: params.instrument,
+      product: params.product,
     });
 
     if (order === null) {
