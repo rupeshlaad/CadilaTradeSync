@@ -347,14 +347,38 @@ export type ExecutionFollowerStatus =
   | 'SKIPPED';
 
 export type ExecutionFailureType =
+  // Terminal success
+  | 'SUCCESS'
+  // Broker-side rejections
+  | 'REJECTED_BY_BROKER'
+  | 'BROKER_VALIDATION'
+  | 'RMS_REJECTION'
+  | 'INSUFFICIENT_FUNDS'
+  | 'PRODUCT_NOT_ALLOWED'
+  | 'AMO_NOT_SUPPORTED'
+  | 'SYMBOL_MAPPING_FAILED'
+  // Auth / session
+  | 'AUTHENTICATION_FAILED'
+  | 'TOKEN_EXPIRED'
+  // Transport / availability (retryable)
+  | 'NETWORK_FAILURE'
+  | 'BROKER_TIMEOUT'
+  | 'BROKER_UNAVAILABLE'
+  | 'BROKER_RATE_LIMIT'
+  | 'UNKNOWN_BROKER_ERROR'
+  // Non-execution outcomes (skips)
+  | 'SKIPPED'
+  | 'BROKER_UNSUPPORTED'
+  | 'ACCOUNT_DISABLED'
+  | 'FOLLOWER_DISABLED'
+  | 'COPY_DISABLED'
+  | 'NO_BROKER_SESSION'
+  // Legacy values (kept for backward compatibility)
   | 'ORDER_REJECTED'
   | 'IP_WHITELIST'
   | 'INSTRUMENT_NOT_FOUND'
-  | 'TOKEN_EXPIRED'
   | 'BROKER_ERROR'
   | 'VALIDATION_FAILED'
-  | 'BROKER_UNSUPPORTED'
-  | 'NO_BROKER_SESSION'
   | 'SYMBOL_MAPPING_MISSING'
   | 'UNKNOWN';
 
@@ -377,6 +401,17 @@ export interface FollowerExecution {
   brokerResponse: unknown | null;
   followerSymbol: string | null;
   quantity: number | null;
+  // Standardized broker execution result fields (optional; additive).
+  category?: string | null;
+  retryable?: boolean | null;
+  brokerOrderId?: string | null;
+  exchangeOrderId?: string | null;
+  httpStatus?: number | null;
+  brokerStatus?: string | null;
+  brokerMessage?: string | null;
+  latencyMs?: number | null;
+  orderRequest?: unknown | null;
+  correlationId?: string | null;
   startedAt: string;
   completedAt: string | null;
 }

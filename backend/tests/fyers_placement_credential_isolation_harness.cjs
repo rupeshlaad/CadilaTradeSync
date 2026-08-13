@@ -191,7 +191,6 @@ function makePrisma() {
   const files = [
     'manual-trading/manual-trade.service.ts',
     'order-actions/order-actions.service.ts',
-    'copy-trading/copy-trading.service.ts',
     'position-lifecycle/position-synchronization.service.ts',
   ];
   for (const rel of files) {
@@ -208,6 +207,29 @@ function makePrisma() {
     });
     check(`4. ${rel}: every "new FyersAdapter()" (${count}) is followed by setCredentials()`, count > 0 && everyAdapterCredentialed);
     check(`4. ${rel}: does NOT read FYERS_APP_ID/SECRET from env`, !/process\.env\.FYERS_(APP_ID|SECRET_ID)/.test(text));
+  }
+
+  // CopyTradingService no longer constructs FyersAdapter inline: it delegates
+  // EVERY follower placement to the Broker Factory
+  // (BrokerService.getAdapterForAccount, via FollowerExecutionService), which
+  // binds each account's OWN App ID + Secret centrally (account isolation is
+  // proven by fyers_account_isolation_harness). The guard therefore verifies
+  // the delegation + the absence of any inline adapter / env-App-ID leak.
+  {
+    const rel = 'copy-trading/copy-trading.service.ts';
+    const text = fs.readFileSync(path.join(SRC, rel), 'utf8');
+    check(
+      `4. ${rel}: does NOT construct FyersAdapter inline (delegates to Broker Factory)`,
+      !/new FyersAdapter\(\)/.test(text),
+    );
+    check(
+      `4. ${rel}: delegates follower placement to FollowerExecutionService (dynamic factory)`,
+      /this\.followerExec\.place\(/.test(text),
+    );
+    check(
+      `4. ${rel}: does NOT read FYERS_APP_ID/SECRET from env`,
+      !/process\.env\.FYERS_(APP_ID|SECRET_ID)/.test(text),
+    );
   }
 
   console.log(`\nRESULT: ${failures === 0 ? 'ALL PASS' : failures + ' FAILURES'}`);
