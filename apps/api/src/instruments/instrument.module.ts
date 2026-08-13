@@ -6,6 +6,7 @@ import { AdminInstrumentController } from './admin-instrument.controller';
 import { InstrumentService } from './instrument.service';
 import { InstrumentImportService } from './instrument-import.service';
 import { InstrumentResolverService } from './instrument-resolver.service';
+import { InstrumentTranslationService } from './instrument-translation.service';
 import { InstrumentStatsService } from './instrument-stats.service';
 
 import { ZerodhaImporter } from './importers/zerodha.importer';
@@ -27,6 +28,7 @@ import { InstrumentIntegrityService } from './instrument-integrity.service';
     InstrumentService,
     InstrumentImportService,
     InstrumentResolverService,
+    InstrumentTranslationService,
     InstrumentStatsService,
     InstrumentIntegrityService,
     ZerodhaImporter,
@@ -39,6 +41,7 @@ import { InstrumentIntegrityService } from './instrument-integrity.service';
     InstrumentService,
     InstrumentImportService,
     InstrumentResolverService,
+    InstrumentTranslationService,
     InstrumentStatsService,
   ],
 })

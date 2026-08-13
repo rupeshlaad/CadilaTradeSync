@@ -3,7 +3,7 @@ import { Broker } from '@prisma/client';
 
 import { PrismaService } from '../prisma/prisma.module';
 import { EncryptionService } from '../encryption/encryption.service';
-import { InstrumentResolverService } from '../instruments/instrument-resolver.service';
+import { InstrumentTranslationService } from '../instruments/instrument-translation.service';
 
 import { TradeEvent } from './dto/trade-event.dto';
 import { ResolvedInstrument } from '../brokers/order-mapping/instrument-context';
@@ -22,7 +22,7 @@ export class CopyTradingService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly encryption: EncryptionService,
-    private readonly resolver: InstrumentResolverService,
+    private readonly translation: InstrumentTranslationService,
     private readonly recorder: ExecutionEventRecorderService,
     private readonly followerExec: FollowerExecutionService,
   ) {}
@@ -132,84 +132,66 @@ export class CopyTradingService {
           rec.setQuantity(qty);
 
           //-----------------------------------------
-          // Symbol Resolution (exchange-aware — Sprint 6.2.8)
+          // Instrument translation — SINGLE canonical path
+          // (InstrumentTranslationService). Same service the Translation UI
+          // uses via InstrumentResolverService.translate. Normalization +
+          // deterministic lookup live INSIDE the service; the copy engine does
+          // no symbol manipulation and no exchange-constrained lookup here.
           //-----------------------------------------
 
-          const instrument = await this.resolver.resolveByBrokerSymbol(
-            event.broker as Broker,
-            event.symbol,
-            event.exchange || null,
-          );
+          const translated = await this.translation.translate({
+            sourceBroker: event.broker as Broker,
+            sourceSymbol: event.symbol,
+            targetBroker: followerBroker,
+            exchange: event.exchange || null,
+            correlationId: currentManualTradeTrace()?.correlationId ?? null,
+          });
 
-          if (!instrument) {
+          if (!translated.found) {
 
             this.logger.error(
-              `Instrument not found : ${event.symbol}`,
+              `Instrument translation failed [${translated.stage}] : ` +
+                `${event.broker} ${event.symbol} -> ${followerBroker} — ${translated.reason}`,
             );
 
             rec.fail(
-              ExecutionResultCategory.INSTRUMENT_NOT_FOUND,
-              `Instrument not found for ${event.broker} ${event.symbol}`,
+              translated.stage === 'TARGET_NOT_FOUND'
+                ? ExecutionResultCategory.SYMBOL_MAPPING_FAILED
+                : ExecutionResultCategory.INSTRUMENT_NOT_FOUND,
+              translated.reason,
             );
 
             continue;
 
           }
 
-          // Prefer the follower listing on the SAME exchange as the master.
-          const followerSymbol =
-            await this.resolver.getBrokerSymbol(
-              instrument.instrument.id,
-              followerBroker,
-              instrument.instrument.exchange,
-            );
-
-          if (!followerSymbol) {
-
-            this.logger.warn(
-              `No mapping found for ${event.symbol} -> ${followerBroker}`,
-            );
-
-            rec.fail(
-              ExecutionResultCategory.SYMBOL_MAPPING_FAILED,
-              `No InstrumentBroker mapping for ${event.symbol} -> ${followerBroker}`,
-            );
-
-            continue;
-
-          }
-
-          rec.setBrokerSymbol(followerSymbol.brokerSymbol);
+          rec.setBrokerSymbol(translated.targetSymbol);
 
           this.logger.log(
             `Executing ${followerBroker} Order -> ${follower.followerUser.email}`,
           );
           this.logger.log(`MASTER SYMBOL  : ${event.symbol}`);
-          this.logger.log(`FOLLOWER SYMBOL: ${followerSymbol.brokerSymbol}`);
+          this.logger.log(`FOLLOWER SYMBOL: ${translated.targetSymbol}`);
           this.logger.log(`BROKER         : ${followerBroker}`);
 
           rec.setStatus('EXECUTING');
 
           const resolvedInstrument: ResolvedInstrument = {
-            contractKey: instrument.instrument.contractKey,
-            exchange: instrument.instrument.exchange,
-            segment: instrument.instrument.segment,
-            instrumentType: instrument.instrument.instrumentType,
-            optionType: instrument.instrument.optionType ?? null,
-            strike: instrument.instrument.strike ?? null,
-            expiry: instrument.instrument.expiry
-              ? instrument.instrument.expiry.toISOString()
-              : null,
-            underlying: instrument.instrument.underlying,
+            contractKey: translated.contractKey,
+            exchange: translated.exchange,
+            segment: translated.segment,
+            instrumentType: translated.instrumentType,
+            optionType: translated.optionType,
+            strike: translated.strike,
+            expiry: translated.expiry,
+            underlying: translated.underlying,
           };
 
           //-----------------------------------------
           // Dynamic broker execution via the EXISTING Broker Factory
           // (BrokerService.getAdapterForAccount, wrapped by
-          // FollowerExecutionService). No hard-coded broker allow-list, no
-          // per-broker switch here, no duplicated adapter logic — EVERY broker
-          // (incl. ZERODHA) is resolved dynamically and returns a standardized
-          // execution result. Fyers / Upstox / ICICI Direct are unchanged.
+          // FollowerExecutionService). It receives the ALREADY-translated
+          // broker instrument and performs NO lookup / symbol manipulation.
           //-----------------------------------------
 
           const result = await this.followerExec.place({
@@ -217,10 +199,9 @@ export class CopyTradingService {
             broker: followerBroker,
             side: event.side,
             quantity: qty,
-            brokerSymbol: followerSymbol.brokerSymbol,
-            brokerToken: followerSymbol.brokerToken ?? null,
-            exchange:
-              followerSymbol.exchange ?? instrument.instrument.exchange,
+            brokerSymbol: translated.targetSymbol,
+            brokerToken: translated.token,
+            exchange: translated.exchange,
             instrument: resolvedInstrument,
             followerId: follower.id,
             correlationId: currentManualTradeTrace()?.correlationId ?? null,
