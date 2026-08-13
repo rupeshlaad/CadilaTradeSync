@@ -901,3 +901,41 @@ resolving against the imported instrument master — user smoke-tests on their i
 **Git:** feature branch `feature/canonical-instrument-translation`, commit
 `bd20287`; `--no-ff` merge `8d8f389` into local `main`. NOT pushed — user
 publishes via **Save to GitHub**.
+
+
+## Sprint — Zerodha market_protection (Kite MARKET/SL-M) (2026-08) — DONE (harness + testing_agent verified)
+
+**Root cause:** Kite Connect rejects API MARKET/SL-M orders that omit
+`market_protection` ("Market orders without market protection are not allowed
+via API"). Kite Web injects it automatically; the Connect API does not. Our
+Zerodha payload (follower translator + manual buildZerodhaOrder) sent
+`order_type=MARKET` with NO `market_protection` → rejected. (Kite: omitted/0 =
+unprotected market order; `-1` = automatic; 1-100 = explicit %.)
+
+**Fix (ONLY apps/api/src/brokers/zerodha/zerodha.adapter.ts):**
+- `static DEFAULT_MARKET_PROTECTION = -1`.
+- new `normalizeOrder(order)` → `{ variety, params }`: lifts `variety` out of
+  params (default `regular`, supports `amo`), and for MARKET/SL-M injects
+  `market_protection = -1` when the caller omitted it. Explicit values
+  (manual P2/P5/P10 and explicit NONE=0) always respected, never overridden.
+  Pure (does not mutate input).
+- `placeOrder` now `this.kite.placeOrder(variety, params)` via normalizeOrder.
+- Broker defaults live in the adapter → CopyTradingService stays broker-agnostic
+  (no CopyTrading/Lifecycle/Recorder/Translation/observability change). Also
+  fixes the manual AUTO path (previously omitted → now -1) with no manual-trade
+  code change.
+
+**Files:** MOD `brokers/zerodha/zerodha.adapter.ts`; NEW
+`backend/tests/zerodha_order_payload_harness.cjs` (29 checks: MARKET BUY/SELL,
+LIMIT BUY/SELL, AMO MARKET/LIMIT, Intraday/CNC, SL-M vs SL, explicit protection
+respected, purity, broker-rejection propagation).
+
+**Validated:** `@cts/api` typecheck + build PASS; boot sanity PASS; new harness
+29/29; all 14 existing harnesses PASS (no regression); testing_agent
+iteration_23 = 100% backend, 0 issues.
+**NOT verified (impossible in pod — no live Zerodha session):** a real Kite
+order accepted end-to-end — user smoke-tests on their infra.
+
+**Git:** feature branch `feature/zerodha-market-protection`, commit `07eb0ac`;
+`--no-ff` merge `b613224` into local `main`. NOT pushed — user publishes via
+**Save to GitHub**.
