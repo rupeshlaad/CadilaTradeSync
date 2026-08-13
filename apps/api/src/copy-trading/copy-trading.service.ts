@@ -6,17 +6,14 @@ import { EncryptionService } from '../encryption/encryption.service';
 import { InstrumentResolverService } from '../instruments/instrument-resolver.service';
 
 import { TradeEvent } from './dto/trade-event.dto';
-import { FyersAdapter } from '../brokers/fyers/fyers.adapter';
-import { ICICIDirectAdapter } from '../brokers/icici/icici.adapter';
-import { UpstoxAdapter } from '../brokers/upstox/upstox.adapter';
-import { buildIciciPlaceOrder } from '../brokers/order-mapping/icici-order.mapper';
-import { buildUpstoxPlaceOrder } from '../brokers/order-mapping/upstox-order.mapper';
 import { ResolvedInstrument } from '../brokers/order-mapping/instrument-context';
 import {
   ExecutionEventRecorderService,
 } from './execution-event.recorder';
-import { classifyFailure } from './execution-event.recorder';
 import { activeMasterStrategyWhere } from '../common/active-master-strategy';
+import { FollowerExecutionService } from '../brokers/execution/follower-execution.service';
+import { ExecutionResultCategory } from './execution-result-category';
+import { currentManualTradeTrace } from '../observability/manual-trade-trace';
 
 @Injectable()
 export class CopyTradingService {
@@ -27,6 +24,7 @@ export class CopyTradingService {
     private readonly encryption: EncryptionService,
     private readonly resolver: InstrumentResolverService,
     private readonly recorder: ExecutionEventRecorderService,
+    private readonly followerExec: FollowerExecutionService,
   ) {}
 
   async handleTrade(event: TradeEvent) {
@@ -121,59 +119,7 @@ export class CopyTradingService {
 
         try {
 
-          //-----------------------------------------
-          // Supported follower brokers: FYERS + ICICI Direct + Upstox.
-          // (Zerodha / Shoonya copy execution remain future work.)
-          //-----------------------------------------
-
           const followerBroker = follower.tradingAccount.broker;
-
-          if (
-            followerBroker !== Broker.FYERS &&
-            followerBroker !== Broker.ICICI_DIRECT &&
-            followerBroker !== Broker.UPSTOX
-          ) {
-
-            this.logger.warn(
-              `Skipping ${follower.followerUser.email} (${followerBroker})`,
-            );
-
-            rec.skip(
-              'BROKER_UNSUPPORTED',
-              `Broker ${followerBroker} is not supported for copy execution (Fyers + ICICI Direct + Upstox)`,
-            );
-
-            continue;
-          }
-
-          //-----------------------------------------
-          // Broker Session (follower's OWN broker)
-          //-----------------------------------------
-
-          const session = await this.prisma.brokerSession.findFirst({
-            where: {
-              tradingAccountId: follower.tradingAccount.id,
-              broker: followerBroker,
-            },
-          });
-
-          if (!session) {
-
-            this.logger.warn(
-              `No broker session for ${follower.followerUser.email}`,
-            );
-
-            rec.skip(
-              'NO_BROKER_SESSION',
-              'No broker session on follower trading account',
-            );
-
-            continue;
-          }
-
-          const accessToken = this.encryption.decrypt(
-            session.encryptedAccessToken,
-          );
 
           //-----------------------------------------
           // Qty
@@ -202,7 +148,7 @@ export class CopyTradingService {
             );
 
             rec.fail(
-              'INSTRUMENT_NOT_FOUND',
+              ExecutionResultCategory.INSTRUMENT_NOT_FOUND,
               `Instrument not found for ${event.broker} ${event.symbol}`,
             );
 
@@ -225,7 +171,7 @@ export class CopyTradingService {
             );
 
             rec.fail(
-              'SYMBOL_MAPPING_MISSING',
+              ExecutionResultCategory.SYMBOL_MAPPING_FAILED,
               `No InstrumentBroker mapping for ${event.symbol} -> ${followerBroker}`,
             );
 
@@ -244,160 +190,53 @@ export class CopyTradingService {
 
           rec.setStatus('EXECUTING');
 
+          const resolvedInstrument: ResolvedInstrument = {
+            contractKey: instrument.instrument.contractKey,
+            exchange: instrument.instrument.exchange,
+            segment: instrument.instrument.segment,
+            instrumentType: instrument.instrument.instrumentType,
+            optionType: instrument.instrument.optionType ?? null,
+            strike: instrument.instrument.strike ?? null,
+            expiry: instrument.instrument.expiry
+              ? instrument.instrument.expiry.toISOString()
+              : null,
+            underlying: instrument.instrument.underlying,
+          };
+
           //-----------------------------------------
-          // Place on the follower broker
+          // Dynamic broker execution via the EXISTING Broker Factory
+          // (BrokerService.getAdapterForAccount, wrapped by
+          // FollowerExecutionService). No hard-coded broker allow-list, no
+          // per-broker switch here, no duplicated adapter logic — EVERY broker
+          // (incl. ZERODHA) is resolved dynamically and returns a standardized
+          // execution result. Fyers / Upstox / ICICI Direct are unchanged.
           //-----------------------------------------
 
-          let result: any;
-          let ok = false;
-          let brokerMessage: string | null = null;
+          const result = await this.followerExec.place({
+            followerAccountId: follower.tradingAccount.id,
+            broker: followerBroker,
+            side: event.side,
+            quantity: qty,
+            brokerSymbol: followerSymbol.brokerSymbol,
+            brokerToken: followerSymbol.brokerToken ?? null,
+            exchange:
+              followerSymbol.exchange ?? instrument.instrument.exchange,
+            instrument: resolvedInstrument,
+            followerId: follower.id,
+            correlationId: currentManualTradeTrace()?.correlationId ?? null,
+          });
 
-          if (followerBroker === Broker.FYERS) {
+          this.logger.log(JSON.stringify(result.orderRequest, null, 2));
 
-            // Fyers account isolation: place on the follower with THIS
-            // follower account's own App ID (api key) + Secret ID so the
-            // `appId:accessToken` header matches its OAuth-minted token —
-            // never the global FYERS_APP_ID env value.
-            const account = follower.tradingAccount;
-            const adapter = new FyersAdapter();
-            adapter.setCredentials(
-              account.encryptedApiKey
-                ? this.encryption.decrypt(account.encryptedApiKey)
-                : '',
-              account.encryptedApiSecret
-                ? this.encryption.decrypt(account.encryptedApiSecret)
-                : '',
-            );
-            adapter.setAccessToken(accessToken);
-
-            const order = {
-              symbol: followerSymbol.brokerSymbol,
-              qty,
-              type: 2,
-              side: event.side === 'BUY' ? 1 : -1,
-              productType: 'INTRADAY',
-              limitPrice: 0,
-              stopPrice: 0,
-              disclosedQty: 0,
-              validity: 'DAY',
-              offlineOrder: false,
-            };
-
-            this.logger.log(JSON.stringify(order, null, 2));
-            result = await adapter.placeOrder(order);
-            ok = result?.s === 'ok';
-            brokerMessage =
-              (result as any)?.message ??
-              (typeof result === 'string' ? result : null);
-
-          } else if (followerBroker === Broker.UPSTOX) {
-
-            // Upstox — build the /order/place payload via the shared mapper.
-            // The instrument_token is the InstrumentBroker.brokerToken stored
-            // by the Upstox importer (falls back to the symbol if absent).
-            const account = follower.tradingAccount;
-            const adapter = new UpstoxAdapter();
-            adapter.setCredentials(
-              account.encryptedApiKey
-                ? this.encryption.decrypt(account.encryptedApiKey)
-                : '',
-              account.encryptedApiSecret
-                ? this.encryption.decrypt(account.encryptedApiSecret)
-                : '',
-            );
-            adapter.setAccessToken(accessToken);
-
-            const order = buildUpstoxPlaceOrder({
-              instrumentToken:
-                followerSymbol.brokerToken ?? followerSymbol.brokerSymbol,
-              side: event.side,
-              orderType: 'MARKET',
-              quantity: qty,
-              product: 'MIS',
-              validity: 'DAY',
-              tag: 'CTSCopy',
-            });
-
-            this.logger.log(JSON.stringify(order, null, 2));
-            result = await adapter.placeOrder(order);
-            const orderId =
-              result?.data?.order_id ??
-              (Array.isArray(result?.data?.order_ids)
-                ? result.data.order_ids[0]
-                : null);
-            ok = !!orderId;
-            brokerMessage =
-              (result as any)?.message ??
-              (Array.isArray((result as any)?.errors)
-                ? (result as any).errors?.[0]?.message
-                : null) ??
-              (typeof result === 'string' ? result : null);
-
+          if (result.success) {
+            this.logger.log(`SUCCESS -> ${JSON.stringify(result.rawResponse)}`);
           } else {
-
-            // ICICI Direct — build the compliant Breeze payload via the shared
-            // mapper (instrument-aware product / right / strike / expiry).
-            const account = follower.tradingAccount;
-            const adapter = new ICICIDirectAdapter();
-            adapter.setCredentials(
-              account.encryptedApiKey
-                ? this.encryption.decrypt(account.encryptedApiKey)
-                : '',
-              account.encryptedApiSecret
-                ? this.encryption.decrypt(account.encryptedApiSecret)
-                : '',
+            this.logger.error(
+              `BROKER ERROR [${result.category}] -> ${JSON.stringify(result.rawResponse)}`,
             );
-            adapter.setSessionToken(accessToken);
-
-            const resolvedInstrument: ResolvedInstrument = {
-              contractKey: instrument.instrument.contractKey,
-              exchange: instrument.instrument.exchange,
-              segment: instrument.instrument.segment,
-              instrumentType: instrument.instrument.instrumentType,
-              optionType: instrument.instrument.optionType ?? null,
-              strike: instrument.instrument.strike ?? null,
-              expiry: instrument.instrument.expiry
-                ? instrument.instrument.expiry.toISOString()
-                : null,
-              underlying: instrument.instrument.underlying,
-            };
-
-            const order = buildIciciPlaceOrder({
-              stockCode: followerSymbol.brokerSymbol,
-              exchange: followerSymbol.exchange ?? instrument.instrument.exchange,
-              side: event.side,
-              orderType: 'MARKET',
-              quantity: qty,
-              validity: 'DAY',
-              instrument: resolvedInstrument,
-              remark: 'CTS Copy',
-            });
-
-            this.logger.log(JSON.stringify(order, null, 2));
-            result = await adapter.placeOrder(order);
-            const orderId =
-              result?.order_id ?? result?.orderId ?? result?.OrderId ?? null;
-            ok = !!orderId;
-            brokerMessage =
-              (result as any)?.message ??
-              (result as any)?.Error ??
-              (typeof result === 'string' ? result : null);
           }
 
-          if (ok) {
-            this.logger.log(`SUCCESS -> ${JSON.stringify(result)}`);
-            rec.succeed(result);
-          } else {
-            this.logger.error(`BROKER ERROR -> ${JSON.stringify(result)}`);
-            rec.fail(
-              classifyFailure({
-                message: brokerMessage ?? undefined,
-                response: result,
-              }),
-              brokerMessage ?? 'Broker returned non-ok response',
-              result,
-            );
-          }
+          rec.recordStandardResult(result);
 
         } catch (e: any) {
 
@@ -406,7 +245,7 @@ export class CopyTradingService {
           );
 
           rec.fail(
-            classifyFailure({ message: e?.message, response: e }),
+            ExecutionResultCategory.UNKNOWN_BROKER_ERROR,
             e?.message ?? 'Unhandled follower execution error',
             { name: e?.name, message: e?.message },
           );

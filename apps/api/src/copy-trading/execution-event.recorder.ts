@@ -8,6 +8,11 @@ import {
   FollowerExecution,
 } from './execution-event';
 import {
+  ExecutionResultCategory,
+  StandardExecutionResult,
+  mapCategoryToStatus,
+} from './execution-result-category';
+import {
   traceStage,
   currentManualTradeTrace,
 } from '../observability/manual-trade-trace';
@@ -393,6 +398,41 @@ export class FollowerExecutionHandle {
   succeed(brokerResponse: unknown) {
     this.rec.status = 'SUCCESS';
     this.rec.brokerResponse = brokerResponse;
+    this.rec.completedAt = new Date().toISOString();
+  }
+
+  /**
+   * Sprint — record a standardized broker execution result. This is the single
+   * entry point the copy engine uses for a real follower placement outcome: it
+   * maps the result category onto the follower lifecycle status and mirrors
+   * every broker-neutral field (category, retryable, broker/exchange order id,
+   * http/broker status, message, latency, order request) so Trade Monitor and
+   * Execution History display the ACTUAL broker outcome rather than a generic
+   * FAILED. Purely additive telemetry — never influences order placement.
+   */
+  recordStandardResult(result: StandardExecutionResult) {
+    const status = mapCategoryToStatus(result.category);
+    this.rec.status = status;
+    this.rec.failureType =
+      result.category === ExecutionResultCategory.SUCCESS
+        ? null
+        : (result.category as ExecutionFailureType);
+    this.rec.reason = result.success
+      ? null
+      : result.failureReason ?? result.brokerMessage ?? null;
+    this.rec.brokerResponse = result.rawResponse ?? null;
+    if (result.translatedSymbol) this.rec.followerSymbol = result.translatedSymbol;
+
+    this.rec.category = result.category;
+    this.rec.retryable = result.retryable;
+    this.rec.brokerOrderId = result.brokerOrderId;
+    this.rec.exchangeOrderId = result.exchangeOrderId;
+    this.rec.httpStatus = result.httpStatus;
+    this.rec.brokerStatus = result.brokerStatus;
+    this.rec.brokerMessage = result.brokerMessage;
+    this.rec.latencyMs = result.latencyMs;
+    this.rec.orderRequest = result.orderRequest ?? null;
+    this.rec.correlationId = result.correlationId ?? null;
     this.rec.completedAt = new Date().toISOString();
   }
 }

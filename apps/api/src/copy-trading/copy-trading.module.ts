@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { PrismaModule } from '../prisma/prisma.module';
 import { EncryptionModule } from '../encryption/encryption.module';
 import { InstrumentModule } from '../instruments/instrument.module';
+import { BrokerExecutionModule } from '../brokers/execution/broker-execution.module';
 import { CopyTradingService } from './copy-trading.service';
 import { ExecutionEventRecorderService } from './execution-event.recorder';
 import { ExecutionEventsController } from './execution-events.controller';
@@ -11,6 +12,7 @@ import { ExecutionEventsController } from './execution-events.controller';
     PrismaModule,
     EncryptionModule,
     InstrumentModule,
+    BrokerExecutionModule,
   ],
   controllers: [
     ExecutionEventsController,

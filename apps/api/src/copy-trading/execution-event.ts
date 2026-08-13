@@ -11,6 +11,8 @@
  * ordering, retries, or logging behaviour in CopyTradingService.
  */
 
+import type { ExecutionResultCategory } from './execution-result-category';
+
 /** Per-follower lifecycle status inside a single master-trade fan-out. */
 export type ExecutionFollowerStatus =
   | 'PENDING'
@@ -20,22 +22,12 @@ export type ExecutionFollowerStatus =
   | 'SKIPPED';
 
 /**
- * High-level classification of a per-follower failure so the admin UI can
- * badge / filter without regex-ing free-form reason strings. Values are
- * derived from the real error surface of CopyTradingService and the
- * broker adapters currently wired in.
+ * High-level classification of a per-follower outcome so the admin UI can
+ * badge / filter without regex-ing free-form reason strings. Now aliased to
+ * the centralized {@link ExecutionResultCategory} (single source of truth) — a
+ * strict superset of the legacy values, so nothing downstream regresses.
  */
-export type ExecutionFailureType =
-  | 'ORDER_REJECTED'
-  | 'IP_WHITELIST'
-  | 'INSTRUMENT_NOT_FOUND'
-  | 'TOKEN_EXPIRED'
-  | 'BROKER_ERROR'
-  | 'VALIDATION_FAILED'
-  | 'BROKER_UNSUPPORTED'
-  | 'NO_BROKER_SESSION'
-  | 'SYMBOL_MAPPING_MISSING'
-  | 'UNKNOWN';
+export type ExecutionFailureType = ExecutionResultCategory;
 
 export interface FollowerExecution {
   /** Local record id (not the follower's DB id — use `followerId` for that). */
@@ -54,6 +46,24 @@ export interface FollowerExecution {
   brokerResponse: unknown | null;
   followerSymbol: string | null;
   quantity: number | null;
+
+  // ---------------------------------------------------------------------
+  // Sprint — standardized broker execution result recording (additive).
+  // Populated by FollowerExecutionHandle.recordStandardResult from the
+  // broker-neutral StandardExecutionResult so Trade Monitor / Execution
+  // History can surface the ACTUAL broker outcome, not just SUCCESS/FAILED.
+  // All optional → existing producers/consumers are unaffected.
+  // ---------------------------------------------------------------------
+  category?: string | null;
+  retryable?: boolean | null;
+  brokerOrderId?: string | null;
+  exchangeOrderId?: string | null;
+  httpStatus?: number | null;
+  brokerStatus?: string | null;
+  brokerMessage?: string | null;
+  latencyMs?: number | null;
+  orderRequest?: unknown | null;
+  correlationId?: string | null;
 
   startedAt: string;
   completedAt: string | null;
