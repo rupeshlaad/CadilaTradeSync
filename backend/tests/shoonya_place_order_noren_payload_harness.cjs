@@ -24,7 +24,13 @@ function spy() {
   a.setSessionToken('tok-secret-should-not-be-logged');
   a.setUserId('FA12345');
   const calls = [];
-  a.post = async (pathName, jData) => { calls.push({ pathName, jData }); return { stat: 'Ok', norenordno: 'N1' }; };
+  // placeOrder transmits via httpPost (SDK-exact: jData=<json>, no &jKey).
+  a.httpPost = async (url, body, token, reqContentType) => {
+    const pathName = String(url).split('/').pop();
+    const jData = JSON.parse(String(body).replace(/^jData=/, '').split('&jKey=')[0]);
+    calls.push({ pathName, url, body, token, contentType: reqContentType, jData, hasJKey: /&jKey=/.test(String(body)) });
+    return { stat: 'Ok', norenordno: 'N1' };
+  };
   return { a, calls };
 }
 
@@ -46,9 +52,13 @@ function spy() {
     ok(j.prctyp === 'MKT', 'prctyp=MKT (MARKET preserved, NOT converted to LMT)');
     ok(j.prc === '0', 'prc=0 for MARKET');
     ok(j.ret === 'DAY', 'ret=DAY');
-    ok(typeof j.remarks === 'string' && /^[a-zA-Z0-9]+$/.test(j.remarks), 'remarks present + alphanumeric (was MISSING before)');
-    ok(j.amo === 'NO', 'amo=NO (regular order)');
-    ok(!('trgprc' in j), 'trgprc omitted for MARKET (SL-only, matches SDK)');
+    ok(typeof j.remarks === 'string' && /^[a-zA-Z0-9]+$/.test(j.remarks), 'remarks present + alphanumeric');
+    ok('algo_id' in j && j.algo_id === null, 'algo_id present + null (SDK-parity; matches ALGO_CHK gate field)');
+    ok('trgprc' in j && j.trgprc === '0', 'trgprc present = "0" for MARKET (SDK includes it unconditionally)');
+    ok(!('amo' in j), 'amo omitted for regular order (SDK omits when None)');
+    ok(calls[0].contentType === 'application/json; charset=utf-8', 'Content-Type application/json (matches OAuth SDK)');
+    ok(calls[0].hasJKey === false, 'body has NO &jKey (OAuth Bearer auth, matches SDK)');
+    ok(/^jData=/.test(calls[0].body), 'body is jData=<json>');
   }
 
   console.log('tsym URL-encoding — special chars (M&M-EQ → M%26M-EQ)');
@@ -71,7 +81,7 @@ function spy() {
     await a.placeOrder({ exchange: 'NSE', tradingSymbol: 'TATASTEEL-EQ', side: 'SELL', quantity: 5, product: 'CNC', orderType: 'LIMIT', price: 150.5 });
     const j = calls[0].jData;
     ok(j.trantype === 'S' && j.prctyp === 'LMT' && j.prc === '150.5' && j.prd === 'C', 'SELL/LMT/150.5/C');
-    ok(!('trgprc' in j), 'no trgprc on plain LIMIT');
+    ok(j.trgprc === '0', 'trgprc="0" on plain LIMIT (SDK includes field unconditionally)');
   }
 
   console.log('SL-M — trgprc included (only for stop-loss variants)');
@@ -92,7 +102,7 @@ function spy() {
 
     const b = new ShoonyaAdapter();
     b.setSessionToken('t'); b.setUserId('FA9');
-    b.post = async () => { const e = new Error('ALGO_CHK: MKT Order type not allowed for API order'); throw e; };
+    b.httpPost = async () => { throw new Error('ALGO_CHK: MKT Order type not allowed for API order'); };
     let rethrew = false;
     try { await b.placeOrder({ exchange: 'NSE', tradingSymbol: 'TATASTEEL-EQ', side: 'BUY', quantity: 1, product: 'MIS', orderType: 'MARKET' }); }
     catch (e) { rethrew = /ALGO_CHK/.test(e.message); }
