@@ -203,7 +203,6 @@ export class ShoonyaAdapter implements BrokerAdapter {
     url: string,
     body: string,
     authToken?: string,
-    reqContentType: string = 'application/x-www-form-urlencoded',
   ): Promise<any> {
     let lastError: Error | null = null;
 
@@ -211,7 +210,7 @@ export class ShoonyaAdapter implements BrokerAdapter {
       try {
         const res = await axios.post(url, body, {
           headers: {
-            'Content-Type': reqContentType,
+            'Content-Type': 'application/x-www-form-urlencoded',
             Accept: 'application/json',
             ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
           },
@@ -481,21 +480,15 @@ export class ShoonyaAdapter implements BrokerAdapter {
 
     this.logPlaceOrderRequest(jData);
 
+    // Transport restored to the previously-working Noren form:
+    // body `jData=<json>&jKey=<access_token>` with
+    // Content-Type application/x-www-form-urlencoded (via the shared post()).
+    // The application/json + no-jKey variant broke Noren's form parser
+    // ("Invalid Input : jData is Missing"), so it is reverted here. Payload
+    // fields (incl. algo_id/trgprc), product mapping, translator, normalizer
+    // and diagnostics are all retained.
     try {
-      // Transmit EXACTLY like the official OAuth SDK: body is `jData=<json>`
-      // with NO `&jKey` (auth is the Bearer header) and Content-Type
-      // `application/json; charset=utf-8`. Reads keep their own transport
-      // (post()) untouched.
-      const body = `jData=${JSON.stringify(jData)}`;
-      const res = await this.httpPost(
-        `${this.baseUrl}/PlaceOrder`,
-        body,
-        this.accessToken,
-        'application/json; charset=utf-8',
-      );
-      if (res && res.stat && res.stat !== 'Ok') {
-        throw new Error(String(res.emsg ?? '') || 'Shoonya error on PlaceOrder');
-      }
+      const res = await this.post('PlaceOrder', jData);
       this.logPlaceOrderResponse(jData, res, null);
       return res;
     } catch (err: any) {
@@ -518,9 +511,8 @@ export class ShoonyaAdapter implements BrokerAdapter {
       '=============================================',
       `Method            : POST`,
       `Endpoint          : ${endpoint}`,
-      `Content-Type      : application/json; charset=utf-8`,
-      `Authorization     : Bearer ***MASKED***`,
-      `Body shape        : jData=<json>   (no jKey — OAuth Bearer auth, matches official SDK)`,
+      `Content-Type      : application/x-www-form-urlencoded`,
+      `Body shape        : jData=<json>&jKey=<access_token masked>`,
       `ordersource       : ${f('ordersource')}`,
       `uid               : ${f('uid')}`,
       `actid             : ${f('actid')}`,
@@ -538,7 +530,7 @@ export class ShoonyaAdapter implements BrokerAdapter {
       `amo               : ${f('amo')}`,
       `algo_id           : ${f('algo_id')}`,
       `Complete jData    : ${safeJson(jData)}`,
-      `Raw HTTP body     : jData=${safeJson(jData)}`,
+      `Raw HTTP body     : jData=${safeJson(jData)}&jKey=***MASKED***`,
       '=============================================',
     ].join('\n');
     this.logger.log('\n' + block);
