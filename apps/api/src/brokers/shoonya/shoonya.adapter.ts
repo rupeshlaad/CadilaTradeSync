@@ -361,8 +361,99 @@ export class ShoonyaAdapter implements BrokerAdapter {
     };
   }
 
-  async placeOrder(_order: any) {
-    return {};
+  /**
+   * Sprint — Shoonya copy-execution translation + placement.
+   *
+   * Places an order on the Noren `PlaceOrder` endpoint. ALL Shoonya-specific
+   * translation lives HERE (never in the copy-trading engine): the broker-
+   * neutral order produced by the follower translator is mapped into the exact
+   * Noren field set (uid/actid/exch/tsym/qty/prc/prd/trantype/prctyp/ret).
+   *
+   *   product   MIS/INTRADAY/I → 'I' · CNC/DELIVERY/C → 'C' · NRML/NORMAL/MARGIN/M → 'M'
+   *   side      BUY → 'B' · SELL → 'S'
+   *   orderType MARKET → 'MKT' (prc '0') · LIMIT → 'LMT' (prc from price)
+   *
+   * Ref: official ShoonyaApi-py / Noren place_order contract.
+   */
+  async placeOrder(order: any) {
+    if (!this.accessToken) {
+      throw new Error('Shoonya session token missing — reconnect the broker.');
+    }
+    if (!this.uid) {
+      throw new Error('Shoonya account id (uid) missing on this session.');
+    }
+
+    const exch = String(order?.exchange ?? order?.exch ?? 'NSE').trim().toUpperCase();
+    const tsym = String(order?.tradingSymbol ?? order?.tsym ?? order?.symbol ?? '').trim();
+    if (!tsym) {
+      throw new Error('Shoonya order is missing a trading symbol (tsym).');
+    }
+
+    const qtyNum = Number(order?.quantity ?? order?.qty);
+    if (!Number.isFinite(qtyNum) || qtyNum <= 0) {
+      throw new Error(`Invalid quantity "${order?.quantity ?? order?.qty}" for Shoonya order.`);
+    }
+
+    const sideRaw = String(order?.side ?? order?.trantype ?? '').trim().toUpperCase();
+    const trantype = sideRaw === 'SELL' || sideRaw === 'S' ? 'S' : 'B';
+
+    const otRaw = String(order?.orderType ?? order?.prctyp ?? 'MARKET').trim().toUpperCase();
+    const isLimit = otRaw === 'LIMIT' || otRaw === 'LMT';
+    const prctyp = isLimit ? 'LMT' : 'MKT';
+
+    const prd = ShoonyaAdapter.mapProduct(order?.product);
+    if (!prd) {
+      throw new Error(
+        `Invalid product "${order?.product}" for Shoonya. ` +
+          `Supported: MIS/INTRADAY, CNC/DELIVERY, NRML/NORMAL.`,
+      );
+    }
+
+    const priceNum = Number(order?.price ?? order?.prc ?? 0);
+    const prc = isLimit && Number.isFinite(priceNum) ? String(priceNum) : '0';
+
+    const ret = String(order?.validity ?? order?.ret ?? 'DAY').trim().toUpperCase();
+
+    const jData: Record<string, any> = {
+      uid: this.uid,
+      actid: this.actid || this.uid,
+      exch,
+      tsym,
+      qty: String(Math.trunc(qtyNum)),
+      prc,
+      prd,
+      trantype,
+      prctyp,
+      ret,
+      ordersource: 'API',
+    };
+
+    return this.post('PlaceOrder', jData);
+  }
+
+  /**
+   * Map a CTS-internal / cross-broker product onto a Noren product code, or
+   * null when unresolvable (the caller rejects BEFORE the broker API call).
+   */
+  static mapProduct(product: unknown): 'C' | 'M' | 'I' | null {
+    const p = String(product ?? '').trim().toUpperCase();
+    switch (p) {
+      case 'MIS':
+      case 'INTRADAY':
+      case 'I':
+        return 'I';
+      case 'CNC':
+      case 'DELIVERY':
+      case 'C':
+        return 'C';
+      case 'NRML':
+      case 'NORMAL':
+      case 'MARGIN':
+      case 'M':
+        return 'M';
+      default:
+        return null;
+    }
   }
 
   async modifyOrder(_orderId: string, _order: any) {

@@ -1071,3 +1071,74 @@ cookie path unchanged, state-param brokers unchanged).
 100% backend, 0 issues. **Not verifiable in-pod:** live browser OAuth round-trip
 (no live Shoonya account). **DB changes:** none.
 **Note:** in-memory store is single-instance; horizontal scaling would need Redis/DB backing (documented).
+
+
+---
+
+## Sprint — Zerodha product translation + Shoonya copy-execution (2026-08) — DONE (build + harness + testing_agent verified)
+
+Two independent broker-specific Manual Copy Trading execution bugs (FYERS master
+→ Zerodha / Shoonya followers). Fixes are isolated to the broker adapter /
+execution layer; NO change to OAuth, callback, oauth-pending store, broker
+connection, copy-trading orchestration, position lifecycle, execution-event
+pipeline, execution history, trade monitor, or instrument translation.
+
+**Issue 1 — Zerodha "Invalid `product`".** A copy follower mirrors the MASTER's
+product verbatim. A FYERS master places `productType='INTRADAY'`
+(`fyersProduct('MIS')→'INTRADAY'` in manual-trade.service), which flows unchanged
+as `event.product` into the Zerodha follower payload. Kite Connect only accepts
+MIS/CNC/NRML(+MTF/CO/BO) → "Invalid `product`". Root cause: no CTS→Kite product
+translation on the Zerodha side; the follower translator forwarded `product`
+untranslated.
+Fix (apps/api/src/brokers/zerodha/zerodha.adapter.ts ONLY): `PRODUCT_MAP`
+(INTRADAY→MIS, DELIVERY→CNC, NORMAL/MARGIN→NRML; MIS/CNC/NRML pass through) +
+`VALID_KITE_PRODUCTS` + `mapProduct()` (trim/upper, THROWS on unsupported).
+`normalizeOrder()` now translates+validates the product BEFORE `kite.placeOrder`,
+so a CTS/cross-broker enum can never reach Kite. market_protection=-1 injection
+for MARKET/SL-M preserved (no regression). Pure (input not mutated).
+
+**Issue 2 — "Broker SHOONYA has no copy-execution translation".** Shoonya was
+SKIPPED/BROKER_UNSUPPORTED because (a) `follower-order-translator.ts` returned
+null for SHOONYA, (b) `ShoonyaAdapter.placeOrder` was a stub returning `{}`, and
+(c) `broker-response-normalizer.ts` had no SHOONYA branch. Execution never
+reached the Noren API.
+Fix: `follower-order-translator.ts` adds a SHOONYA case returning a broker-NEUTRAL
+order (all Noren encoding stays in the adapter). `shoonya.adapter.ts` implements
+`placeOrder` → real Noren `PlaceOrder` payload
+(uid/actid/exch/tsym/qty/prc/prd/trantype/prctyp/ret/ordersource) + static
+`mapProduct` (MIS/INTRADAY/I→'I', CNC/DELIVERY/C→'C', NRML/NORMAL/MARGIN/M→'M';
+BUY→'B'/SELL→'S'; MARKET→'MKT' prc'0'/LIMIT→'LMT' prc from price; throws on
+invalid product / missing session/uid). `broker-response-normalizer.ts` adds a
+SHOONYA case ({stat:'Ok',norenordno}→SUCCESS, Not_ok→failure). Follows the
+existing broker abstraction (Fyers/Zerodha); no broker logic in the copy engine.
+
+**Why isolated & cannot impact other brokers:** every change is a new
+`case Broker.SHOONYA`/product-map branch keyed on the broker; ZERODHA/FYERS/
+UPSTOX/ICICI code paths are byte-identical. Confirmed by the full regression
+suite.
+
+**Files:** MOD `brokers/zerodha/zerodha.adapter.ts`, `brokers/shoonya/shoonya.adapter.ts`,
+`brokers/execution/follower-order-translator.ts`, `brokers/execution/broker-response-normalizer.ts`;
+NEW `backend/tests/zerodha_product_mapping_harness.cjs` (27), `backend/tests/shoonya_copy_execution_harness.cjs` (35);
+UPDATED (behaviour-change assertions) `backend/tests/zerodha_follower_execution_harness.cjs` (SHOONYA now supported),
+`backend/tests/follower_broker_payload_regression_harness.cjs` (Shoonya non-null).
+
+**Validated:** `@cts/api` typecheck exit 0; `pnpm -r build` 5/5 PASS; new harnesses
+27/27 + 35/35; full regression suite green (zerodha_order_payload 29, zerodha_copy_product_cnc 14,
+zerodha_follower_execution 38, follower_broker_payload_regression 28, instrument_translation 33,
+manual_* , shoonya_oauth 9/9, shoonya_callback 10/10, shoonya_cross_origin 8, integrity 9/9,
+manual_search 8/8, upstox 4/4; fyers isolation/reconnect/diagnostics ALL PASS). testing_agent
+iteration_28: backend 100%, 0 critical/minor, retest not needed.
+
+**Regression matrix (FYERS master):** Zerodha MIS → payload product=MIS ✓;
+Zerodha CNC → product=CNC ✓ (preserved); Shoonya MIS → Noren prd='I' ✓; Shoonya
+CNC → Noren prd='C' ✓; Zerodha+Shoonya simultaneously → both placed, per-follower
+isolation retained ✓.
+
+**NOT verifiable in pod** (no Postgres/Redis, no live Zerodha/Shoonya sessions,
+no preview URL): a real LIVE Kite order accepted with the mapped product and a
+real LIVE Shoonya Noren order — user smoke-tests on their infra.
+
+**Git:** feature branch `feature/broker-execution-zerodha-product-shoonya-translation`
+→ `--no-ff` merge into local `main`. NOT pushed — awaiting user approval to
+publish via Save to GitHub.

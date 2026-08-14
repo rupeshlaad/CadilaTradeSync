@@ -86,8 +86,12 @@ function spyBrokerService(broker) {
     ok(withCnc.stock_code === 'TATASTEEL' && withCnc.action === 'buy', 'ICICI core fields intact');
   }
 
-  console.log('Shoonya still unsupported');
-  ok(translateFollowerOrder(base('SHOONYA', 'CNC')) === null, 'Shoonya translation returns null');
+  console.log('Shoonya now supported — translation returns a broker-neutral order');
+  {
+    const s = translateFollowerOrder(base('SHOONYA', 'CNC'));
+    ok(s !== null, 'Shoonya translation returns a non-null order (copy execution implemented)');
+    ok(s.tradingSymbol === 'TATASTEEL' && s.side === 'BUY', 'Shoonya order carries symbol/side (Noren encoding stays in the adapter)');
+  }
 
   // ---- 3. Observability path runs for EVERY broker without throwing ----
   //     (logFollowerPayload is called BEFORE the try block; if it threw,

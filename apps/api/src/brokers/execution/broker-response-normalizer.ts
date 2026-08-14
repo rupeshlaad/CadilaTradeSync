@@ -198,6 +198,32 @@ export function normalizeExecutionResponse(
       });
     }
 
+    case Broker.SHOONYA: {
+      // Noren PlaceOrder success → { stat: 'Ok', norenordno: '...' }.
+      // A rejection normally throws inside the adapter's post() (handled by
+      // normalizeExecutionError); this branch also fails safely if a non-Ok
+      // body ever reaches here.
+      const ok = raw?.stat === 'Ok';
+      const orderId = str(raw?.norenordno);
+      const message = firstMessage(
+        raw?.emsg,
+        raw?.result,
+        typeof raw === 'string' ? raw : null,
+      );
+      if (ok && orderId) {
+        return succeed(orderId, raw, {
+          brokerStatus: str(raw?.stat),
+          brokerMessage: message,
+        });
+      }
+      return fail(
+        classifyBrokerMessage(message),
+        message ?? 'Shoonya did not return an order number',
+        raw,
+        { brokerStatus: str(raw?.stat) },
+      );
+    }
+
     case Broker.ZERODHA:
     default: {
       // Kite `placeOrder` returns the order id (string) or `{ order_id }`.
