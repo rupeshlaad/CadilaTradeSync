@@ -203,6 +203,7 @@ export class ShoonyaAdapter implements BrokerAdapter {
     url: string,
     body: string,
     authToken?: string,
+    reqContentType: string = 'application/x-www-form-urlencoded',
   ): Promise<any> {
     let lastError: Error | null = null;
 
@@ -210,7 +211,7 @@ export class ShoonyaAdapter implements BrokerAdapter {
       try {
         const res = await axios.post(url, body, {
           headers: {
-            'Content-Type': 'application/x-www-form-urlencoded',
+            'Content-Type': reqContentType,
             Accept: 'application/json',
             ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
           },
@@ -448,7 +449,10 @@ export class ShoonyaAdapter implements BrokerAdapter {
     // AMO flag: 'YES' only when explicitly requested; otherwise a regular order.
     const amo = String(order?.amo ?? '').trim().toUpperCase() === 'YES' ? 'YES' : 'NO';
 
-    // Noren PlaceOrder body — ordered to mirror the official SDK payload.
+    // Noren PlaceOrder body — aligned field-for-field with the official OAuth
+    // SDK (NorenRestApiPy 0.0.37, injectOAuthHeader/place_order). The SDK
+    // ALWAYS sends `trgprc` and `algo_id` (the latter's absence is the strongest
+    // candidate for the server-side `ALGO_CHK` rejection). Order mirrors the SDK.
     const jData: Record<string, any> = {
       ordersource: 'API',
       uid: this.uid,
@@ -461,19 +465,37 @@ export class ShoonyaAdapter implements BrokerAdapter {
       dscqty: '0',
       prctyp,
       prc,
+      // SDK includes trgprc unconditionally (str(trigger_price)); '0' for
+      // non-stop-loss orders, trigger value for SL variants.
+      trgprc: isTriggered && Number.isFinite(trigNum) ? String(trigNum) : '0',
       ret,
       remarks,
-      amo,
+      // SDK sends algo_id unconditionally (null unless an algo order). Present
+      // (null) so the Noren ALGO_CHK gate can classify this as a non-algo order.
+      algo_id: null,
     };
-    // trigger price only for stop-loss variants (SDK omits it otherwise).
-    if (isTriggered) {
-      jData.trgprc = Number.isFinite(trigNum) ? String(trigNum) : '0';
+    // AMO: SDK omits the field entirely unless set; only add it when 'YES'.
+    if (amo === 'YES') {
+      jData.amo = 'YES';
     }
 
     this.logPlaceOrderRequest(jData);
 
     try {
-      const res = await this.post('PlaceOrder', jData);
+      // Transmit EXACTLY like the official OAuth SDK: body is `jData=<json>`
+      // with NO `&jKey` (auth is the Bearer header) and Content-Type
+      // `application/json; charset=utf-8`. Reads keep their own transport
+      // (post()) untouched.
+      const body = `jData=${JSON.stringify(jData)}`;
+      const res = await this.httpPost(
+        `${this.baseUrl}/PlaceOrder`,
+        body,
+        this.accessToken,
+        'application/json; charset=utf-8',
+      );
+      if (res && res.stat && res.stat !== 'Ok') {
+        throw new Error(String(res.emsg ?? '') || 'Shoonya error on PlaceOrder');
+      }
       this.logPlaceOrderResponse(jData, res, null);
       return res;
     } catch (err: any) {
@@ -496,8 +518,9 @@ export class ShoonyaAdapter implements BrokerAdapter {
       '=============================================',
       `Method            : POST`,
       `Endpoint          : ${endpoint}`,
-      `Content-Type      : application/x-www-form-urlencoded`,
-      `Body shape        : jData=<json>&jKey=<access_token masked>`,
+      `Content-Type      : application/json; charset=utf-8`,
+      `Authorization     : Bearer ***MASKED***`,
+      `Body shape        : jData=<json>   (no jKey — OAuth Bearer auth, matches official SDK)`,
       `ordersource       : ${f('ordersource')}`,
       `uid               : ${f('uid')}`,
       `actid             : ${f('actid')}`,
@@ -513,8 +536,9 @@ export class ShoonyaAdapter implements BrokerAdapter {
       `ret               : ${f('ret')}`,
       `remarks           : ${f('remarks')}`,
       `amo               : ${f('amo')}`,
+      `algo_id           : ${f('algo_id')}`,
       `Complete jData    : ${safeJson(jData)}`,
-      `Raw HTTP body     : jData=${safeJson(jData)}&jKey=***MASKED***`,
+      `Raw HTTP body     : jData=${safeJson(jData)}`,
       '=============================================',
     ].join('\n');
     this.logger.log('\n' + block);

@@ -34,7 +34,12 @@ function spyShoonya() {
   a.setSessionToken('tok-abc');
   a.setUserId('FA12345');
   const calls = [];
-  a.post = async (pathName, jData) => { calls.push({ pathName, jData }); return { stat: 'Ok', norenordno: '25NOREN0001' }; };
+  a.httpPost = async (url, body, token, reqContentType) => {
+    const pathName = String(url).split('/').pop();
+    const jData = JSON.parse(String(body).replace(/^jData=/, '').split('&jKey=')[0]);
+    calls.push({ pathName, jData, contentType: reqContentType });
+    return { stat: 'Ok', norenordno: '25NOREN0001' };
+  };
   return { a, calls };
 }
 
@@ -124,7 +129,10 @@ const params = (product) => ({
       getAdapterForAccount: async () => {
         const a = new ShoonyaAdapter();
         a.setSessionToken('tok'); a.setUserId('FA999');
-        a.post = async (pathName, jData) => { calls.push(jData); return { stat: 'Ok', norenordno: 'E2E-1' }; };
+        a.httpPost = async (url, body) => {
+          calls.push(JSON.parse(String(body).replace(/^jData=/, '').split('&jKey=')[0]));
+          return { stat: 'Ok', norenordno: 'E2E-1' };
+        };
         return { broker: 'SHOONYA', adapter: a };
       },
     });
