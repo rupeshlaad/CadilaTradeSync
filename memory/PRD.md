@@ -1252,3 +1252,44 @@ UNCHANGED, all Fyers PASS, reads byte-unchanged). testing_agent iteration_30:
 backend 100%, 0 issues, retest not needed.
 **Git:** feature branch `feature/shoonya-forensic-sdk-payload-parity` → `--no-ff`
 merge into local `main`. NOT pushed — awaiting user approval (Save to GitHub).
+
+
+---
+
+## Sprint — Rollback: restore Shoonya PlaceOrder working transport (2026-08) — DONE (build + harness + testing_agent verified)
+
+REGRESSION from iteration_30: the SDK-parity transport change (Content-Type
+application/json + body `jData=<json>` with NO `&jKey`) broke Noren's form
+parser — live Shoonya returned `Invalid Input : jData is Missing` (rejected
+BEFORE business validation). The previously-working transport
+(`application/x-www-form-urlencoded` + body `jData=<json>&jKey=<token>`) reached
+business validation and returned `ALGO_CHK: MKT Order type not allowed for API
+order`.
+
+**Rollback (transport ONLY, shoonya.adapter.ts):**
+- `placeOrder` reverted to the shared `this.post('PlaceOrder', jData)` →
+  `application/x-www-form-urlencoded`, body `jData=<json>&jKey=<access_token>`.
+- Removed the `reqContentType` param from `httpPost` (restored original
+  signature / hardcoded form-urlencoded). No `application/json` remains.
+- Diagnostics log lines restored to show form-urlencoded + `&jKey` masked.
+
+**Retained (unchanged):** Zerodha product mapping; Shoonya execution translator;
+response normalizer; `mapProduct`; the spec-complete jData fields
+(dscqty/remarks/tsym-encoding + algo_id/trgprc — payload, not transport);
+all diagnostics/logging. No other broker, copy-trading, OAuth, auth, routing,
+execution history, trade monitor, retries, or translations touched.
+
+**Result:** CTS again transmits the working Noren form request that reaches
+business validation (ALGO_CHK). The ALGO_CHK itself is deferred for separate
+investigation (likely a Finvasia account-side API-market restriction).
+
+**Files:** MOD `brokers/shoonya/shoonya.adapter.ts`; UPDATED harness
+`backend/tests/shoonya_place_order_noren_payload_harness.cjs` (transport
+assertions → form-urlencoded + &jKey).
+**Validated:** typecheck 0; build 5/5; all 22 harness suites PASS (Zerodha 29/14/
+38/27 unchanged, all Fyers PASS, reads unchanged). testing_agent iteration_31:
+backend 100%, 0 issues, retest not needed. Byte capture confirms Content-Type
+form-urlencoded and body ending `&jKey=...`.
+
+**Git:** feature branch `feature/shoonya-transport-rollback` → `--no-ff` merge
+into local `main`. NOT pushed — awaiting user approval (Save to GitHub).

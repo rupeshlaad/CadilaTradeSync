@@ -56,9 +56,9 @@ function spy() {
     ok('algo_id' in j && j.algo_id === null, 'algo_id present + null (SDK-parity; matches ALGO_CHK gate field)');
     ok('trgprc' in j && j.trgprc === '0', 'trgprc present = "0" for MARKET (SDK includes it unconditionally)');
     ok(!('amo' in j), 'amo omitted for regular order (SDK omits when None)');
-    ok(calls[0].contentType === 'application/json; charset=utf-8', 'Content-Type application/json (matches OAuth SDK)');
-    ok(calls[0].hasJKey === false, 'body has NO &jKey (OAuth Bearer auth, matches SDK)');
-    ok(/^jData=/.test(calls[0].body), 'body is jData=<json>');
+    ok(calls[0].contentType === undefined || calls[0].contentType === 'application/x-www-form-urlencoded', 'Content-Type form-urlencoded (restored working Noren transport)');
+    ok(calls[0].hasJKey === true, 'body includes &jKey (restored working Noren transport)');
+    ok(/^jData=/.test(calls[0].body), 'body is jData=<json>&jKey=...');
   }
 
   console.log('tsym URL-encoding — special chars (M&M-EQ → M%26M-EQ)');

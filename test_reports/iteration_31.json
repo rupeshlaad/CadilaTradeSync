@@ -1,0 +1,51 @@
+{
+  "summary": "Iteration 31 targeted rollback verified. Only apps/api/src/brokers/shoonya/shoonya.adapter.ts (production) + shoonya_place_order_noren_payload_harness.cjs (tests) changed vs previous HEAD. Shoonya PlaceOrder transport reverted from application/json+no-jKey (SDK-parity variant from iter_30 that broke Noren form parser) back to the previously-working application/x-www-form-urlencoded transport with body `jData=<json>&jKey=<token>`. All retained: algo_id/trgprc fields, mapProduct, translator, normalizer, diagnostics (logPlaceOrderRequest/logPlaceOrderResponse). Byte capture via /tmp/cts_shoonya_capture.cjs confirms Content-Type=application/x-www-form-urlencoded and body ends with `&jKey=ACCESS_TOKEN_DEMO`. Typecheck exit 0. Build 5/5 exit 0. All 22 harness test suites pass. No live broker calls (per env constraint).",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": { "ui_bugs": [], "integration_issues": [], "design_issues": [] },
+  "test_report_links": [
+    "/app/backend/tests/shoonya_place_order_noren_payload_harness.cjs",
+    "/tmp/cts_shoonya_capture.cjs"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Rollback is surgical and correct: httpPost's reqContentType parameter removed; placeOrder uses shared this.post('PlaceOrder', jData) (form-urlencoded + &jKey) restoring parity with all read endpoints.",
+    "No 'application/json' string exists anywhere in shoonya.adapter.ts for PlaceOrder transport. Diagnostics log correctly updated to show `jData=<json>&jKey=<access_token masked>` and `Raw HTTP body : jData=...&jKey=***MASKED***`.",
+    "Only 1 production file diff vs HEAD~1 (shoonya.adapter.ts). No changes to Zerodha/Fyers/Upstox/ICICI, follower-execution, translator, normalizer, copy-trading, instrument translation, execution history, retry loop — as required."
+  ],
+  "updated_files": [],
+  "success_rate": { "backend": "100%", "frontend": "N/A (skipped per request)" },
+  "test_credentials": "ZERODHA_API_KEY=test-key (dummy, construction only)",
+  "seed_data_creation": "None",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Rollback of iter_30 SDK-parity transport is complete and green. CTS Shoonya PlaceOrder now transmits form-urlencoded with `jData=<json>&jKey=<token>`, i.e. the previously-working Noren transport that reaches business validation (ALGO_CHK). Live broker acceptance cannot be verified in-pod. Full harness suite (22 files) all pass. Build 5/5, typecheck 0. No other broker or pipeline touched.",
+  "detailed_results": {
+    "typecheck": "exit 0",
+    "build": "5/5 Done (packages/shared, packages/ui, apps/api, apps/web, apps/admin)",
+    "cts_shoonya_capture": "Content-Type=application/x-www-form-urlencoded; body ends with &jKey=ACCESS_TOKEN_DEMO; jData contains ordersource/uid/actid/trantype/prd/exch/tsym/qty/dscqty/prctyp=MKT/prc/trgprc/ret/remarks/algo_id:null",
+    "harness_results": {
+      "shoonya_place_order_noren_payload_harness": "27 passed, 0 failed",
+      "shoonya_copy_execution_harness": "35 passed, 0 failed",
+      "shoonya_oauth_harness": "9/9 ALL PASS",
+      "shoonya_callback_context_harness": "10/10 ALL PASS",
+      "shoonya_cross_origin_recovery_harness": "8 passed, 0 failed",
+      "zerodha_order_payload_harness": "29 passed, 0 failed",
+      "zerodha_copy_product_cnc_harness": "14 passed, 0 failed",
+      "zerodha_follower_execution_harness": "38 passed, 0 failed",
+      "zerodha_product_mapping_harness": "27 passed, 0 failed",
+      "fyers_account_isolation_harness": "ALL PASS",
+      "fyers_order_diagnostics_harness": "ALL PASS",
+      "fyers_placement_credential_isolation_harness": "ALL PASS",
+      "fyers_reconnect_harness": "ALL PASS",
+      "instrument_translation_harness": "33 passed, 0 failed",
+      "integrity_dedupe_exchange_harness": "9/9 ALL PASS",
+      "manual_search_exchange_harness": "8/8 ALL PASS",
+      "manual_trade_market_fill_e2e_harness": "13 passed / ALL PASS",
+      "manual_trade_status_transition_harness": "24 passed, 0 failed",
+      "manual_trade_trace_harness": "25 passed / ALL PASS",
+      "upstox_redirect_env_harness": "4/4 ALL PASS",
+      "follower_broker_payload_regression_harness": "28 passed, 0 failed"
+    },
+    "scope_confirmation": "git diff HEAD~1 shows only apps/api/src/brokers/shoonya/shoonya.adapter.ts (prod) + shoonya_place_order_noren_payload_harness.cjs (test) + .emergent/emergent.yml (config). httpPost reqContentType removed. placeOrder now calls this.post('PlaceOrder', jData). No 'application/json' string in file. Diagnostics log shows 'Content-Type: application/x-www-form-urlencoded' and 'Body shape: jData=<json>&jKey=<access_token masked>'."
+  }
+}
