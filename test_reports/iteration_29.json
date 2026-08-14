@@ -1,0 +1,21 @@
+{
+  "summary": "Static build + harness validation for Shoonya Noren PlaceOrder payload/diagnostics sprint. Typecheck & build both exit 0. Primary harness shoonya_place_order_noren_payload_harness.cjs = 23/0. Regression harness shoonya_copy_execution_harness.cjs = 35/0. All non-fyers harnesses pass. All three specified fyers harnesses PASS, plus fyers_placement_credential_isolation also PASS (module resolution worked in this pod). Scope confirmed via git diff: only apps/api/src/brokers/shoonya/shoonya.adapter.ts modified; new harness added. No other broker/subsystem touched.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/shoonya_place_order_noren_payload_harness.cjs",
+    "/app/backend/tests/shoonya_copy_execution_harness.cjs"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Payload now byte-matches official ShoonyaApi-py regular-order schema (ordersource, uid, actid, trantype, prd, exch, tsym URL-encoded, qty, dscqty, prctyp, prc, ret, remarks, amo; trgprc only for SL/SL-M). MARKET preserved as prctyp=MKT with prc=0 (no MARKET->LIMIT rewrite). Access token (jKey) masked in logs. Broker rejection (e.g. ALGO_CHK: MKT Order type not allowed for API order) is logged AND rethrown, not swallowed.",
+    "HONESTY NOTE: The ALGO_CHK MARKET rejection is almost certainly a Finvasia account/segment-side API restriction (broker-side algo check), NOT a payload defect. The payload is now spec-complete and identical in shape to the SDK; live acceptance cannot be verified statically (no Postgres/Redis/live Shoonya session in pod). User should capture the now-logged raw request/response and raise a Finvasia support ticket to enable API MARKET on the account."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100%", "frontend": "N/A (backend-only sprint)"},
+  "seed_data_creation": "None (harnesses use in-memory spies on adapter.post; no DB writes).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Static validation pattern (typecheck + build + backend/tests/*.cjs harnesses). App cannot boot in pod. shoonya_place_order_noren_payload_harness verifies exact Noren field set, tsym URL-encoding, MARKET preservation, jKey masking, request/response logging, and rethrow of broker rejections. All 20 harnesses executed here passed. Only shoonya.adapter.ts + new harness changed vs HEAD.",
+  "rca of the issue": "ALGO_CHK: MKT Order type not allowed for API order — RCA: Finvasia (Shoonya) applies an account/segment-side API algo restriction that blocks MARKET orders arriving over the REST API even when identical MARKET orders are accepted from the Shoonya WEB platform (which is not classified as an API/algo channel). This sprint (a) makes the outbound Noren payload byte-identical to the official SDK's regular-order schema (adds previously-missing dscqty and remarks, sets ordersource=API, URL-encodes tsym, preserves prctyp=MKT/prc=0, omits trgprc for non-SL, masks jKey), and (b) instruments placeOrder() to log the exact request and response so the raw HTTP evidence can be captured live and sent to Finvasia support to lift the API-MKT restriction on the account. Live-broker verification is outside the static pod scope."
+}
