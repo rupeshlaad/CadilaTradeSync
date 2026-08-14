@@ -454,6 +454,7 @@ export class PositionLifecycleService {
           orderType: event.orderType ?? '',
           product: event.productType ?? '',
           price: event.price ?? 0,
+          triggerPrice: event.triggerPrice ?? null,
           status: event.rawStatus ?? 'COMPLETE',
           timestamp: event.brokerUpdatedAt
             ? new Date(event.brokerUpdatedAt)

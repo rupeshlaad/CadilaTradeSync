@@ -128,7 +128,7 @@ export function deriveLifecycleEvent(
     pendingQuantity: Math.max(0, order.quantity - order.filledQuantity),
     price: order.price,
     triggerPrice: order.triggerPrice,
-    orderType: order.orderType,
+    orderType: toCtsOrderType(ctx.broker, order.orderType),
     productType: order.productType,
     rawStatus: order.status,
     brokerUpdatedAt: order.brokerUpdatedAt,
@@ -136,6 +136,47 @@ export function deriveLifecycleEvent(
     raw: order.raw,
   };
 }
+
+/**
+ * Map a broker-NATIVE order type onto the CTS-neutral vocabulary
+ * (MARKET / LIMIT / SL / SL-M) so the copy fan-out can re-map it to each
+ * follower broker. Broker-specific mapping stays HERE, in the broker layer.
+ * Returns null when the broker did not report an order type.
+ */
+function toCtsOrderType(broker: Broker, raw: string | null): string | null {
+  if (raw === null || raw === undefined || String(raw).trim() === '') return null;
+  const v = String(raw).trim().toUpperCase();
+
+  const passthrough = (): string | null =>
+    v === 'MARKET' || v === 'LIMIT' || v === 'SL' || v === 'SL-M' ? v : null;
+
+  switch (broker) {
+    case Broker.FYERS:
+      // fyers-api-v3 numeric type codes.
+      if (v === '1') return 'LIMIT';
+      if (v === '2') return 'MARKET';
+      if (v === '3') return 'SL-M';
+      if (v === '4') return 'SL';
+      return passthrough();
+    case Broker.SHOONYA:
+      if (v === 'MKT') return 'MARKET';
+      if (v === 'LMT') return 'LIMIT';
+      if (v === 'SL-MKT') return 'SL-M';
+      if (v === 'SL-LMT') return 'SL';
+      return passthrough();
+    case Broker.ICICI_DIRECT:
+      if (v === 'MARKET') return 'MARKET';
+      if (v === 'LIMIT') return 'LIMIT';
+      if (v === 'STOPLOSS') return 'SL';
+      return passthrough();
+    case Broker.ZERODHA:
+    case Broker.UPSTOX:
+    default:
+      // Kite / Upstox already use the CTS vocabulary.
+      return passthrough();
+  }
+}
+
 
 // ---------------------------------------------------------------------------
 // Classification
