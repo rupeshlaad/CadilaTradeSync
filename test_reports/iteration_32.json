@@ -1,0 +1,54 @@
+{
+  "summary": "Backend static/harness validation of orderType/price/triggerPrice propagation architectural fix. Typecheck exit 0, pnpm -r build succeeded (all workspaces Done, incl. api/web/admin/shared/ui). New order_type_propagation_harness reports 30 passed, 0 failed. All 22 pre-existing .cjs harnesses (excl. shoonya_forensic_capture evidence script) PASS with counts matching required baselines. MARKET regression byte-identical (follower_broker_payload_regression 28/0). Git diff scope matches spec exactly (6 modified files + 2 new files: fyers-order.mapper.ts, order_type_propagation_harness.cjs). Verified no broker-specific switch/map in CopyTradingService or FollowerExecutionService (pure pass-through, only field forwarding). Live-broker/db calls not attempted per hard env constraint.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": ["/app/backend/tests/order_type_propagation_harness.cjs", "/app/backend/tests/*.cjs"],
+  "harness_results": {
+    "order_type_propagation_harness": "30 passed, 0 failed",
+    "follower_broker_payload_regression_harness": "28 passed, 0 failed (MARKET byte-identical)",
+    "zerodha_order_payload_harness": "29 passed, 0 failed",
+    "zerodha_copy_product_cnc_harness": "14 passed, 0 failed",
+    "zerodha_follower_execution_harness": "38 passed, 0 failed",
+    "zerodha_product_mapping_harness": "27 passed, 0 failed",
+    "shoonya_copy_execution_harness": "35 passed, 0 failed",
+    "shoonya_place_order_noren_payload_harness": "27 passed, 0 failed",
+    "shoonya_oauth_harness": "9/9 ALL PASS",
+    "shoonya_callback_context_harness": "10/10 ALL PASS",
+    "shoonya_cross_origin_recovery_harness": "8 passed, 0 failed",
+    "instrument_translation_harness": "33 passed, 0 failed",
+    "manual_trade_status_transition_harness": "24 passed, 0 failed",
+    "manual_trade_market_fill_e2e_harness": "ALL PASS",
+    "manual_trade_trace_harness": "ALL PASS",
+    "manual_search_exchange_harness": "8/8 ALL PASS",
+    "upstox_redirect_env_harness": "4/4 ALL PASS",
+    "integrity_dedupe_exchange_harness": "9/9 ALL PASS",
+    "fyers_account_isolation_harness": "ALL PASS",
+    "fyers_order_diagnostics_harness": "ALL PASS",
+    "fyers_placement_credential_isolation_harness": "ALL PASS",
+    "fyers_reconnect_harness": "ALL PASS"
+  },
+  "build_results": {"typecheck": "exit 0", "pnpm_r_build": "all workspaces Done (packages/shared, packages/ui, apps/api, apps/web, apps/admin)"},
+  "scope_diff": {
+    "modified": [
+      "apps/api/src/copy-trading/dto/trade-event.dto.ts",
+      "apps/api/src/position-lifecycle/position-lifecycle.service.ts",
+      "apps/api/src/copy-trading/copy-trading.service.ts",
+      "apps/api/src/brokers/execution/follower-execution.service.ts",
+      "apps/api/src/brokers/execution/follower-order-translator.ts",
+      "apps/api/src/position-lifecycle/broker-lifecycle-normalizer.ts"
+    ],
+    "new": [
+      "apps/api/src/brokers/fyers/fyers-order.mapper.ts",
+      "backend/tests/order_type_propagation_harness.cjs"
+    ],
+    "no_broker_specific_logic_in_pass_through": true
+  },
+  "action_items": [],
+  "critical_code_review_comments": ["Fix scope is tight and correct: broker-native order-type mapping stays inside each broker's mapper (Fyers new mapper; Shoonya adapter; Upstox/ICICI existing mappers; Zerodha identity). Neutralization to CTS occurs at the deriveLifecycleEvent choke point only. CopyTradingService and FollowerExecutionService are pure pass-through (verified via grep - no broker names or order-type literals other than in doc comments)."],
+  "updated_files": [],
+  "success_rate": {"backend": "100%", "frontend": "N/A (skipped per request)"},
+  "seed_data_creation": "None",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "All static + harness gates green on iter 32. MARKET regression byte-identical. Live-broker validation is out of pod scope by design."
+}

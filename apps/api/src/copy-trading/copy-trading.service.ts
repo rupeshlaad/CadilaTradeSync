@@ -204,6 +204,11 @@ export class CopyTradingService {
             exchange: translated.exchange,
             instrument: resolvedInstrument,
             product: event.product,
+            // Forward the master's order type + prices UNCHANGED (no broker
+            // logic here — each follower adapter/mapper maps them natively).
+            orderType: event.orderType,
+            price: event.price,
+            triggerPrice: event.triggerPrice ?? null,
             masterSymbol: event.symbol,
             followerId: follower.id,
             correlationId: currentManualTradeTrace()?.correlationId ?? null,

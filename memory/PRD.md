@@ -1293,3 +1293,49 @@ form-urlencoded and body ending `&jKey=...`.
 
 **Git:** feature branch `feature/shoonya-transport-rollback` → `--no-ff` merge
 into local `main`. NOT pushed — awaiting user approval (Save to GitHub).
+
+
+---
+
+## Sprint — Propagate orderType/price/triggerPrice through copy pipeline (2026-08) — DONE (build + harness + testing_agent verified)
+
+Architectural fix: the copy fan-out HARD-CODED follower orders to MARKET/price 0,
+so a master LIMIT/SL/SL-M order became MARKET on followers. Now the master's
+order type + prices flow end-to-end; MARKET behaviour is byte-identical.
+
+**Pipeline (each stage = pure forwarding; NO broker logic in CopyTradingService
+/ FollowerExecutionService):**
+- `broker-lifecycle-normalizer.deriveLifecycleEvent` → NEW `toCtsOrderType(broker,
+  raw)` neutralizes broker-native order types to CTS vocabulary (Fyers 1/2/3/4 →
+  LIMIT/MARKET/SL-M/SL; Shoonya MKT/LMT/SL-MKT/SL-LMT → MARKET/LIMIT/SL-M/SL;
+  ICICI stoploss → SL; Zerodha/Upstox passthrough). Single choke point; aligns
+  with the existing `mapFyersOrderType(event.orderType)` consumer in
+  position-synchronization.
+- `TradeEvent` DTO → added `triggerPrice?` (orderType/price already existed).
+- `position-lifecycle.service` handleTrade → forwards `triggerPrice`.
+- `CopyTradingService` → forwards orderType/price/triggerPrice into
+  `followerExec.place()` (pass-through).
+- `FollowerExecutionParams` + `TranslateFollowerOrderParams` → +orderType/price/
+  triggerPrice; forwarded to translator.
+- `follower-order-translator` → uses propagated values (default MARKET/0 when
+  absent). Broker-specific order-type mapping stays in each broker's OWN layer:
+  Zerodha (Kite vocab == CTS, identity; price/trigger only when needed),
+  Fyers (NEW `brokers/fyers/fyers-order.mapper.ts` numeric type codes),
+  Upstox/ICICI (existing mappers already supported it), Shoonya (adapter
+  placeOrder maps prctyp/prc/trgprc — unchanged).
+
+**Untouched:** Upstox/ICICI mappers, Shoonya adapter placeOrder, execution
+history, retries, routing, symbol translation, auth, transport, logging, broker
+APIs.
+
+**Files:** MOD trade-event.dto.ts, position-lifecycle.service.ts,
+copy-trading.service.ts, follower-execution.service.ts,
+follower-order-translator.ts, broker-lifecycle-normalizer.ts; NEW
+brokers/fyers/fyers-order.mapper.ts, backend/tests/order_type_propagation_harness.cjs (30).
+**Validated:** typecheck 0; build 5/5; propagation harness 30/30; ALL 22 harness
+suites PASS with unchanged counts (MARKET byte-identical: follower_broker_payload
+28, zerodha 29/14/38/27, shoonya 35/27, all fyers PASS). testing_agent
+iteration_32: backend 100%, 0 issues, retest not needed.
+**NOT verifiable in pod:** live LIMIT/SL/SL-M copy acceptance at brokers.
+**Git:** feature branch `feature/propagate-order-type-price-trigger` → `--no-ff`
+merge into local `main`. NOT pushed — awaiting user approval (Save to GitHub).

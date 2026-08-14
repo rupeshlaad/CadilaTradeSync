@@ -25,6 +25,12 @@ export interface FollowerExecutionParams {
   instrument: ResolvedInstrument | null;
   /** Master trade product (CNC / MIS / NRML) mirrored to the follower order. */
   product?: string | null;
+  /** CTS-neutral order type (MARKET / LIMIT / SL / SL-M) mirrored from master. */
+  orderType?: string | null;
+  /** Limit price for LIMIT / SL (ignored for MARKET / SL-M). */
+  price?: number | null;
+  /** Trigger price for SL / SL-M. */
+  triggerPrice?: number | null;
   /** Source (master) symbol BEFORE translation — observability only. */
   masterSymbol?: string | null;
   followerId?: string | null;
@@ -98,6 +104,9 @@ export class FollowerExecutionService {
       exchange: params.exchange,
       instrument: params.instrument,
       product: params.product,
+      orderType: params.orderType,
+      price: params.price,
+      triggerPrice: params.triggerPrice,
     });
 
     if (order === null) {
