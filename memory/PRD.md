@@ -1142,3 +1142,56 @@ real LIVE Shoonya Noren order — user smoke-tests on their infra.
 **Git:** feature branch `feature/broker-execution-zerodha-product-shoonya-translation`
 → `--no-ff` merge into local `main`. NOT pushed — awaiting user approval to
 publish via Save to GitHub.
+
+
+---
+
+## Sprint — Shoonya Noren PlaceOrder payload spec-completeness + diagnostics (2026-08) — DONE (build + harness + testing_agent verified)
+
+Live test: Shoonya rejects the API MARKET order with
+`ALGO_CHK: MKT Order type not allowed for API order`, while the SAME MARKET/MIS
+order placed from the Shoonya WEB platform succeeds. User: DO NOT convert MARKET
+to LIMIT, no workarounds, no other broker touched; log the exact Noren request,
+compare to spec, fix only genuinely missing/mis-mapped fields.
+
+**Scope:** `apps/api/src/brokers/shoonya/shoonya.adapter.ts` ONLY (+ new harness).
+No Zerodha/Fyers/Upstox/ICICI, no instrument translation, no copy orchestration,
+no follower-execution/normalizer, no execution history, no position lifecycle.
+
+**Field-by-field vs official ShoonyaApi-py `place_order`:** our payload was
+missing `dscqty` and `remarks`, and `tsym` was not URL-encoded. Fixed:
+- placeOrder now emits the full SDK field set, in SDK order: `ordersource`(API),
+  `uid`, `actid`, `trantype`(B/S), `prd`(C/M/I), `exch`, `tsym`(URL-encoded via
+  encodeURIComponent = quote_plus parity), `qty`, `dscqty`('0'), `prctyp`
+  (MKT/LMT/SL-MKT/SL-LMT), `prc`('0' for MARKET), `ret`(DAY), `remarks`
+  (alphanumeric ≤20), `amo`(NO unless YES); `trgprc` included ONLY for SL-MKT/
+  SL-LMT (omitted otherwise, matching the SDK).
+- MARKET stays `prctyp='MKT'` / `prc='0'` — NEVER converted to LIMIT.
+- Endpoint unchanged & confirmed: POST `https://api.shoonya.com/NorenWClientAPI/PlaceOrder`
+  (same OAuth base as the working GenAcsTok + OrderBook/PositionBook reads).
+
+**Diagnostics (log-only, non-invasive):** `logPlaceOrderRequest` prints the EXACT
+final Noren request (method, endpoint, every field, complete jData JSON, raw HTTP
+body with `jKey` MASKED) immediately BEFORE transmission; `logPlaceOrderResponse`
+prints the raw response/error immediately AFTER. The access token is never
+logged. A broker rejection is logged AND rethrown (never swallowed).
+
+**Root cause of the ALGO_CHK rejection:** almost certainly a Finvasia
+ACCOUNT/segment-side API restriction that blocks MARKET orders arriving over the
+REST API (an algo/API-channel check) even though identical MARKET orders are
+accepted from the Shoonya WEB terminal (not an API/algo channel). This is NOT a
+CTS payload defect. The fix makes the outbound payload byte-match the official
+SDK regular-order schema and instruments placeOrder so the raw request/response
+can be captured live and sent to Finvasia support to enable API MARKET on the
+account.
+
+**Files:** MOD `brokers/shoonya/shoonya.adapter.ts`; NEW
+`backend/tests/shoonya_place_order_noren_payload_harness.cjs` (23).
+**Validated:** `@cts/api` typecheck exit 0; build exit 0; new harness 23/23;
+shoonya_copy_execution 35/35; full non-fyers regression green; fyers harnesses
+ALL PASS. testing_agent iteration_29: backend 100%, 0 issues, retest not needed.
+**NOT verifiable in pod** (no live Shoonya session): live MARKET acceptance after
+Finvasia enables API MARKET — user captures the now-logged raw request/response.
+
+**Git:** feature branch `feature/shoonya-noren-payload-diagnostics` → `--no-ff`
+merge into local `main`. NOT pushed — awaiting user approval (Save to GitHub).

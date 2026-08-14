@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { createHash } from 'crypto';
+import { Logger } from '@nestjs/common';
 import {
   BrokerAdapter,
   BrokerCapabilities,
@@ -97,6 +98,8 @@ export class ShoonyaAdapter implements BrokerAdapter {
   // exchange checksum + the authorize URL. Authenticated reads use the token.
   private apiKey = '';
   private secretCode = '';
+
+  private readonly logger = new Logger('ShoonyaAdapter');
 
   private accessToken = '';
   private uid = '';
@@ -367,13 +370,24 @@ export class ShoonyaAdapter implements BrokerAdapter {
    * Places an order on the Noren `PlaceOrder` endpoint. ALL Shoonya-specific
    * translation lives HERE (never in the copy-trading engine): the broker-
    * neutral order produced by the follower translator is mapped into the exact
-   * Noren field set (uid/actid/exch/tsym/qty/prc/prd/trantype/prctyp/ret).
+   * Noren field set.
    *
    *   product   MIS/INTRADAY/I → 'I' · CNC/DELIVERY/C → 'C' · NRML/NORMAL/MARGIN/M → 'M'
    *   side      BUY → 'B' · SELL → 'S'
    *   orderType MARKET → 'MKT' (prc '0') · LIMIT → 'LMT' (prc from price)
    *
-   * Ref: official ShoonyaApi-py / Noren place_order contract.
+   * Field set is aligned with the official ShoonyaApi-py `place_order` payload:
+   *   ordersource, uid, actid, trantype, prd, exch, tsym (URL-encoded),
+   *   qty, dscqty, prctyp, prc, trgprc (SL only), ret, remarks, amo.
+   * `tsym` is URL-encoded exactly as the official SDK does
+   * (`urllib.parse.quote_plus`) so symbols like `M&M-EQ` are not truncated.
+   *
+   * DIAGNOSTICS: the EXACT final Noren request (endpoint + every field + the
+   * complete jData JSON) is logged immediately BEFORE transmission, and the raw
+   * broker response immediately AFTER — so a live rejection (e.g. the reported
+   * "ALGO_CHK: MKT Order type not allowed for API order") can be captured
+   * verbatim for a Finvasia support case. Logging never mutates the payload and
+   * never swallows the response.
    */
   async placeOrder(order: any) {
     if (!this.accessToken) {
@@ -384,10 +398,15 @@ export class ShoonyaAdapter implements BrokerAdapter {
     }
 
     const exch = String(order?.exchange ?? order?.exch ?? 'NSE').trim().toUpperCase();
-    const tsym = String(order?.tradingSymbol ?? order?.tsym ?? order?.symbol ?? '').trim();
-    if (!tsym) {
+    const rawTsym = String(order?.tradingSymbol ?? order?.tsym ?? order?.symbol ?? '').trim();
+    if (!rawTsym) {
       throw new Error('Shoonya order is missing a trading symbol (tsym).');
     }
+    // Official SDK URL-encodes the trading symbol inside the jData JSON
+    // (quote_plus). The transport (`post`) does NOT re-encode the jData string,
+    // so encoding here matches the SDK byte-for-byte. Idempotent for plain
+    // symbols like TATASTEEL-EQ; correct for M&M-EQ → M%26M-EQ.
+    const tsym = encodeURIComponent(rawTsym);
 
     const qtyNum = Number(order?.quantity ?? order?.qty);
     if (!Number.isFinite(qtyNum) || qtyNum <= 0) {
@@ -397,9 +416,16 @@ export class ShoonyaAdapter implements BrokerAdapter {
     const sideRaw = String(order?.side ?? order?.trantype ?? '').trim().toUpperCase();
     const trantype = sideRaw === 'SELL' || sideRaw === 'S' ? 'S' : 'B';
 
+    // Price type. Copy fan-out places MARKET; LIMIT/SL retained for manual/
+    // future callers. MARKET stays MARKET (never silently converted to LIMIT).
     const otRaw = String(order?.orderType ?? order?.prctyp ?? 'MARKET').trim().toUpperCase();
-    const isLimit = otRaw === 'LIMIT' || otRaw === 'LMT';
-    const prctyp = isLimit ? 'LMT' : 'MKT';
+    let prctyp: 'MKT' | 'LMT' | 'SL-MKT' | 'SL-LMT';
+    if (otRaw === 'LIMIT' || otRaw === 'LMT') prctyp = 'LMT';
+    else if (otRaw === 'SL-LMT' || otRaw === 'SL') prctyp = 'SL-LMT';
+    else if (otRaw === 'SL-MKT' || otRaw === 'SL-M') prctyp = 'SL-MKT';
+    else prctyp = 'MKT';
+    const isLimitPriced = prctyp === 'LMT' || prctyp === 'SL-LMT';
+    const isTriggered = prctyp === 'SL-MKT' || prctyp === 'SL-LMT';
 
     const prd = ShoonyaAdapter.mapProduct(order?.product);
     if (!prd) {
@@ -410,25 +436,114 @@ export class ShoonyaAdapter implements BrokerAdapter {
     }
 
     const priceNum = Number(order?.price ?? order?.prc ?? 0);
-    const prc = isLimit && Number.isFinite(priceNum) ? String(priceNum) : '0';
+    const prc = isLimitPriced && Number.isFinite(priceNum) ? String(priceNum) : '0';
+
+    const trigNum = Number(order?.triggerPrice ?? order?.trgprc ?? 0);
 
     const ret = String(order?.validity ?? order?.ret ?? 'DAY').trim().toUpperCase();
 
+    // Free-text tag, alphanumeric only (Noren rejects some special chars).
+    const remarks = String(order?.remarks ?? 'CTSCopy').replace(/[^a-zA-Z0-9]/g, '').slice(0, 20) || 'CTSCopy';
+
+    // AMO flag: 'YES' only when explicitly requested; otherwise a regular order.
+    const amo = String(order?.amo ?? '').trim().toUpperCase() === 'YES' ? 'YES' : 'NO';
+
+    // Noren PlaceOrder body — ordered to mirror the official SDK payload.
     const jData: Record<string, any> = {
+      ordersource: 'API',
       uid: this.uid,
       actid: this.actid || this.uid,
+      trantype,
+      prd,
       exch,
       tsym,
       qty: String(Math.trunc(qtyNum)),
-      prc,
-      prd,
-      trantype,
+      dscqty: '0',
       prctyp,
+      prc,
       ret,
-      ordersource: 'API',
+      remarks,
+      amo,
     };
+    // trigger price only for stop-loss variants (SDK omits it otherwise).
+    if (isTriggered) {
+      jData.trgprc = Number.isFinite(trigNum) ? String(trigNum) : '0';
+    }
 
-    return this.post('PlaceOrder', jData);
+    this.logPlaceOrderRequest(jData);
+
+    try {
+      const res = await this.post('PlaceOrder', jData);
+      this.logPlaceOrderResponse(jData, res, null);
+      return res;
+    } catch (err: any) {
+      this.logPlaceOrderResponse(jData, null, err);
+      throw err;
+    }
+  }
+
+  /**
+   * DIAGNOSTICS (log-only) — the EXACT final Noren PlaceOrder request, printed
+   * immediately before transmission. Access token is NEVER logged (it travels
+   * as the `jKey` body field + Bearer header inside `post`, not in jData).
+   */
+  private logPlaceOrderRequest(jData: Record<string, any>): void {
+    const endpoint = `${this.baseUrl}/PlaceOrder`;
+    const f = (k: string) => (jData[k] === undefined ? '(not sent)' : String(jData[k]));
+    const block = [
+      '=============================================',
+      '[ShoonyaAdapter] NOREN PLACE ORDER — REQUEST',
+      '=============================================',
+      `Method            : POST`,
+      `Endpoint          : ${endpoint}`,
+      `Content-Type      : application/x-www-form-urlencoded`,
+      `Body shape        : jData=<json>&jKey=<access_token masked>`,
+      `ordersource       : ${f('ordersource')}`,
+      `uid               : ${f('uid')}`,
+      `actid             : ${f('actid')}`,
+      `trantype          : ${f('trantype')}`,
+      `prd               : ${f('prd')}`,
+      `exch              : ${f('exch')}`,
+      `tsym (encoded)    : ${f('tsym')}`,
+      `qty               : ${f('qty')}`,
+      `dscqty            : ${f('dscqty')}`,
+      `prctyp            : ${f('prctyp')}`,
+      `prc               : ${f('prc')}`,
+      `trgprc            : ${f('trgprc')}`,
+      `ret               : ${f('ret')}`,
+      `remarks           : ${f('remarks')}`,
+      `amo               : ${f('amo')}`,
+      `Complete jData    : ${safeJson(jData)}`,
+      `Raw HTTP body     : jData=${safeJson(jData)}&jKey=***MASKED***`,
+      '=============================================',
+    ].join('\n');
+    this.logger.log('\n' + block);
+  }
+
+  /** DIAGNOSTICS (log-only) — the raw broker response / error, post-transmission. */
+  private logPlaceOrderResponse(
+    jData: Record<string, any>,
+    res: unknown,
+    err: any,
+  ): void {
+    const block = [
+      '=============================================',
+      '[ShoonyaAdapter] NOREN PLACE ORDER — RESPONSE',
+      '=============================================',
+      `tsym              : ${String(jData?.tsym ?? '-')}`,
+      `prctyp            : ${String(jData?.prctyp ?? '-')}`,
+      err
+        ? `Outcome           : ERROR`
+        : `Outcome           : OK (stat=${(res as any)?.stat ?? '-'}, norenordno=${(res as any)?.norenordno ?? '-'})`,
+      err
+        ? `Error message     : ${err?.message ?? String(err)}`
+        : `Raw response      : ${safeJson(res)}`,
+      err ? `Error type        : ${err?.error_type ?? err?.name ?? '-'}` : '',
+      '=============================================',
+    ]
+      .filter(Boolean)
+      .join('\n');
+    this.logger.log('\n' + block);
   }
 
   /**
@@ -468,6 +583,15 @@ export class ShoonyaAdapter implements BrokerAdapter {
 /** Small async delay used for retry backoff. */
 function delay(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+/** Safe JSON stringify for diagnostic logging (never throws). */
+function safeJson(value: unknown): string {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
 }
 
 /** Axios/node network errors that are safe to retry (transient transport). */
