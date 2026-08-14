@@ -151,16 +151,16 @@ const baseParams = (broker, overrides = {}) => ({
     ok(order.product === 'MIS', 'product MIS');
   }
 
-  console.log('Scenario 9 — Unsupported broker (SHOONYA) → BROKER_UNSUPPORTED, no adapter call');
+  console.log('Scenario 9 — SHOONYA now SUPPORTED → placed via adapter (was BROKER_UNSUPPORTED)');
   {
     let placed = false;
     const svc = new FollowerExecutionService(
-      mockBrokerService('SHOONYA', () => { placed = true; return {}; }),
+      mockBrokerService('SHOONYA', () => { placed = true; return { stat: 'Ok', norenordno: 'N-9' }; }),
     );
     const r = await svc.place(baseParams('SHOONYA'));
-    ok(r.category === ExecutionResultCategory.BROKER_UNSUPPORTED, 'category=BROKER_UNSUPPORTED');
-    ok(mapCategoryToStatus(r.category) === 'SKIPPED', 'maps to SKIPPED status');
-    ok(placed === false, 'adapter placeOrder never called for unsupported broker');
+    ok(r.category === ExecutionResultCategory.SUCCESS, 'category=SUCCESS (Shoonya copy execution implemented)');
+    ok(placed === true, 'adapter placeOrder WAS called for SHOONYA');
+    ok(r.brokerOrderId === 'N-9', 'Shoonya norenordno surfaced as broker order id');
   }
 
   console.log('Scenario 10 — No broker session → NO_BROKER_SESSION skip');

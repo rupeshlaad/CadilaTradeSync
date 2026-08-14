@@ -1,0 +1,48 @@
+{
+  "summary": "Static build + compiled-dist harness validation for CadilaTradeSync at /tmp/CadilaTradeSync (per user constraint: no servers, no DB/Redis, no live broker calls). Validated both reported bug fixes and full regression: (1) Zerodha product mapping INTRADAY->MIS/DELIVERY->CNC/NORMAL->NRML with pre-API validation and case-insensitive trimming; (2) Shoonya copy-execution translation now returns a real Noren PlaceOrder payload instead of BROKER_UNSUPPORTED skip. All 5 workspaces build clean, and 19 of 20 harnesses pass (the single non-pass is a pre-existing env/path limitation unrelated to this change).",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": { "ui_bugs": [], "integration_issues": [], "design_issues": [] },
+  "test_report_links": [
+    "/tmp/CadilaTradeSync/backend/tests/zerodha_product_mapping_harness.cjs",
+    "/tmp/CadilaTradeSync/backend/tests/shoonya_copy_execution_harness.cjs",
+    "/tmp/CadilaTradeSync/backend/tests/zerodha_follower_execution_harness.cjs",
+    "/tmp/CadilaTradeSync/backend/tests/follower_broker_payload_regression_harness.cjs"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Scope is tight and correct: git diff main shows only 4 source files touched (zerodha.adapter.ts, shoonya.adapter.ts, follower-order-translator.ts, broker-response-normalizer.ts) plus 2 pre-declared harness updates. No OAuth/callback/copy-trading orchestration/instrument translation code was modified.",
+    "Broker-specific encoding correctly stays inside adapters; the translator returns broker-neutral orders and delegates Noren-specific jData building to ShoonyaAdapter.placeOrder — good separation.",
+    "Zerodha mapProduct validates against VALID_KITE_PRODUCTS and throws BEFORE kite.placeOrder, preventing the exact 'Invalid product' rejection reported. market_protection=-1 injection for MARKET orders is preserved (no regression to prior sprint).",
+    "Pre-existing (NOT caused by this change): fyers_placement_credential_isolation_harness.cjs cannot resolve 'fyers-api-v3' from /tmp/CadilaTradeSync/backend/tests — MODULE_NOT_FOUND. No Fyers source files were touched; behavior identical to prior iterations."
+  ],
+  "updated_files": [],
+  "success_rate": { "backend": "100% (all reported bug scenarios + regression suite pass; 19/20 harnesses green, 1 pre-existing env limitation)", "frontend": "N/A (skipped per request)" },
+  "seed_data_creation": "None",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Project under test is /tmp/CadilaTradeSync (NOT /app). ZERODHA_API_KEY=test-key is required for any harness that instantiates ZerodhaAdapter. To run the fyers_*_harness.cjs files that hardcode /app/apps/api/dist, symlink /tmp/CadilaTradeSync/apps/api/dist to /app/apps/api/dist and remove after. fyers_placement_credential_isolation cannot resolve fyers-api-v3 from /tmp — this is a known env limitation, not a regression.",
+  "harness_results": {
+    "typecheck": "exit 0",
+    "pnpm_-r_build": "exit 0 (api, web, admin, ui, shared)",
+    "zerodha_product_mapping_harness": "27 passed, 0 failed",
+    "shoonya_copy_execution_harness": "35 passed, 0 failed",
+    "zerodha_follower_execution_harness": "38 passed, 0 failed",
+    "follower_broker_payload_regression_harness": "28 passed, 0 failed",
+    "zerodha_order_payload_harness": "29 passed, 0 failed",
+    "zerodha_copy_product_cnc_harness": "14 passed, 0 failed",
+    "instrument_translation_harness": "33 passed, 0 failed",
+    "manual_trade_market_fill_e2e_harness": "13 passed, ALL PASS",
+    "manual_trade_status_transition_harness": "24 passed, 0 failed",
+    "manual_trade_trace_harness": "25 passed, ALL PASS",
+    "integrity_dedupe_exchange_harness": "9/9 ALL PASS",
+    "manual_search_exchange_harness": "8/8 ALL PASS",
+    "shoonya_oauth_harness": "9/9 ALL PASS",
+    "shoonya_callback_context_harness": "10/10 ALL PASS",
+    "shoonya_cross_origin_recovery_harness": "8 passed, 0 failed",
+    "upstox_redirect_env_harness": "4/4 ALL PASS",
+    "fyers_account_isolation_harness": "ALL PASS",
+    "fyers_order_diagnostics_harness": "ALL PASS",
+    "fyers_reconnect_harness": "ALL PASS",
+    "fyers_placement_credential_isolation_harness": "MODULE_NOT_FOUND fyers-api-v3 — pre-existing env limitation, NOT a code regression (no Fyers source files were modified)"
+  }
+}

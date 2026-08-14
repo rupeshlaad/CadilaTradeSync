@@ -92,9 +92,25 @@ export function translateFollowerOrder(
         remark: 'CTS Copy',
       });
 
+    case Broker.SHOONYA:
+      // Broker-NEUTRAL intermediate only. All Shoonya/Noren-specific encoding
+      // (product → prd C/I/M, side → trantype B/S, MARKET/LIMIT → prctyp
+      // MKT/LMT, tsym/exch/prc/ret) lives INSIDE ShoonyaAdapter.placeOrder, so
+      // no broker-specific logic leaks into the copy-execution layer.
+      return {
+        exchange: params.exchange ?? params.instrument?.exchange ?? 'NSE',
+        tradingSymbol: params.brokerSymbol,
+        side: params.side,
+        quantity: params.quantity,
+        product: params.product ?? 'MIS',
+        orderType: 'MARKET',
+        price: 0,
+        validity: 'DAY',
+      };
+
     default:
-      // SHOONYA (and any future broker) has no copy-order translation yet —
-      // callers record BROKER_UNSUPPORTED. Unchanged behaviour for Shoonya.
+      // Any future broker with no copy-execution translation yet — callers
+      // record BROKER_UNSUPPORTED.
       return null;
   }
 }

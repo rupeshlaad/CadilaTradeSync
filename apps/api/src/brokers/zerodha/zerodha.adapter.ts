@@ -65,6 +65,63 @@ export class ZerodhaAdapter implements BrokerAdapter {
    */
   static readonly DEFAULT_MARKET_PROTECTION = -1;
 
+  /**
+   * CTS-internal / cross-broker product values → valid Kite Connect products.
+   *
+   * A copy follower mirrors the MASTER's product, and the master may be any
+   * broker whose native product vocabulary differs from Kite's. The reported
+   * bug: a FYERS master places `productType='INTRADAY'`; that flows verbatim as
+   * `event.product` into the Zerodha follower payload and Kite rejects it with
+   * "Invalid `product`" because Kite only accepts MIS / CNC / NRML (+ MTF / CO /
+   * BO). This map is the SINGLE place that translation happens so CTS-internal
+   * enums can never reach the Kite API untranslated. Already-valid Kite values
+   * pass straight through (CNC stays CNC — no regression to the CNC flow).
+   *   INTRADAY → MIS · DELIVERY → CNC · NORMAL/MARGIN → NRML
+   */
+  static readonly PRODUCT_MAP: Readonly<Record<string, string>> = {
+    MIS: 'MIS',
+    INTRADAY: 'MIS',
+    I: 'MIS',
+    CNC: 'CNC',
+    DELIVERY: 'CNC',
+    C: 'CNC',
+    NRML: 'NRML',
+    NORMAL: 'NRML',
+    MARGIN: 'NRML',
+    M: 'NRML',
+  };
+
+  /** Products Kite Connect natively accepts (pass straight through). */
+  static readonly VALID_KITE_PRODUCTS: ReadonlySet<string> = new Set([
+    'MIS',
+    'CNC',
+    'NRML',
+    'MTF',
+    'CO',
+    'BO',
+  ]);
+
+  /**
+   * Translate a CTS-internal / cross-broker product into a valid Kite product,
+   * or throw BEFORE the broker API call when it cannot be resolved (adapter-
+   * level validation — an unsupported value never reaches Kite). Pure.
+   */
+  private mapProduct(product: unknown): string {
+    const raw = String(product ?? '').trim();
+    if (!raw) return 'MIS'; // preserve the pre-existing default
+    const up = raw.toUpperCase();
+    const mapped =
+      ZerodhaAdapter.PRODUCT_MAP[up] ??
+      (ZerodhaAdapter.VALID_KITE_PRODUCTS.has(up) ? up : null);
+    if (!mapped) {
+      throw new Error(
+        `Invalid product "${raw}" for Zerodha (Kite Connect). ` +
+          `Supported: MIS, CNC, NRML (CTS mapping: INTRADAY→MIS, DELIVERY→CNC, NORMAL→NRML).`,
+      );
+    }
+    return mapped;
+  }
+
   constructor() {
     this.kite = new KiteConnect({
       api_key: process.env.ZERODHA_API_KEY!,
@@ -137,6 +194,14 @@ export class ZerodhaAdapter implements BrokerAdapter {
 
     const variety = String(params.variety ?? 'regular').toLowerCase();
     delete params.variety;
+
+    // Translate + validate the product into a valid Kite value BEFORE the
+    // API call (only when a product was supplied; Kite requires one for a real
+    // placement and every CTS caller provides it). Throws on an unsupported
+    // value so a CTS-internal enum never reaches Kite as "Invalid `product`".
+    if (params.product !== undefined && params.product !== null && params.product !== '') {
+      params.product = this.mapProduct(params.product);
+    }
 
     const orderType = String(params.order_type ?? '').toUpperCase();
     const isMarketExecution = orderType === 'MARKET' || orderType === 'SL-M';
