@@ -50,7 +50,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 export const api = {
   // ---------- Auth ----------
   register: (email: string, password: string, name?: string) =>
-    request<AuthResponse & { emailVerificationSent?: boolean }>('/auth/register', { method: 'POST', body: JSON.stringify({ email, password, name }) }),
+    request<{ user: PublicUser; emailVerified: boolean; emailVerificationSent?: boolean }>('/auth/register', { method: 'POST', body: JSON.stringify({ email, password, name }) }),
   login: (email: string, password: string) =>
     request<AuthResponse>('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) }),
   me: () => request<PublicUser>('/auth/me'),

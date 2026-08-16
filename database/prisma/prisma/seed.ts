@@ -14,23 +14,26 @@ async function main() {
       role: Role.ADMIN,
       isActive: true,
       name: 'Rupesh Laad',
+      emailVerified: true,
     },
     create: {
       email: 'rupesh.laad@gmail.com',
       password: adminPassword,
       name: 'Rupesh Laad',
       role: Role.ADMIN,
+      emailVerified: true,
     },
   });
 
   const user = await prisma.user.upsert({
     where: { email: 'user@cts.local' },
-    update: {},
+    update: { emailVerified: true },
     create: {
       email: 'user@cts.local',
       password: userPassword,
       name: 'Demo User',
       role: Role.USER,
+      emailVerified: true,
     },
   });
 

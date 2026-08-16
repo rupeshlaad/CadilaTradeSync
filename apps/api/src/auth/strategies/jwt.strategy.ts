@@ -50,6 +50,12 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
 
     if (!user) throw new UnauthorizedException('User no longer exists');
     if (!user.isActive) throw new UnauthorizedException('Account is disabled');
+    // First authentication gate (backend-authoritative): an unverified account
+    // cannot access any protected route, even with a valid signature. Existing
+    // pre-migration users were backfilled emailVerified=true and pass here.
+    if (!user.emailVerified) {
+      throw new UnauthorizedException('Please verify your email before continuing');
+    }
 
     if (user.passwordChangedAt && payload.iat) {
       const changedAtSec = Math.floor(user.passwordChangedAt.getTime() / 1000);

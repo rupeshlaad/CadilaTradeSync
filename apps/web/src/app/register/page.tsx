@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { ThemeToggle } from '@/components/theme-toggle';
-import { api, auth } from '@/lib/api';
+import { api } from '@/lib/api';
 
 export default function RegisterPage() {
   const router = useRouter();
@@ -27,7 +27,8 @@ export default function RegisterPage() {
     setError(null);
     try {
       const res = await api.register(email, password, name || undefined);
-      auth.saveToken(res.tokens.accessToken);
+      // Email verification is the first gate — no session is issued at
+      // registration. The user must verify, then sign in.
       setEmailSent(res.emailVerificationSent ?? false);
       setRegistered(true);
     } catch (err: any) {
@@ -66,7 +67,7 @@ export default function RegisterPage() {
           <CardTitle>{registered ? 'Verify your email' : 'Create account'}</CardTitle>
           <CardDescription>
             {registered
-              ? 'Your account was created. Please verify your email to unlock live copy trading.'
+              ? 'Your account was created. Verify your email to activate sign-in.'
               : 'Get started with your Candila TradeSync workspace.'}
           </CardDescription>
         </CardHeader>
@@ -82,14 +83,13 @@ export default function RegisterPage() {
                 ) : (
                   <p data-testid="register-email-not-configured">
                     Your account is created. Email delivery is <span className="font-medium">not configured in this environment yet</span>,
-                    so no verification email was sent. You can verify later from{' '}
-                    <span className="font-medium">Settings</span> once email is configured.
+                    so no verification email was sent. Ask your administrator to configure email, then use “Resend link”.
                   </p>
                 )}
                 <p className="text-muted-foreground">
-                  You can start exploring now, but{' '}
-                  <span className="font-medium text-foreground">live copy trading stays locked until your email is verified</span>.
-                  After verification, your account becomes eligible to enable copy trading (subject to the remaining onboarding steps).
+                  <span className="font-medium text-foreground">You must verify your email before you can sign in.</span>{' '}
+                  After verifying, sign in to continue onboarding (accept Terms, connect a broker, choose a strategy).
+                  Live copy trading stays locked until those steps are complete.
                 </p>
               </div>
               {resendMsg && <p className="text-sm text-muted-foreground" data-testid="register-resend-msg">{resendMsg}</p>}
@@ -97,8 +97,8 @@ export default function RegisterPage() {
                 <Button variant="outline" className="flex-1" onClick={onResend} data-testid="register-resend-btn">
                   Resend link
                 </Button>
-                <Button className="flex-1" onClick={() => router.push('/dashboard')} data-testid="register-continue-btn">
-                  Continue
+                <Button className="flex-1" onClick={() => router.push('/login')} data-testid="register-continue-btn">
+                  Go to sign in
                 </Button>
               </div>
             </div>

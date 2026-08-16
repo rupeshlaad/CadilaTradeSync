@@ -62,13 +62,14 @@ export class AuthService {
       },
     );
 
-    // Authentication is granted (a session), but the account is NOT yet live
-    // eligible — that is decided server-side by EligibilityService.
+    // Sprint 1 remediation: email verification is the FIRST authentication
+    // gate. Registration does NOT issue a session — the user must verify their
+    // email and then sign in. The gate is therefore authoritative at the token
+    // layer (no token ⇒ no access to any protected route or the dashboard).
     return {
-      ...this.issue(user),
+      user: this.users.toPublic(user),
       emailVerified: user.emailVerified,
-      // Honest signal for the UI: false when no SMTP transport is configured
-      // (dev/test) so we never pretend an email was delivered.
+      // Honest signal for the UI: false when SMTP could not dispatch (dev/test).
       emailVerificationSent,
     };
   }
@@ -80,6 +81,10 @@ export class AuthService {
     const ok = await bcrypt.compare(password, user.password);
     if (!ok) throw new UnauthorizedException('Invalid credentials');
     if (!user.isActive) throw new UnauthorizedException('Account is disabled');
+    // First authentication gate — unverified users cannot sign in.
+    if (!user.emailVerified) {
+      throw new UnauthorizedException('Please verify your email before signing in.');
+    }
     return { ...this.issue(user), emailVerified: user.emailVerified };
   }
 
@@ -179,19 +184,43 @@ export class AuthService {
 
   /**
    * Returns the current terms version + display content for the acceptance
-   * dialog. Content is configurable via TERMS_CONTENT; otherwise a clearly
-   * non-legal placeholder is used (no invented legal wording).
+   * dialog. Content is configurable via TERMS_CONTENT; otherwise a concise
+   * default Terms of Service is used, aligned with the Kamal Securities /
+   * Candila FinTech legal documents (linked within the text).
    */
   currentTerms(): { version: string; content: string } {
     const version = this.currentTermsVersion();
     const content =
       this.config.get<string>('TERMS_CONTENT') ??
-      'PLACEHOLDER TERMS OF SERVICE.\n\n' +
-        'By accepting, you acknowledge that Candila TradeSync is a copy-trading ' +
-        'platform, that trading in financial markets carries risk, and that you ' +
-        'are solely responsible for your broker accounts and trading decisions. ' +
-        'This is placeholder text pending the final legal Terms of Service ' +
-        '(configure via TERMS_CONTENT / TERMS_VERSION).';
+      `Candila TradeSync — Terms of Service (Version ${version})
+Operated by Candila FinTech, powered by Candila Capital Pvt. Ltd.
+
+1. The Platform. Candila TradeSync is a multi-broker copy-trading platform that lets you connect broker accounts and mirror trades. By accepting, you agree to these Terms together with our Privacy Policy, Disclaimer and Terms of Use.
+
+2. Account Security. You are responsible for keeping your login credentials confidential and for all activity under your account. You must provide accurate information and use the platform only for lawful purposes.
+
+3. Broker Connectivity & Authorization. You authorise Candila TradeSync to connect to the broker accounts you link and to place orders on your behalf according to your copy-trading configuration. You remain the owner of, and are responsible for, your broker accounts and their credentials.
+
+4. Copy Trading & Market Risk. Trading in financial markets involves substantial risk, including the possible loss of capital. Past performance does not guarantee future results. You are solely responsible for your trading decisions, strategy selections and risk settings.
+
+5. No Guarantees. We do not guarantee any profit, return, order execution, data accuracy, or uninterrupted or error-free availability of the service. Nothing on the platform constitutes investment, financial, legal or tax advice.
+
+6. Third-Party Brokers & Services. The platform relies on third-party brokers, market-data and infrastructure providers. We are not responsible for their availability, actions, delays or decisions, including order rejections or account restrictions.
+
+7. Service Limitations & Changes. We may modify, suspend, limit or discontinue any feature at any time. We may suspend or terminate access for breach of these Terms, suspected misuse, or where required by law, a broker or a regulator.
+
+8. Limitation of Liability. To the maximum extent permitted by applicable law, Candila FinTech, Candila Capital Pvt. Ltd. and their affiliates shall not be liable for any direct, indirect, incidental, consequential or special damages, or for any trading losses, arising from use of the platform.
+
+9. Privacy & Compliance. Your information is handled in accordance with our Privacy Policy. You are responsible for ensuring compliance with the laws and regulations applicable in your jurisdiction.
+
+10. Governing Law. These Terms are governed by the laws of India and are subject to the jurisdiction of the competent courts in India.
+
+Full legal documents:
+- Terms of Use: https://kamalsecurities.com/terms-of-use
+- Disclaimer: https://kamalsecurities.com/disclaimer
+- Privacy Policy: https://kamalsecurities.com/privacy-policy
+
+By ticking the box and selecting "I Accept", you acknowledge that you have read, understood and agree to these Terms of Service (Version ${version}).`;
     return { version, content };
   }
 

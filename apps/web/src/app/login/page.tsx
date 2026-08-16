@@ -17,6 +17,8 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [banner, setBanner] = useState<string | null>(null);
+  const [needsVerify, setNeedsVerify] = useState(false);
+  const [resendMsg, setResendMsg] = useState<string | null>(null);
 
   // Read one-time status flags from the URL (client-only; avoids needing a
   // Suspense boundary for useSearchParams).
@@ -33,14 +35,33 @@ export default function LoginPage() {
     e.preventDefault();
     setLoading(true);
     setError(null);
+    setNeedsVerify(false);
+    setResendMsg(null);
     try {
       const res = await api.login(email, password);
       auth.saveToken(res.tokens.accessToken);
       router.push('/dashboard');
     } catch (err: any) {
-      setError(err.message ?? 'Login failed');
+      const msg = err.message ?? 'Login failed';
+      setError(msg);
+      // Surface a resend action when the email-verification gate blocks login.
+      if (/verify your email/i.test(msg)) setNeedsVerify(true);
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function onResendVerification() {
+    setResendMsg(null);
+    try {
+      const res = await api.resendVerification(email);
+      setResendMsg(
+        res.emailConfigured === false
+          ? 'Email delivery is not configured yet, so no email was sent. Please contact your administrator.'
+          : res.message,
+      );
+    } catch (err: any) {
+      setResendMsg(err.message ?? 'Could not resend right now.');
     }
   }
 
@@ -74,7 +95,16 @@ export default function LoginPage() {
               <Label htmlFor="password">Password</Label>
               <Input id="password" type="password" required minLength={6} value={password} onChange={(e) => setPassword(e.target.value)} />
             </div>
-            {error && <p className="text-sm text-destructive">{error}</p>}
+            {error && <p className="text-sm text-destructive" data-testid="login-error">{error}</p>}
+            {needsVerify && (
+              <div className="rounded-md border bg-muted/40 p-3 text-sm space-y-2" data-testid="login-verify-required">
+                <p>Your email isn&apos;t verified yet. Check your inbox for the verification link.</p>
+                <Button type="button" variant="outline" size="sm" onClick={onResendVerification} data-testid="login-resend-verification-btn">
+                  Resend verification email
+                </Button>
+                {resendMsg && <p className="text-muted-foreground" data-testid="login-resend-msg">{resendMsg}</p>}
+              </div>
+            )}
             <Button type="submit" className="w-full" disabled={loading}>
               {loading ? 'Signing in…' : 'Sign in'}
             </Button>
