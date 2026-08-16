@@ -12,6 +12,7 @@ import bcrypt from 'bcryptjs';
 import { UsersService } from '../users/users.service';
 import { AuthTokenService } from './tokens/auth-token.service';
 import { MailService } from '../mail/mail.service';
+import { webAppBaseUrl } from '../brokers/broker-callback-redirect';
 
 const BCRYPT_ROUNDS = 10;
 const VERIFICATION_TTL_MS = 24 * 60 * 60 * 1000; // 24h
@@ -207,7 +208,11 @@ export class AuthService {
   // ---------------- helpers ----------------
 
   private webBaseUrl(): string {
-    return this.config.get<string>('APP_WEB_URL', 'http://localhost:3000').replace(/\/+$/, '');
+    // Authoritative Web frontend base URL uses the EXISTING CTS convention
+    // (WEB_APP_URL), shared with broker callback redirects, so auth email links
+    // match the deployment. Falls back to localhost only when WEB_APP_URL is
+    // unset. The legacy APP_WEB_URL variable is intentionally NOT used.
+    return webAppBaseUrl();
   }
 
   private issue(user: { id: string; email: string; role: Role }) {
