@@ -58,6 +58,13 @@ enum AccountType {
   FOLLOWER
 }
 
+// Sprint 1 — single-use, expiring auth token purposes (email verification and
+// password reset). Only a SHA-256 hash of the token is stored (see AuthToken).
+enum AuthTokenPurpose {
+  EMAIL_VERIFICATION
+  PASSWORD_RESET
+}
+
 // ---------- Models ----------
 
 model User {
@@ -67,15 +74,46 @@ model User {
   name      String?
   role      Role     @default(USER)
   isActive  Boolean  @default(true)
+
+  // Sprint 1 — production onboarding / authorization foundation.
+  // emailVerified gates LIVE eligibility (not authentication). Existing rows
+  // are backfilled to true by the migration so current users are never locked
+  // out. passwordChangedAt revokes JWTs issued before a reset/change.
+  emailVerified    Boolean   @default(false)
+  emailVerifiedAt  DateTime?
+  termsAcceptedAt  DateTime?
+  termsVersion     String?
+  passwordChangedAt DateTime?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   tradingAccounts TradingAccount[]
   followerLinks   Follower[]       @relation("FollowerUser")
   subscriptions   Subscription[]
+  authTokens      AuthToken[]
 
   @@index([email])
   @@map("users")
+}
+
+// Sprint 1 — Email verification & password reset tokens. Single-use
+// (usedAt), time-boxed (expiresAt). ONLY the SHA-256 hash of the raw token is
+// persisted; the raw token exists only inside the emailed link.
+model AuthToken {
+  id        String           @id @default(uuid())
+  userId    String
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  purpose   AuthTokenPurpose
+  tokenHash String           @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime         @default(now())
+
+  @@index([userId])
+  @@index([purpose])
+  @@index([expiresAt])
+  @@map("auth_tokens")
 }
 
 model TradingAccount {

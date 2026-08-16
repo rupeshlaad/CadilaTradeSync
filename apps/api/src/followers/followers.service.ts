@@ -1,6 +1,7 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.module';
 import { BrokerService } from '../brokers/broker.service';
+import { EligibilityService } from '../eligibility/eligibility.service';
 import { SubscribeDto } from './dto/subscribe.dto';
 import { UpdateFollowerDto } from './dto/update-follower.dto';
 import { AccountType, SubscriptionStatus, Visibility } from '@prisma/client';
@@ -14,6 +15,11 @@ export class FollowersService {
     // uses so admins can inspect follower broker health without a parallel
     // implementation and without logging into the follower portal.
     private readonly broker: BrokerService,
+    // Sprint 1 — server-authoritative LIVE eligibility gate. A follower link
+    // may only be ENABLED (i.e. become eligible for live copy-trade fan-out)
+    // once the backend confirms the owning user is LIVE eligible. A frontend
+    // toggle is never the security boundary.
+    private readonly eligibility: EligibilityService,
   ) {}
 
   private serialize(row: any) {
@@ -103,6 +109,11 @@ export class FollowersService {
     const row = await this.prisma.follower.findUnique({ where: { id } });
     if (!row) throw new NotFoundException();
     if (row.followerUserId !== userId) throw new ForbiddenException();
+    // Sprint 1 — only permit ENABLING a follower link (going live) when the
+    // owner is LIVE eligible. Disabling and other edits are always allowed.
+    if (dto.enabled === true && row.enabled !== true) {
+      await this.eligibility.assertLiveEligible(userId);
+    }
     const updated = await this.prisma.follower.update({
       where: { id },
       data: {
@@ -149,6 +160,12 @@ export class FollowersService {
   async setEnabledByAdmin(followerId: string, enabled: boolean) {
     const row = await this.prisma.follower.findUnique({ where: { id: followerId } });
     if (!row) throw new NotFoundException('Follower not found');
+    // Sprint 1 — enabling live copy trading for a follower requires the owning
+    // user to be LIVE eligible, even when performed by an admin. Pausing
+    // (enabled=false) is always permitted.
+    if (enabled === true && row.enabled !== true) {
+      await this.eligibility.assertLiveEligible(row.followerUserId);
+    }
     const updated = await this.prisma.follower.update({
       where: { id: followerId },
       data: { enabled },

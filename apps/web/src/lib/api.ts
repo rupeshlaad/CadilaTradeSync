@@ -55,6 +55,41 @@ export const api = {
     request<AuthResponse>('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) }),
   me: () => request<PublicUser>('/auth/me'),
 
+  // ---------- Sprint 1 — Account security & onboarding ----------
+  forgotPassword: (email: string) =>
+    request<{ ok: boolean; message: string }>('/auth/forgot-password', {
+      method: 'POST',
+      body: JSON.stringify({ email }),
+    }),
+  resetPassword: (token: string, password: string) =>
+    request<{ ok: boolean; message: string }>('/auth/reset-password', {
+      method: 'POST',
+      body: JSON.stringify({ token, password }),
+    }),
+  verifyEmail: (token: string) =>
+    request<{ ok: boolean; message: string }>('/auth/verify-email', {
+      method: 'POST',
+      body: JSON.stringify({ token }),
+    }),
+  resendVerification: (email: string) =>
+    request<{ ok: boolean; message: string }>('/auth/resend-verification', {
+      method: 'POST',
+      body: JSON.stringify({ email }),
+    }),
+  changePassword: (currentPassword: string, newPassword: string) =>
+    request<AuthResponse & { message: string }>('/auth/change-password', {
+      method: 'POST',
+      body: JSON.stringify({ currentPassword, newPassword }),
+    }),
+  getTerms: () => request<{ version: string }>('/auth/terms'),
+  acceptTerms: (version?: string) =>
+    request<{ ok: boolean; termsVersion: string; termsAcceptedAt: string | null }>(
+      '/auth/accept-terms',
+      { method: 'POST', body: JSON.stringify({ version }) },
+    ),
+  eligibility: () =>
+    request<import('@cts/shared').EligibilityResult>('/eligibility/me'),
+
   // ---------- ICICI Direct (Sprint 6.2.1 manual API-Session auth) ----------
   icici: {
     connectSession: (tradingAccountId: string, apiSession: string) =>

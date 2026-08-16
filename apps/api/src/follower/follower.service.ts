@@ -20,7 +20,14 @@ export class FollowerService {
     const [user, brokerAccounts, followers, subscriptions] = await Promise.all([
       this.prisma.user.findUnique({
         where: { id: userId },
-        select: { id: true, email: true, name: true, createdAt: true },
+        select: {
+          id: true,
+          email: true,
+          name: true,
+          createdAt: true,
+          emailVerified: true,
+          termsAcceptedAt: true,
+        },
       }),
       this.prisma.tradingAccount.findMany({
         where: { userId, accountType: AccountType.FOLLOWER },
@@ -80,6 +87,8 @@ export class FollowerService {
       },
     });
     const strategySubscribed = a.activeFollowers > 0 || a.activeSubscriptions > 0;
+    const emailVerified = !!a.user?.emailVerified;
+    const termsAccepted = !!a.user?.termsAcceptedAt;
     const readyForTrading =
       profileComplete && brokerConnected && strategySubscribed;
 
@@ -88,6 +97,16 @@ export class FollowerService {
         key: 'PROFILE',
         label: 'Profile Completed',
         complete: profileComplete,
+      },
+      {
+        key: 'EMAIL_VERIFIED',
+        label: 'Email Verified',
+        complete: emailVerified,
+      },
+      {
+        key: 'TERMS',
+        label: 'Terms Accepted',
+        complete: termsAccepted,
       },
       {
         key: 'BROKER',

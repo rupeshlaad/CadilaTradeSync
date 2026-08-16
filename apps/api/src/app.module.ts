@@ -29,6 +29,8 @@ import { PositionLifecycleModule } from './position-lifecycle/position-lifecycle
 import { ManualTradingModule } from './manual-trading/manual-trading.module';
 import { OrderActionsModule } from './order-actions/order-actions.module';
 import { FollowerModule } from './follower/follower.module';
+import { MailModule } from './mail/mail.module';
+import { EligibilityModule } from './eligibility/eligibility.module';
 
 @Module({
   imports: [
@@ -48,6 +50,8 @@ import { FollowerModule } from './follower/follower.module';
     PrismaModule,
     RedisModule,
     EncryptionModule,
+    MailModule,
+    EligibilityModule,
     AuthModule,
     UsersModule,
     HealthModule,

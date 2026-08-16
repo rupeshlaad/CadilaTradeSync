@@ -81,8 +81,26 @@ export interface PublicUser {
   name: string | null;
   role: Role;
   isActive?: boolean;
+  emailVerified?: boolean;
+  emailVerifiedAt?: string | null;
+  termsAcceptedAt?: string | null;
+  termsVersion?: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+// Sprint 1 — server-authoritative LIVE eligibility (mirrors EligibilityService).
+export interface EligibilityCheck {
+  key: string;
+  label: string;
+  passed: boolean;
+  detail?: string;
+}
+
+export interface EligibilityResult {
+  liveEligible: boolean;
+  checks: EligibilityCheck[];
+  unmetReasons: string[];
 }
 
 export interface AuthTokens {
@@ -103,6 +121,7 @@ export interface RegisterRequest {
 export interface AuthResponse {
   user: PublicUser;
   tokens: AuthTokens;
+  emailVerified?: boolean;
 }
 
 export interface ApiError {
