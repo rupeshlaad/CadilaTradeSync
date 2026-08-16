@@ -346,7 +346,7 @@ export interface StrategySummaryDto {
 // ---------------------------------------------------------------------------
 
 export interface FollowerOnboardingStep {
-  key: 'PROFILE' | 'BROKER' | 'RISK' | 'STRATEGY' | 'READY';
+  key: 'PROFILE' | 'EMAIL_VERIFIED' | 'TERMS' | 'BROKER' | 'RISK' | 'STRATEGY' | 'READY';
   label: string;
   complete: boolean;
 }

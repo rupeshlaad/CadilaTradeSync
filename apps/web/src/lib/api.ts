@@ -50,14 +50,14 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 export const api = {
   // ---------- Auth ----------
   register: (email: string, password: string, name?: string) =>
-    request<AuthResponse>('/auth/register', { method: 'POST', body: JSON.stringify({ email, password, name }) }),
+    request<AuthResponse & { emailVerificationSent?: boolean }>('/auth/register', { method: 'POST', body: JSON.stringify({ email, password, name }) }),
   login: (email: string, password: string) =>
     request<AuthResponse>('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) }),
   me: () => request<PublicUser>('/auth/me'),
 
   // ---------- Sprint 1 — Account security & onboarding ----------
   forgotPassword: (email: string) =>
-    request<{ ok: boolean; message: string }>('/auth/forgot-password', {
+    request<{ ok: boolean; message: string; emailConfigured?: boolean }>('/auth/forgot-password', {
       method: 'POST',
       body: JSON.stringify({ email }),
     }),
@@ -72,16 +72,16 @@ export const api = {
       body: JSON.stringify({ token }),
     }),
   resendVerification: (email: string) =>
-    request<{ ok: boolean; message: string }>('/auth/resend-verification', {
+    request<{ ok: boolean; message: string; emailConfigured?: boolean }>('/auth/resend-verification', {
       method: 'POST',
       body: JSON.stringify({ email }),
     }),
   changePassword: (currentPassword: string, newPassword: string) =>
-    request<AuthResponse & { message: string }>('/auth/change-password', {
+    request<{ ok: boolean; message: string }>('/auth/change-password', {
       method: 'POST',
       body: JSON.stringify({ currentPassword, newPassword }),
     }),
-  getTerms: () => request<{ version: string }>('/auth/terms'),
+  getTerms: () => request<{ version: string; content: string }>('/auth/terms'),
   acceptTerms: (version?: string) =>
     request<{ ok: boolean; termsVersion: string; termsAcceptedAt: string | null }>(
       '/auth/accept-terms',

@@ -97,7 +97,7 @@ export class AuthController {
 
   @Get('terms')
   async terms() {
-    return { version: this.auth.currentTermsVersion() };
+    return this.auth.currentTerms();
   }
 
   @Post('accept-terms')

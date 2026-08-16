@@ -18,6 +18,7 @@ export default function RegisterPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [registered, setRegistered] = useState(false);
+  const [emailSent, setEmailSent] = useState(false);
   const [resendMsg, setResendMsg] = useState<string | null>(null);
 
   async function onSubmit(e: React.FormEvent) {
@@ -27,6 +28,7 @@ export default function RegisterPage() {
     try {
       const res = await api.register(email, password, name || undefined);
       auth.saveToken(res.tokens.accessToken);
+      setEmailSent(res.emailVerificationSent ?? false);
       setRegistered(true);
     } catch (err: any) {
       setError(err.message ?? 'Registration failed');
@@ -39,7 +41,11 @@ export default function RegisterPage() {
     setResendMsg(null);
     try {
       const res = await api.resendVerification(email);
-      setResendMsg(res.message);
+      setResendMsg(
+        res.emailConfigured === false
+          ? 'Email delivery is not configured in this environment yet, so no email was sent. You can verify later once your administrator configures email.'
+          : res.message,
+      );
     } catch (err: any) {
       setResendMsg(err.message ?? 'Could not resend right now.');
     }
@@ -67,10 +73,24 @@ export default function RegisterPage() {
         <CardContent>
           {registered ? (
             <div className="space-y-4" data-testid="register-verify-notice">
-              <div className="rounded-md border bg-muted/40 p-4 text-sm">
-                We&apos;ve sent a verification link to <span className="font-medium">{email}</span>.
-                Open it to verify your email. You can start exploring now, but{' '}
-                <span className="font-medium">live copy trading stays locked until your email is verified</span>.
+              <div className="rounded-md border bg-muted/40 p-4 text-sm space-y-2">
+                {emailSent ? (
+                  <p>
+                    We&apos;ve sent a verification link to <span className="font-medium">{email}</span>.
+                    Open it to verify your email.
+                  </p>
+                ) : (
+                  <p data-testid="register-email-not-configured">
+                    Your account is created. Email delivery is <span className="font-medium">not configured in this environment yet</span>,
+                    so no verification email was sent. You can verify later from{' '}
+                    <span className="font-medium">Settings</span> once email is configured.
+                  </p>
+                )}
+                <p className="text-muted-foreground">
+                  You can start exploring now, but{' '}
+                  <span className="font-medium text-foreground">live copy trading stays locked until your email is verified</span>.
+                  After verification, your account becomes eligible to enable copy trading (subject to the remaining onboarding steps).
+                </p>
               </div>
               {resendMsg && <p className="text-sm text-muted-foreground" data-testid="register-resend-msg">{resendMsg}</p>}
               <div className="flex gap-2">

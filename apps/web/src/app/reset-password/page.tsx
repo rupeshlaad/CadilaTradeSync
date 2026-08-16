@@ -56,7 +56,7 @@ function ResetPasswordInner() {
             <div className="rounded-md border bg-muted/40 p-4 text-sm" data-testid="reset-success-msg">
               Your password has been reset. Please sign in with your new password.
             </div>
-            <Button className="w-full" onClick={() => router.push('/login')} data-testid="reset-goto-login-btn">
+            <Button className="w-full" onClick={() => router.push('/login?reset=1')} data-testid="reset-goto-login-btn">
               Go to sign in
             </Button>
           </div>

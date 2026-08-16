@@ -36,16 +36,24 @@ export class MailService {
     return !!this.config.get<string>('SMTP_HOST');
   }
 
+  /** Whether a real email transport is configured (drives honest UI/messaging). */
+  isConfigured(): boolean {
+    return this.transportConfigured;
+  }
+
   async send(message: MailMessage): Promise<{ delivered: boolean }> {
     if (!this.transportConfigured) {
-      // Safe dev/unconfigured fallback: log that a mail WOULD be sent. The
-      // body (which contains the action link in dev) is only emitted at debug
-      // level so it is available locally but not in production logs by default.
+      // Safe dev/unconfigured fallback: log that a mail WOULD be sent.
       this.logger.warn(
         `[MailService] No SMTP transport configured — email NOT dispatched. ` +
           `to="${message.to}" subject="${message.subject}" from="${this.from}"`,
       );
-      this.logger.debug(`[MailService] (dev) body:\n${message.text}`);
+      // The body contains the action link (which embeds a token). NEVER emit
+      // it in production — only in non-production so local dev can follow the
+      // flow. Production logs must never expose verification/reset tokens.
+      if (process.env.NODE_ENV !== 'production') {
+        this.logger.debug(`[MailService] (dev only) body:\n${message.text}`);
+      }
       return { delivered: false };
     }
 
@@ -59,8 +67,8 @@ export class MailService {
     return { delivered: false };
   }
 
-  async sendVerificationEmail(to: string, link: string): Promise<void> {
-    await this.send({
+  async sendVerificationEmail(to: string, link: string): Promise<{ delivered: boolean }> {
+    return this.send({
       to,
       subject: 'Verify your Candila TradeSync email',
       text:
@@ -70,8 +78,8 @@ export class MailService {
     });
   }
 
-  async sendPasswordResetEmail(to: string, link: string): Promise<void> {
-    await this.send({
+  async sendPasswordResetEmail(to: string, link: string): Promise<{ delivered: boolean }> {
+    return this.send({
       to,
       subject: 'Reset your Candila TradeSync password',
       text:

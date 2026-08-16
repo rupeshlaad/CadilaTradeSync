@@ -86,7 +86,11 @@ export default function DashboardHome() {
                       window.location.href = '/dashboard/marketplace';
                     else if (step === 'RISK')
                       window.location.href = '/dashboard/subscriptions';
-                    else if (step === 'PROFILE')
+                    else if (
+                      step === 'PROFILE' ||
+                      step === 'EMAIL_VERIFIED' ||
+                      step === 'TERMS'
+                    )
                       window.location.href = '/dashboard/settings';
                   }}
                 />

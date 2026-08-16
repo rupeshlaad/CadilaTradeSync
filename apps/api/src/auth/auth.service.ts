@@ -54,13 +54,22 @@ export class AuthService {
     });
 
     // Fire the verification email (best-effort — never blocks registration).
-    await this.dispatchVerification(user.id, user.email).catch((e) =>
-      this.logger.warn(`Verification dispatch failed for new user: ${String(e)}`),
+    const emailVerificationSent = await this.dispatchVerification(user.id, user.email).catch(
+      (e) => {
+        this.logger.warn(`Verification dispatch failed for new user: ${String(e)}`);
+        return false;
+      },
     );
 
     // Authentication is granted (a session), but the account is NOT yet live
     // eligible — that is decided server-side by EligibilityService.
-    return { ...this.issue(user), emailVerified: user.emailVerified };
+    return {
+      ...this.issue(user),
+      emailVerified: user.emailVerified,
+      // Honest signal for the UI: false when no SMTP transport is configured
+      // (dev/test) so we never pretend an email was delivered.
+      emailVerificationSent,
+    };
   }
 
   async login(email: string, password: string) {
@@ -75,10 +84,11 @@ export class AuthService {
 
   // ---------------- Email verification ----------------
 
-  private async dispatchVerification(userId: string, email: string) {
+  private async dispatchVerification(userId: string, email: string): Promise<boolean> {
     const raw = await this.tokens.issue(userId, AuthTokenPurpose.EMAIL_VERIFICATION, VERIFICATION_TTL_MS);
     const link = `${this.webBaseUrl()}/verify-email?token=${encodeURIComponent(raw)}`;
-    await this.mail.sendVerificationEmail(email, link);
+    const { delivered } = await this.mail.sendVerificationEmail(email, link);
+    return delivered;
   }
 
   async verifyEmail(token: string) {
@@ -100,7 +110,9 @@ export class AuthService {
         this.logger.warn(`Resend verification failed: ${String(e)}`),
       );
     }
-    return GENERIC_EMAIL_RESPONSE;
+    // emailConfigured is global server state (not account-specific) so it does
+    // not enable enumeration, but lets the UI be honest in dev/test.
+    return { ...GENERIC_EMAIL_RESPONSE, emailConfigured: this.mail.isConfigured() };
   }
 
   // ---------------- Forgot / Reset password ----------------
@@ -116,7 +128,7 @@ export class AuthService {
       );
     }
     // Identical response whether or not the email exists.
-    return GENERIC_EMAIL_RESPONSE;
+    return { ...GENERIC_EMAIL_RESPONSE, emailConfigured: this.mail.isConfigured() };
   }
 
   async resetPassword(token: string, newPassword: string) {
@@ -147,17 +159,39 @@ export class AuthService {
       throw new BadRequestException('New password must be different from the current password.');
     }
     const hash = await bcrypt.hash(newPassword, BCRYPT_ROUNDS);
+    // Bumps passwordChangedAt → revokes ALL existing sessions, including the
+    // caller's current token. The client MUST sign in again with the new
+    // password (frontend redirects to login). We intentionally do NOT re-issue
+    // a session here, so the security guarantee is not weakened.
     await this.users.setPassword(userId, hash);
-    // Re-issue a fresh session for the caller so they are not logged out by
-    // the passwordChangedAt revocation they just triggered.
-    const fresh = await this.users.findById(userId);
-    return { ...this.issue(fresh), message: 'Password changed successfully.' };
+    return {
+      ok: true,
+      message: 'Your password has been changed. Please sign in again.',
+    };
   }
 
   // ---------------- Terms / consent ----------------
 
   currentTermsVersion(): string {
     return this.config.get<string>('TERMS_VERSION', '1.0');
+  }
+
+  /**
+   * Returns the current terms version + display content for the acceptance
+   * dialog. Content is configurable via TERMS_CONTENT; otherwise a clearly
+   * non-legal placeholder is used (no invented legal wording).
+   */
+  currentTerms(): { version: string; content: string } {
+    const version = this.currentTermsVersion();
+    const content =
+      this.config.get<string>('TERMS_CONTENT') ??
+      'PLACEHOLDER TERMS OF SERVICE.\n\n' +
+        'By accepting, you acknowledge that Candila TradeSync is a copy-trading ' +
+        'platform, that trading in financial markets carries risk, and that you ' +
+        'are solely responsible for your broker accounts and trading decisions. ' +
+        'This is placeholder text pending the final legal Terms of Service ' +
+        '(configure via TERMS_CONTENT / TERMS_VERSION).';
+    return { version, content };
   }
 
   async acceptTerms(userId: string, version?: string) {

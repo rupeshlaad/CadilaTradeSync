@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -16,6 +16,18 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [banner, setBanner] = useState<string | null>(null);
+
+  // Read one-time status flags from the URL (client-only; avoids needing a
+  // Suspense boundary for useSearchParams).
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('pwchanged') === '1') {
+      setBanner('Your password has been changed. Please sign in again.');
+    } else if (params.get('reset') === '1') {
+      setBanner('Your password has been reset. Please sign in with your new password.');
+    }
+  }, []);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -48,6 +60,11 @@ export default function LoginPage() {
           <CardDescription>Sign in to your account to continue.</CardDescription>
         </CardHeader>
         <CardContent>
+          {banner && (
+            <div className="mb-4 rounded-md border bg-muted/40 p-3 text-sm" data-testid="login-banner">
+              {banner}
+            </div>
+          )}
           <form onSubmit={onSubmit} className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="email">Email</Label>

@@ -3,6 +3,7 @@ import { IsStrongPassword } from '../password-policy';
 
 export class RegisterDto {
   @IsEmail()
+  @MaxLength(254)
   email!: string;
 
   @IsStrongPassword()

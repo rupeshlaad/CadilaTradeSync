@@ -1,17 +1,21 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { api, auth } from '@/lib/api';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { TermsDialog } from '@/components/terms-dialog';
 import type { PublicUser, EligibilityResult } from '@cts/shared';
 
 export default function SettingsPage() {
+  const router = useRouter();
   const [user, setUser] = useState<PublicUser | null>(null);
   const [eligibility, setEligibility] = useState<EligibilityResult | null>(null);
+  const [termsOpen, setTermsOpen] = useState(false);
 
   // Change password form
   const [current, setCurrent] = useState('');
@@ -43,12 +47,10 @@ export default function SettingsPage() {
     setPwLoading(true);
     try {
       const res = await api.changePassword(current, next);
-      // A fresh session is returned (old JWTs are revoked) — keep the user logged in.
-      if (res?.tokens?.accessToken) auth.saveToken(res.tokens.accessToken);
-      setPwSuccess(res.message ?? 'Password changed successfully.');
-      setCurrent('');
-      setNext('');
-      setConfirm('');
+      setPwSuccess(res.message ?? 'Your password has been changed. Please sign in again.');
+      // Password change revokes ALL sessions (incl. this one). Force re-login.
+      auth.clear();
+      setTimeout(() => router.push('/login?pwchanged=1'), 1200);
     } catch (err: any) {
       setPwError(err.message ?? 'Could not change password.');
     } finally {
@@ -60,25 +62,37 @@ export default function SettingsPage() {
     setNotice(null);
     try {
       const res = await api.resendVerification(user!.email);
-      setNotice(res.message);
+      setNotice(
+        res.emailConfigured === false
+          ? 'Email delivery is not configured in this environment yet, so no email was sent. Ask your administrator to configure SMTP.'
+          : res.message,
+      );
     } catch (err: any) {
       setNotice(err.message ?? 'Could not resend right now.');
     }
   }
 
-  async function onAcceptTerms() {
-    setNotice(null);
-    try {
-      await api.acceptTerms();
-      setNotice('Terms accepted.');
-      refresh();
-    } catch (err: any) {
-      setNotice(err.message ?? 'Could not accept terms.');
-    }
-  }
-
   const emailVerified = !!user?.emailVerified;
   const termsAccepted = !!user?.termsAcceptedAt;
+
+  // Actionable path for each unmet eligibility check.
+  function actionFor(key: string): { label: string; onClick: () => void; testid: string } | null {
+    switch (key) {
+      case 'EMAIL_VERIFIED':
+        return { label: 'Resend email', onClick: onResendVerification, testid: 'eligibility-action-EMAIL_VERIFIED' };
+      case 'TERMS_ACCEPTED':
+        return { label: 'Review & accept', onClick: () => setTermsOpen(true), testid: 'eligibility-action-TERMS_ACCEPTED' };
+      case 'PROFILE_COMPLETE':
+        return null;
+      case 'BROKER_READY':
+        return { label: 'Connect broker', onClick: () => router.push('/dashboard/broker-accounts'), testid: 'eligibility-action-BROKER_READY' };
+      case 'STRATEGY_READY':
+      case 'SUBSCRIPTION_READY':
+        return { label: 'Browse strategies', onClick: () => router.push('/dashboard/marketplace'), testid: `eligibility-action-${key}` };
+      default:
+        return null;
+    }
+  }
 
   return (
     <div className="space-y-6">
@@ -86,6 +100,8 @@ export default function SettingsPage() {
         <h2 className="text-2xl font-bold">Settings</h2>
         <p className="text-muted-foreground">Manage your profile and account security.</p>
       </div>
+
+      <TermsDialog open={termsOpen} onOpenChange={setTermsOpen} onAccepted={refresh} />
 
       {/* Live eligibility banner */}
       {eligibility && (
@@ -106,16 +122,23 @@ export default function SettingsPage() {
             </CardDescription>
           </CardHeader>
           <CardContent className="grid gap-2 text-sm">
-            {eligibility.checks.map((c) => (
-              <div key={c.key} className="flex items-center justify-between gap-2" data-testid={`eligibility-check-${c.key}`}>
-                <span className={c.passed ? '' : 'text-muted-foreground'}>{c.label}</span>
-                {c.passed ? (
-                  <Badge variant="secondary">Done</Badge>
-                ) : (
-                  <span className="text-xs text-muted-foreground">{c.detail ?? 'Pending'}</span>
-                )}
-              </div>
-            ))}
+            {eligibility.checks.map((c) => {
+              const action = c.passed ? null : actionFor(c.key);
+              return (
+                <div key={c.key} className="flex items-center justify-between gap-2" data-testid={`eligibility-check-${c.key}`}>
+                  <span className={c.passed ? '' : 'text-muted-foreground'}>{c.label}</span>
+                  {c.passed ? (
+                    <Badge variant="secondary">Done</Badge>
+                  ) : action ? (
+                    <Button variant="outline" size="sm" onClick={action.onClick} data-testid={action.testid}>
+                      {action.label}
+                    </Button>
+                  ) : (
+                    <span className="text-xs text-muted-foreground">{c.detail ?? 'Pending'}</span>
+                  )}
+                </div>
+              );
+            })}
           </CardContent>
         </Card>
       )}
@@ -145,23 +168,29 @@ export default function SettingsPage() {
             <span className="col-span-2"><Badge variant="secondary">{user?.role ?? '—'}</Badge></span>
           </div>
           <div className="grid grid-cols-3 gap-2">
+            <span className="text-muted-foreground">Terms of Service</span>
+            <span className="col-span-2 flex items-center gap-2">
+              {termsAccepted
+                ? <Badge variant="secondary" data-testid="terms-accepted-badge">Accepted (v{user?.termsVersion ?? '—'})</Badge>
+                : <Badge variant="secondary" data-testid="terms-not-accepted-badge">Not accepted</Badge>}
+            </span>
+          </div>
+          <div className="grid grid-cols-3 gap-2">
             <span className="text-muted-foreground">Member since</span>
             <span className="col-span-2">{user ? new Date(user.createdAt).toLocaleString() : '—'}</span>
           </div>
-          {user && !emailVerified && (
-            <div className="pt-2">
+          <div className="flex flex-wrap gap-2 pt-2">
+            {user && !emailVerified && (
               <Button variant="outline" size="sm" onClick={onResendVerification} data-testid="settings-resend-verification-btn">
-                Resend verification email
+                Verify email (resend link)
               </Button>
-            </div>
-          )}
-          {user && !termsAccepted && (
-            <div className="pt-2">
-              <Button variant="outline" size="sm" onClick={onAcceptTerms} data-testid="settings-accept-terms-btn">
-                Accept Terms of Service
+            )}
+            {user && !termsAccepted && (
+              <Button variant="outline" size="sm" onClick={() => setTermsOpen(true)} data-testid="settings-accept-terms-btn">
+                Review &amp; accept Terms
               </Button>
-            </div>
-          )}
+            )}
+          </div>
           {notice && <p className="text-sm text-muted-foreground" data-testid="settings-notice">{notice}</p>}
         </CardContent>
       </Card>
