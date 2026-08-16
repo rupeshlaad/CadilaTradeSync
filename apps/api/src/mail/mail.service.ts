@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import nodemailer, { Transporter } from 'nodemailer';
 
 export interface MailMessage {
   to: string;
@@ -11,20 +12,20 @@ export interface MailMessage {
 /**
  * Sprint 1 — Transactional mail abstraction.
  *
- * This is a REAL delivery seam, not a mock: callers depend only on
- * `MailService`. A production SMTP/provider transport is wired later through
- * the documented environment variables (SMTP_HOST, SMTP_PORT, SMTP_USER,
- * SMTP_PASS, MAIL_FROM). When no transport is configured (this env / local
- * dev) it degrades safely to a structured log so the verification / reset
- * flows are fully exercisable without introducing a paid provider or real
- * credentials. No secrets are logged.
+ * Callers depend only on `MailService`. When SMTP is configured via the
+ * environment (SMTP_HOST/SMTP_PORT/SMTP_USER/SMTP_PASS/MAIL_FROM) a real
+ * nodemailer SMTP transport is used (Hostinger, port 587 STARTTLS by default);
+ * `delivered: true` is only returned after the SMTP submission succeeds. When
+ * SMTP is NOT configured it degrades safely to a structured dev log and always
+ * returns `delivered: false` — it never claims an email was sent.
  *
- * IMPORTANT: no email is actually dispatched here until a transport is
- * configured — clearly a pending configuration item, never claimed as sent.
+ * Security: SMTP credentials and password-reset/verification tokens are never
+ * logged. On failure only a safe error code is logged.
  */
 @Injectable()
 export class MailService {
   private readonly logger = new Logger(MailService.name);
+  private transporter?: Transporter;
 
   constructor(private readonly config: ConfigService) {}
 
@@ -39,6 +40,35 @@ export class MailService {
   /** Whether a real email transport is configured (drives honest UI/messaging). */
   isConfigured(): boolean {
     return this.transportConfigured;
+  }
+
+  /**
+   * Lazily builds and caches a single reusable transporter. Built only when
+   * SMTP is configured, so the API still boots normally without SMTP (dev).
+   * Port 587 uses STARTTLS (secure=false, requireTLS=true); port 465 uses
+   * implicit TLS. Certificate verification stays enabled.
+   */
+  private getTransporter(): Transporter {
+    if (this.transporter) return this.transporter;
+
+    const host = this.config.get<string>('SMTP_HOST')!;
+    const port = Number(this.config.get<string>('SMTP_PORT', '587'));
+    const user = this.config.get<string>('SMTP_USER');
+    const pass = this.config.get<string>('SMTP_PASS');
+    const secure = port === 465;
+
+    this.transporter = nodemailer.createTransport({
+      host,
+      port,
+      secure,
+      requireTLS: !secure, // enforce STARTTLS upgrade on 587
+      auth: user && pass ? { user, pass } : undefined,
+      tls: { minVersion: 'TLSv1.2' },
+      connectionTimeout: 60_000,
+      greetingTimeout: 30_000,
+      socketTimeout: 300_000,
+    });
+    return this.transporter;
   }
 
   async send(message: MailMessage): Promise<{ delivered: boolean }> {
@@ -57,14 +87,36 @@ export class MailService {
       return { delivered: false };
     }
 
-    // Transport wiring point. A nodemailer/provider transport is added in a
-    // later infrastructure task; until then a configured-but-unimplemented
-    // transport must fail loudly rather than silently drop mail.
-    this.logger.error(
-      `[MailService] SMTP_HOST is set but no transport implementation is wired yet. ` +
-        `Configure the transport before enabling live email. to="${message.to}"`,
-    );
-    return { delivered: false };
+    try {
+      const info = await this.getTransporter().sendMail({
+        from: this.from,
+        to: message.to,
+        subject: message.subject,
+        text: message.text,
+        ...(message.html ? { html: message.html } : {}),
+      });
+      // Safe success log — no credentials, no token/link body.
+      this.logger.log(
+        `[MailService] Email dispatched to="${message.to}" subject="${message.subject}" messageId="${info?.messageId ?? 'n/a'}"`,
+      );
+      return { delivered: true };
+    } catch (err: unknown) {
+      // Never log the raw error (may contain connection/auth context) — only a
+      // safe error code. Do not throw: auth flows stay resilient and simply
+      // report delivered=false so the UI never claims a false success.
+      this.logger.error(
+        `[MailService] Email delivery failed to="${message.to}" code="${this.safeErrorCode(err)}"`,
+      );
+      return { delivered: false };
+    }
+  }
+
+  private safeErrorCode(err: unknown): string {
+    if (typeof err === 'object' && err !== null && 'code' in err) {
+      const code = (err as { code?: unknown }).code;
+      if (typeof code === 'string') return code;
+    }
+    return 'UNKNOWN';
   }
 
   async sendVerificationEmail(to: string, link: string): Promise<{ delivered: boolean }> {
