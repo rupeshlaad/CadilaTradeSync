@@ -25,44 +25,52 @@ Start the complete development environment:
 
 ```bash
 pnpm dev
+```
 
 Individual services:
 
+```bash
 pnpm dev:web
 pnpm dev:admin
 pnpm dev:api
-URLs
-Local
-Web: http://localhost:3000
-Admin: http://localhost:3001
-API: http://localhost:4000
-API health: http://localhost:4000/health
-Permanent Public API
+```
 
-https://cts.investwithdimple.com
+## URLs
+
+### Local
+
+- Web: `http://localhost:3000`
+- Admin: `http://localhost:3001`
+- API: `http://localhost:4000`
+- API health: `http://localhost:4000/health`
+
+### Permanent Public API
+
+`https://cts.investwithdimple.com`
 
 Health:
 
-https://cts.investwithdimple.com/health
+`https://cts.investwithdimple.com/health`
 
 Cloudflare is in front of the public API domain.
 
-IMPORTANT: API and Broker Callback Domain
+## IMPORTANT: API and Broker Callback Domain
 
-https://cts.investwithdimple.com is the permanent API and broker OAuth callback domain.
+`https://cts.investwithdimple.com` is the permanent API and broker OAuth callback domain.
 
-Do not move or replace this domain.
+**Do not move or replace this domain.**
 
 The frontend domain is separate.
 
-Future Frontend Domain
+## Future Frontend Domain
 
 Planned frontend:
 
-https://tradesync.kamalsecurities.com
+`https://tradesync.kamalsecurities.com`
 
 Architecture:
 
+```text
 tradesync.kamalsecurities.com
         |
         +-- Web / Follower Portal
@@ -79,29 +87,32 @@ tradesync.kamalsecurities.com
           |         |         |
           v         v         v
      PostgreSQL   Redis    Brokers
+```
 
 Changing the frontend domain must not require changing existing broker callback registrations.
 
-Broker Integrations
+## Broker Integrations
 
 Current brokers:
 
-Zerodha
-FYERS
-Shoonya
-Upstox
-ICICI
+- Zerodha
+- FYERS
+- Shoonya
+- Upstox
+- ICICI
 
 Current validation status:
 
-Zerodha — validated
-FYERS — validated
-Shoonya — authentication/read operations validated; PlaceOrder testing ongoing
-Upstox — pending live credentials
+- Zerodha — validated
+- FYERS — validated
+- Shoonya — authentication/read operations validated; PlaceOrder testing ongoing
+- Upstox — pending live credentials
 
 Keep broker-specific logic inside the appropriate broker adapter/mapper.
 
-Copy-Trading Flow
+## Copy-Trading Flow
+
+```text
 Master Broker
      |
      v
@@ -124,17 +135,18 @@ Broker-specific Translator / Adapter
      |
      v
 Follower Broker
+```
 
 Keep the CTS canonical order representation separate from broker-native representations.
 
-Order Types
+## Order Types
 
 CTS supports:
 
-MARKET
-LIMIT
-SL
-SL-M
+- MARKET
+- LIMIT
+- SL
+- SL-M
 
 Order type and relevant prices must be preserved through the copy-trading pipeline.
 
@@ -142,21 +154,22 @@ Broker-specific conversion must happen at the broker layer.
 
 Do not silently change an order type to bypass a broker restriction unless explicitly requested.
 
-Product Types
+## Product Types
 
 CTS supports broker/product concepts including:
 
-CNC
-INTRADAY / MIS
+- CNC
+- INTRADAY / MIS
 
 Product codes are broker-specific and must be mapped through the appropriate broker layer.
 
-Instrument Translation
+## Instrument Translation
 
 Master and follower brokers may use different symbol formats.
 
 Example:
 
+```text
 Master:
 NSE:TATASTEEL-EQ
 
@@ -170,26 +183,27 @@ Instrument Translation
 
 Shoonya:
 TATASTEEL-EQ
+```
 
 Do not bypass the existing instrument translation mechanism.
 
-Execution Lifecycle
+## Execution Lifecycle
 
 Important CTS components include:
 
-ExecutionEventRecorder
-ExecutionHistoryService
-PositionLifecycleService
-ManualTradeTrace
-Trade Monitor
-CopyTradingService
-FollowerExecutionService
+- `ExecutionEventRecorder`
+- `ExecutionHistoryService`
+- `PositionLifecycleService`
+- `ManualTradeTrace`
+- `Trade Monitor`
+- `CopyTradingService`
+- `FollowerExecutionService`
 
 Broker failures must remain distinguishable from successful executions.
 
 Preserve broker error messages, normalized error categories, correlation IDs and relevant execution identifiers.
 
-Git / VPS Migration
+## Git / VPS Migration
 
 The system was migrated from the previous local Windows environment to Ubuntu/WSL2 primarily to avoid changing public-IP problems.
 
@@ -197,13 +211,13 @@ The migration mainly involved runtime/deployment configuration rather than appli
 
 Deployment-specific configuration includes:
 
-.env files
-WSL networking
-port forwarding
-Cloudflare configuration
-public/local IP configuration
-broker credentials
-API credentials
+- `.env` files
+- WSL networking
+- port forwarding
+- Cloudflare configuration
+- public/local IP configuration
+- broker credentials
+- API credentials
 
 These must not be committed to GitHub.
 
@@ -211,38 +225,44 @@ The Git repository is the source of truth for application source code.
 
 The VPS contains deployment-specific runtime configuration.
 
-Migration baseline
+### Migration baseline
 
 At the last verified baseline:
 
+```text
 HEAD        = e236ec33f7d33c17e1d90afb76d28aa7d0a6f0e8
 origin/main = e236ec33f7d33c17e1d90afb76d28aa7d0a6f0e8
 working tree = clean
+```
 
 This SHA is a historical baseline only. Always verify the current Git SHA before assuming it is still current.
 
-Development Rules
-Do not redesign the existing architecture unless explicitly requested.
-Do not move or replace cts.investwithdimple.com.
-Preserve existing broker integrations when modifying another broker.
-Keep broker-specific logic inside broker-specific adapters/mappers.
-Do not commit secrets or actual .env files.
-Do not hard-code deployment-specific values.
-Make the smallest change required to solve the identified problem.
-Do not modify unrelated components.
-Preserve existing working behavior.
-Before changing code, identify the exact file/function responsible for the issue.
-Use actual logs, source code and tests to prove the problem before changing code.
-For broker API behavior, prefer official broker documentation over assumptions.
-Run relevant tests, typecheck and build after code changes.
-Clearly report files changed and tests performed.
-Do not silently introduce fallback behavior that changes trading semantics.
-Emergent / Coding-Agent Instruction
+## Development Rules
+
+1. Do not redesign the existing architecture unless explicitly requested.
+2. Do not move or replace `cts.investwithdimple.com`.
+3. Preserve existing broker integrations when modifying another broker.
+4. Keep broker-specific logic inside broker-specific adapters/mappers.
+5. Do not commit secrets or actual `.env` files.
+6. Do not hard-code deployment-specific values.
+7. Make the smallest change required to solve the identified problem.
+8. Do not modify unrelated components.
+9. Preserve existing working behavior.
+10. Before changing code, identify the exact file/function responsible for the issue.
+11. Use actual logs, source code and tests to prove the problem before changing code.
+12. For broker API behavior, prefer official broker documentation over assumptions.
+13. Run relevant tests, typecheck and build after code changes.
+14. Clearly report files changed and tests performed.
+15. Do not silently introduce fallback behavior that changes trading semantics.
+
+## Emergent / Coding-Agent Instruction
 
 Before making source-code changes, read:
 
+```text
 memory/CTS_VPS_ENVIRONMENT.md
 memory/PRD.md
+```
 
 Treat these files as project constraints.
 
@@ -250,6 +270,7 @@ Do not repeatedly re-investigate facts already established in these documents.
 
 When a specific defect is identified:
 
+```text
 Inspect
   ↓
 Identify exact cause
@@ -261,26 +282,27 @@ Run targeted test
 Run regression
   ↓
 Typecheck / build
+```
 
 Do not redesign unrelated parts of the system while fixing a localized problem.
 
-Security
+## Security
 
 Never commit:
 
-API keys
-broker credentials
-OAuth secrets
-access tokens
-JWT secrets
-database passwords
-Redis credentials
-Cloudflare tokens
-private secrets
-actual .env files containing secrets
+- API keys
+- broker credentials
+- OAuth secrets
+- access tokens
+- JWT secrets
+- database passwords
+- Redis credentials
+- Cloudflare tokens
+- private secrets
+- actual `.env` files containing secrets
 
-Safe .env.example files may contain variable names but never real credentials.
+Safe `.env.example` files may contain variable names but never real credentials.
 
-Core Principle
+## Core Principle
 
-Preserve what works. Change only what is necessary. Validate the change. Do not redesign the architecture unless explicitly requested.
+> Preserve what works. Change only what is necessary. Validate the change. Do not redesign the architecture unless explicitly requested.
