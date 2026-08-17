@@ -34,6 +34,10 @@ export default function SettingsPage() {
 
   useEffect(() => {
     refresh();
+    // Refresh when Terms are accepted anywhere (e.g. the app-wide Terms gate).
+    const onAccepted = () => refresh();
+    window.addEventListener('cts:terms-accepted', onAccepted);
+    return () => window.removeEventListener('cts:terms-accepted', onAccepted);
   }, []);
 
   async function onChangePassword(e: React.FormEvent) {

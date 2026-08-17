@@ -41,7 +41,16 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const res = await fetch(`${API_URL}${path}`, { ...init, headers });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ message: res.statusText }));
-    throw new Error(Array.isArray(err.message) ? err.message.join(', ') : err.message || 'Request failed');
+    const message = Array.isArray(err.message) ? err.message.join(', ') : err.message || 'Request failed';
+    const error = new Error(message) as Error & { code?: string; status?: number };
+    error.status = res.status;
+    error.code = err.error; // machine-readable code, e.g. TERMS_ACCEPTANCE_REQUIRED
+    // Sprint 1 — Terms gate: any broker/strategy call blocked for missing Terms
+    // auto-prompts the (single, existing) Terms acceptance dialog app-wide.
+    if (error.code === 'TERMS_ACCEPTANCE_REQUIRED' && typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('cts:terms-required'));
+    }
+    throw error;
   }
   if (res.status === 204) return undefined as T;
   return res.json();

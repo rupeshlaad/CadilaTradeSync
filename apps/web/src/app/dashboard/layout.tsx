@@ -5,6 +5,7 @@ import { useRouter, usePathname } from 'next/navigation';
 import Link from 'next/link';
 import { auth, api } from '@/lib/api';
 import { ThemeToggle } from '@/components/theme-toggle';
+import { TermsRequiredGate } from '@/components/terms-required-gate';
 import { Button } from '@/components/ui/button';
 import {
   LayoutDashboard,
@@ -146,6 +147,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         </header>
         <main className="flex-1 p-6 overflow-auto">{children}</main>
       </div>
+      <TermsRequiredGate />
     </div>
   );
 }

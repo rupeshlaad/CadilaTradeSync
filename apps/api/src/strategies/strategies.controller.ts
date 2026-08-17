@@ -1,5 +1,6 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Req, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { TermsGuard } from '../auth/guards/terms.guard';
 import { StrategiesService } from './strategies.service';
 import { CreateStrategyDto } from './dto/create-strategy.dto';
 import { UpdateStrategyDto } from './dto/update-strategy.dto';
@@ -20,6 +21,7 @@ export class StrategiesController {
   }
 
   @Post()
+  @UseGuards(TermsGuard)
   create(@Req() req: any, @Body() dto: CreateStrategyDto) {
     return this.service.create(req.user.sub, dto);
   }
@@ -35,6 +37,7 @@ export class StrategiesController {
   }
 
   @Patch(':id')
+  @UseGuards(TermsGuard)
   update(@Req() req: any, @Param('id') id: string, @Body() dto: UpdateStrategyDto) {
     return this.service.update(req.user.sub, id, dto);
   }

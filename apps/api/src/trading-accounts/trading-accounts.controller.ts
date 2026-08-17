@@ -11,6 +11,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { TermsGuard } from '../auth/guards/terms.guard';
 import { TradingAccountsService } from './trading-accounts.service';
 import { CreateTradingAccountDto } from './dto/create-trading-account.dto';
 import { UpdateTradingAccountDto } from './dto/update-trading-account.dto';
@@ -37,6 +38,7 @@ export class TradingAccountsController {
   }
 
   @Post()
+  @UseGuards(TermsGuard)
   create(@Req() req: any, @Body() dto: CreateTradingAccountDto) {
     return this.service.create(req.user.sub, dto);
   }
@@ -47,6 +49,7 @@ export class TradingAccountsController {
   }
 
   @Patch(':id')
+  @UseGuards(TermsGuard)
   update(@Req() req: any, @Param('id') id: string, @Body() dto: UpdateTradingAccountDto) {
     return this.service.update(req.user.sub, id, dto);
   }
@@ -57,6 +60,7 @@ export class TradingAccountsController {
   }
 
   @Post(':id/enable')
+  @UseGuards(TermsGuard)
   enable(@Req() req: any, @Param('id') id: string) {
     return this.service.setEnabled(req.user.sub, id, true);
   }

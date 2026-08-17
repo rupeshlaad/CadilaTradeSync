@@ -24,10 +24,12 @@ export function TermsDialog({
   open,
   onOpenChange,
   onAccepted,
+  intro,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onAccepted: () => void;
+  intro?: string;
 }) {
   const [terms, setTerms] = useState<{ version: string; content: string } | null>(null);
   const [ack, setAck] = useState(false);
@@ -66,6 +68,12 @@ export function TermsDialog({
             Version {terms?.version ?? '—'} — please read and accept to continue.
           </DialogDescription>
         </DialogHeader>
+
+        {intro && (
+          <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm" data-testid="terms-intro">
+            {intro}
+          </div>
+        )}
 
         <div
           className="max-h-64 overflow-y-auto rounded-md border bg-muted/30 p-3 text-sm whitespace-pre-wrap"

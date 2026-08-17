@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
+import { TermsGuard } from '../../auth/guards/terms.guard';
 import { PrismaService } from '../../prisma/prisma.module';
 import { EncryptionService } from '../../encryption/encryption.service';
 import { ICICIDirectAdapter } from './icici.adapter';
@@ -35,6 +36,7 @@ export class ICICIDirectController {
   ) {}
 
   @Post('connect-session')
+  @UseGuards(TermsGuard)
   async connectSession(
     @Req() req: any,
     @Body() body: { tradingAccountId?: string; apiSession?: string },

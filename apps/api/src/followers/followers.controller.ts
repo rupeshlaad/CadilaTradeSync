@@ -1,5 +1,6 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Req, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { TermsGuard } from '../auth/guards/terms.guard';
 import { FollowersService } from './followers.service';
 import { SubscribeDto } from './dto/subscribe.dto';
 import { UpdateFollowerDto } from './dto/update-follower.dto';
@@ -20,6 +21,7 @@ export class FollowersController {
   }
 
   @Post('subscribe')
+  @UseGuards(TermsGuard)
   subscribe(@Req() req: any, @Body() dto: SubscribeDto) {
     return this.service.subscribe(req.user.sub, dto);
   }
